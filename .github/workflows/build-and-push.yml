@@ -13,8 +13,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  WEB_IMAGE_NAME: ${{ github.repository }}-web
-  CELERY_IMAGE_NAME: ${{ github.repository }}-celery
+  WEB_IMAGE_NAME: ${{ github.repository_owner }}/resolvemeq-web
+  CELERY_IMAGE_NAME: ${{ github.repository_owner }}/resolvemeq-celery
 
 jobs:
   build-and-push-web:
