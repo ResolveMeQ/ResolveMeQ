@@ -43,7 +43,7 @@ jobs:
           ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "sudo mkdir -p ${{ inputs.deployment_path }} && sudo chown -R ${{ inputs.ssh_user }}:${{ inputs.ssh_user }} ${{ inputs.deployment_path }} && ls -ld ${{ inputs.deployment_path }}"
           
           # Copy docker-compose file
-          scp docker-compose.production.yml ${{ inputs.ssh_user }}@${{ inputs.vps_host }}:${{ inputs.deployment_path }}/docker-compose.yml
+          scp docker-compose.production.yml "${{ inputs.ssh_user }}@${{ inputs.vps_host }}:${{ inputs.deployment_path }}/docker-compose.yml"
           
           # Verify file was copied
           ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "ls -la ${{ inputs.deployment_path }}/docker-compose.yml"
