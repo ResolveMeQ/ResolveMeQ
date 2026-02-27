@@ -39,8 +39,15 @@ SECRET_KEY = "django-insecure-xoeau&915nx&jsisbu$@p4h3^iva-4s4bxov6nj5l@y2l48d%r
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['*']
-FRONTEND_URL="https://app.resolvemeq.com"
+ALLOWED_HOSTS = [
+    "api.resolvemeq.net",
+    "app.resolvemeq.net",
+    "agent.resolvemeq.net",
+    "resolvemeq.net",
+    "localhost",
+    "127.0.0.1",
+]
+FRONTEND_URL = "https://app.resolvemeq.net"
 # Application definition
 
 INSTALLED_APPS = [
@@ -131,10 +138,11 @@ CSRF_TRUSTED_ORIGINS = [
 
 # CORS Settings for React Frontend
 CORS_ALLOWED_ORIGINS = [
+    "https://app.resolvemeq.net",
+    "https://resolvemeq.net",
     "http://localhost:5173",
     "http://localhost:5174",
     "http://localhost:3000",
-    "https://app.resolvemeq.com",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
