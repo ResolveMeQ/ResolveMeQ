@@ -37,17 +37,16 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ inputs.vps_host }} >> ~/.ssh/known_hosts
 
-      - name: Create deployment directory on VPS
+      - name: Create deployment directory and copy files
         run: |
-          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "sudo mkdir -p ${{ inputs.deployment_path }} && sudo chown -R ${{ inputs.ssh_user }}:${{ inputs.ssh_user }} ${{ inputs.deployment_path }}"
+          # Ensure directory exists
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "sudo mkdir -p ${{ inputs.deployment_path }} && sudo chown -R ${{ inputs.ssh_user }}:${{ inputs.ssh_user }} ${{ inputs.deployment_path }} && ls -ld ${{ inputs.deployment_path }}"
           
-      - name: Verify deployment directory exists
-        run: |
-          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "ls -la ${{ inputs.deployment_path }}"
-
-      - name: Copy docker-compose file to VPS
-        run: |
+          # Copy docker-compose file
           scp docker-compose.production.yml ${{ inputs.ssh_user }}@${{ inputs.vps_host }}:${{ inputs.deployment_path }}/docker-compose.yml
+          
+          # Verify file was copied
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "ls -la ${{ inputs.deployment_path }}/docker-compose.yml"
 
       - name: Copy environment template (optional)
         continue-on-error: true
