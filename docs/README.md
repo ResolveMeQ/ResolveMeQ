@@ -2,7 +2,28 @@
 
 ## Overview
 
-ResolveMeQ is a modular Django-based IT support and automation platform with Slack integration, ticketing, knowledge base, automation, and analytics.
+ResolveMeQ is a modular Django-based IT support and automation platform with Slack integration, autonomous AI agent, ticketing, knowledge base, automation, and analytics.
+
+---
+
+## 📚 Documentation Index
+
+### Getting Started
+- **[Main README](../README.md)** - Project overview and quick start
+- **[Installation & Setup](DEPLOYMENT.md)** - Basic deployment instructions
+- **[Integration Setup](INTEGRATION_SETUP.md)** - Slack and external integrations
+
+### Trust & Reliability (NEW - Feb 2026)
+- **[Platform Assessment](PLATFORM_ASSESSMENT.md)** - Comprehensive trust & reliability analysis
+- **[Quick Start Improvements](QUICK_START_IMPROVEMENTS.md)** - Week-by-week implementation guide
+- **[Implementation Summary](IMPLEMENTATION_SUMMARY.md)** - Complete feature summary
+- **[Deployment Guide](DEPLOYMENT_GUIDE.md)** - Production deployment steps
+
+### Development & Testing
+- **[Testing Guide](TESTING.md)** - Test suite documentation
+- **[Contributing](../CONTRIBUTING.md)** - Contribution guidelines
+- **[Code of Conduct](../CODE_OF_CONDUCT.md)** - Community standards
+- **[Changelog](../CHANGELOG.md)** - Release history
 
 ---
 

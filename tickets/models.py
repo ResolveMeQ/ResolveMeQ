@@ -3,6 +3,7 @@ from django.db import models
 import requests
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
+import uuid
 
 User = get_user_model()
 # Create your models here.
@@ -162,3 +163,118 @@ class TicketInteraction(models.Model):
 
     def __str__(self):
         return f"{self.interaction_type} for Ticket {self.ticket.ticket_id} by {self.user.user_id}"
+
+
+class TicketResolution(models.Model):
+    """
+    Track resolution outcomes for learning and validation.
+    Enables feedback loop validation to verify autonomous resolutions actually worked.
+    """
+    
+    ticket = models.OneToOneField(
+        Ticket, 
+        on_delete=models.CASCADE,
+        related_name='resolution_tracking'
+    )
+    autonomous_action = models.CharField(max_length=50, help_text="Type of autonomous action taken")
+    
+    # User Feedback
+    resolution_confirmed = models.BooleanField(
+        null=True, 
+        blank=True,
+        help_text="User confirmed resolution worked (True) or failed (False)"
+    )
+    user_feedback_text = models.TextField(blank=True)
+    satisfaction_score = models.IntegerField(
+        null=True, 
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+        help_text="User satisfaction rating 1-5 stars"
+    )
+    
+    # Follow-up Tracking
+    followup_sent_at = models.DateTimeField(null=True, blank=True)
+    response_received_at = models.DateTimeField(null=True, blank=True)
+    
+    # Reopening Tracking
+    reopened = models.BooleanField(default=False)
+    reopened_at = models.DateTimeField(null=True, blank=True)
+    reopened_reason = models.TextField(blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'ticket_resolution'
+        indexes = [
+            models.Index(fields=['autonomous_action', 'resolution_confirmed']),
+            models.Index(fields=['satisfaction_score']),
+        ]
+    
+    @property
+    def was_successful(self):
+        """Did this resolution actually work?"""
+        if self.reopened:
+            return False
+        if self.resolution_confirmed is True:
+            return True
+        if self.satisfaction_score and self.satisfaction_score >= 4:
+            return True
+        return None  # Unknown
+    
+    def __str__(self):
+        return f"Resolution tracking for Ticket #{self.ticket.ticket_id}"
+
+
+class ActionHistory(models.Model):
+    """
+    Audit trail for all autonomous actions with rollback capability.
+    Enables compliance, debugging, and recovery from incorrect agent decisions.
+    """
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name='action_history')
+    
+    # Action Details
+    action_type = models.CharField(max_length=50, help_text="AUTO_RESOLVE, ESCALATE, etc.")
+    action_params = models.JSONField(default=dict)
+    executed_at = models.DateTimeField(auto_now_add=True)
+    executed_by = models.CharField(max_length=50, default='autonomous_agent')
+    
+    # AI Decision Context
+    confidence_score = models.FloatField(
+        null=True, 
+        blank=True,
+        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)]
+    )
+    agent_reasoning = models.TextField(blank=True)
+    
+    # Rollback Capability
+    rollback_possible = models.BooleanField(default=False)
+    rollback_steps = models.JSONField(null=True, blank=True)
+    rolled_back = models.BooleanField(default=False)
+    rolled_back_at = models.DateTimeField(null=True, blank=True)
+    rolled_back_by = models.ForeignKey(
+        User, 
+        null=True, 
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='rollbacks_performed'
+    )
+    rollback_reason = models.TextField(blank=True)
+    
+    # State Snapshots for Rollback
+    before_state = models.JSONField(null=True, blank=True)
+    after_state = models.JSONField(null=True, blank=True)
+    
+    class Meta:
+        db_table = 'action_history'
+        ordering = ['-executed_at']
+        indexes = [
+            models.Index(fields=['ticket', 'action_type']),
+            models.Index(fields=['executed_at']),
+            models.Index(fields=['rolled_back']),
+        ]
+    
+    def __str__(self):
+        return f"{self.action_type} on Ticket #{self.ticket.ticket_id} at {self.executed_at}"

@@ -4,11 +4,31 @@ from pathlib import Path
 
 import dj_database_url
 from dotenv import load_dotenv
+import sentry_sdk
+from sentry_sdk.integrations.django import DjangoIntegration
+from sentry_sdk.integrations.celery import CeleryIntegration
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+# Sentry Configuration for Error Monitoring
+SENTRY_DSN = os.getenv('SENTRY_DSN', '')
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[
+            DjangoIntegration(),
+            CeleryIntegration(),
+        ],
+        traces_sample_rate=0.1,  # 10% of transactions for performance monitoring
+        profiles_sample_rate=0.1,
+        environment=os.getenv('ENVIRONMENT', 'production'),
+        release=os.getenv('APP_VERSION', '2.0.0'),
+        # Filter out sensitive data
+        before_send=lambda event, hint: None if 'password' in str(event).lower() else event,
+    )
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
@@ -30,6 +50,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    'corsheaders',
     'rest_framework',
     "drf_yasg",
     "core",
@@ -39,10 +60,12 @@ INSTALLED_APPS = [
     "automation",
     "integrations",
     'base',
+    'monitoring',
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -86,11 +109,11 @@ DATABASES = {
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('AZURE_DB_NAME'),
-        'USER': os.getenv('AZURE_DB_USER'),
-        'PASSWORD': os.getenv('AZURE_DB_PASSWORD', ),
-        'HOST': os.getenv('AZURE_DB_HOST', ),
-        'PORT': os.getenv('AZURE_DB_PORT', ),
+        'NAME': os.getenv('DB_NAME'),
+        'USER': os.getenv('DB_USER'),
+        'PASSWORD': os.getenv('DB_PASSWORD'),
+        'HOST': os.getenv('DB_HOST'),
+        'PORT': os.getenv('DB_PORT', '5432'),
         'OPTIONS': {
             'sslmode': 'require',
         },
@@ -101,11 +124,32 @@ CSRF_TRUSTED_ORIGINS = [
     "https://app.resolvemeq.com",
     "https://api.resolvemeq.com",
     "https://agent.resolvemeq.com",
-    
-
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:3000",
 ]
 
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS Settings for React Frontend
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:3000",
+    "https://app.resolvemeq.com",
+]
+
+CORS_ALLOW_CREDENTIALS = True
+
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
 
@@ -153,8 +197,15 @@ SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET")
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET")
 SLACK_REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI")
 
+# Plan limits (used for team creation; can be overridden by Subscription later)
+PLAN_MAX_TEAMS = int(os.getenv('PLAN_MAX_TEAMS', '20'))
+
 # AI Agent Settings
 AI_AGENT_URL = 'https://agent.resolvemeq.com/tickets/analyze/'
+
+# Agent Rate Limiting
+MAX_AUTONOMOUS_ACTIONS_PER_DAY = int(os.getenv('MAX_AUTONOMOUS_ACTIONS_PER_DAY', '500'))
+MAX_AUTONOMOUS_ACTIONS_PER_HOUR = int(os.getenv('MAX_AUTONOMOUS_ACTIONS_PER_HOUR', '100'))
 
 # Celery Configuration
 CELERY_BROKER_URL = "rediss://:bSEDHclfM2KUs4iJGubgw1lt2S8p6mLF7AzCaLnaDRU=@celery-redis-cache.redis.cache.windows.net:6380/0?ssl_cert_reqs=CERT_NONE"
@@ -180,12 +231,20 @@ EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL')
 
 REST_FRAMEWORK = {
-
     'DEFAULT_AUTHENTICATION_CLASSES': (
-
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-    )
-
+    ),
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.ScopedRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/hour',
+        'user': '1000/hour',
+        'agent_actions': '50/minute',  # Max 50 autonomous actions per minute
+        'rollback': '10/hour',  # Limit rollback requests
+    }
 }
 
 SIMPLE_JWT = {

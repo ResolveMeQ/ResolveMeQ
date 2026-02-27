@@ -1,0 +1,171 @@
+version: '3.8'
+
+# ResolveMeQ Full Stack - Local Development Orchestration
+# This file orchestrates BOTH Django Backend + FastAPI Agent for local development
+# 
+# NOTE: This is OPTIONAL - only use if you want to run both projects together locally
+# Each project can run independently using its own docker-compose.yml
+#
+# Usage:
+#   docker compose -f docker-compose.local-fullstack.yml up -d
+#
+# Prerequisites:
+#   - Clone both repositories to the same parent directory:
+#     /your-workspace/
+#       ├── ResolveMeQ/           (Django project)
+#       └── resolvemeq-agent/     (FastAPI agent)
+#   OR
+#   - Keep agent as subdirectory (current structure)
+
+services:
+  # ======================================
+  # Shared Infrastructure
+  # ======================================
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${DB_NAME:-resolvemeq}
+      POSTGRES_USER: ${DB_USER:-resolvemeq}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-resolvemeq_password}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-resolvemeq}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fullstack-network
+    ports:
+      - "5432:5432"  # Exposed for debugging
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fullstack-network
+    ports:
+      - "6379:6379"  # Exposed for debugging
+
+  # ======================================
+  # Django Backend Services
+  # ======================================
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    command: gunicorn resolvemeq.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 120
+    volumes:
+      - ./staticfiles:/app/staticfiles
+      - ./media:/app/media
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-resolvemeq}:${DB_PASSWORD:-resolvemeq_password}@db:5432/${DB_NAME:-resolvemeq}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - AI_AGENT_URL=http://agent:8000  # Internal Docker network communication
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/tickets/analytics/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - fullstack-network
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A resolvemeq worker -l info
+    volumes:
+      - ./media:/app/media
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-resolvemeq}:${DB_PASSWORD:-resolvemeq_password}@db:5432/${DB_NAME:-resolvemeq}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - AI_AGENT_URL=http://agent:8000
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    networks:
+      - fullstack-network
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A resolvemeq beat -l info
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-resolvemeq}:${DB_PASSWORD:-resolvemeq_password}@db:5432/${DB_NAME:-resolvemeq}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - fullstack-network
+
+  # ======================================
+  # AI Agent Service
+  # ======================================
+  agent:
+    build:
+      context: ./resolvemeq-agent
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      - DJANGO_KB_URL=http://web:8000  # Internal Docker network communication
+      - PORT=8000
+      - LOG_LEVEL=info
+      - ENVIRONMENT=development
+    volumes:
+      - ./resolvemeq-agent/data:/app/data
+      - agent_cache:/app/.cache
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - fullstack-network
+
+networks:
+  fullstack-network:
+    driver: bridge
+    name: resolvemeq-fullstack
+
+volumes:
+  postgres_data:
+  redis_data:
+  agent_cache:

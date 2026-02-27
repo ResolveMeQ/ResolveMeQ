@@ -1,0 +1,64 @@
+version: '3.8'
+
+# ResolveMeQ Production VPS - Infrastructure Orchestration
+# This file orchestrates the reverse proxy (Nginx) for both Django + Agent
+# 
+# Deploy this AFTER deploying both individual projects
+# 
+# Prerequisites:
+#   1. Deploy Django backend: cd /opt/resolvemeq && docker compose -f docker-compose.production.yml up -d
+#   2. Deploy Agent: cd /opt/resolvemeq-agent && docker compose -f docker-compose.production.yml up -d
+#   3. Create shared network: docker network create resolvemeq-shared
+#   4. Deploy infrastructure: cd /opt/resolvemeq-infrastructure && docker compose up -d
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: resolvemeq-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      # Mount static/media from Django volumes
+      - resolvemeq_static_files:/var/www/static:ro
+      - resolvemeq_media_files:/var/www/media:ro
+      # SSL certificates (if using Let's Encrypt)
+      - certbot_data:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    networks:
+      - resolvemeq-shared
+    depends_on:
+      - certbot
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: resolvemeq-certbot
+    volumes:
+      - certbot_data:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    # Auto-renewal check daily at 2am
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    restart: unless-stopped
+
+networks:
+  resolvemeq-shared:
+    external: true  # Must be created before: docker network create resolvemeq-shared
+
+volumes:
+  # Reference existing volumes from Django deployment
+  resolvemeq_static_files:
+    external: true
+  resolvemeq_media_files:
+    external: true
+  # SSL certificate storage
+  certbot_data:
+    name: resolvemeq_certbot_data
+  certbot_www:
+    name: resolvemeq_certbot_www

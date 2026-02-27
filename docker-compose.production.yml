@@ -1,0 +1,134 @@
+version: '3.8'
+
+# ResolveMeQ Django Backend - Production Deployment
+# This deploys ONLY the Django application stack (web, celery, db, redis)
+# Deploy the Agent separately from its own repository
+# Use external network to communicate between projects on same VPS
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - resolvemeq-backend
+      - resolvemeq-shared  # Shared network for inter-project communication
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - resolvemeq-backend
+
+  web:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    environment:
+      - DEBUG=False
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS}
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - AI_AGENT_URL=${AI_AGENT_URL}  # Set in .env: http://agent-web:8001 or https://domain.com/agent
+      - SECRET_KEY=${SECRET_KEY}
+      - SENTRY_DSN=${SENTRY_DSN}
+      - ENVIRONMENT=production
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/tickets/analytics/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - resolvemeq-backend
+      - resolvemeq-shared  # Can communicate with agent via this network
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  celery_worker:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-celery:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    volumes:
+      - media_files:/app/media
+    environment:
+      - DEBUG=False
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - AI_AGENT_URL=${AI_AGENT_URL}
+      - SECRET_KEY=${SECRET_KEY}
+      - SENTRY_DSN=${SENTRY_DSN}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    networks:
+      - resolvemeq-backend
+      - resolvemeq-shared
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  celery_beat:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-celery:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: celery -A resolvemeq beat -l info
+    environment:
+      - DEBUG=False
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - resolvemeq-backend
+
+networks:
+  resolvemeq-backend:
+    driver: bridge
+  resolvemeq-shared:
+    external: true  # Created externally, shared with agent project
+
+volumes:
+  postgres_data:
+    name: resolvemeq_postgres_data
+  redis_data:
+    name: resolvemeq_redis_data
+  static_files:
+    name: resolvemeq_static_files
+  media_files:
+    name: resolvemeq_media_files

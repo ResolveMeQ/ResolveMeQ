@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django import forms
 
-from base.models import Profile
+from base.models import Profile, Team, UserPreferences, Plan, Subscription, Invoice, InAppNotification
 
 User = get_user_model()
 
@@ -76,3 +76,84 @@ class UserAdmin(BaseUserAdmin):
 
 
 admin.site.register(User, UserAdmin)
+
+
+@admin.register(Team)
+class TeamAdmin(admin.ModelAdmin):
+    """Admin interface for Team model."""
+    list_display = ['name', 'department', 'location', 'lead', 'is_active', 'created_at']
+    list_filter = ['is_active', 'department', 'created_at']
+    search_fields = ['name', 'description', 'department', 'location']
+    filter_horizontal = ['members']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+    
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('name', 'description', 'department', 'location')
+        }),
+        ('Team Structure', {
+            'fields': ('lead', 'members')
+        }),
+        ('Status', {
+            'fields': ('is_active',)
+        }),
+        ('System Information', {
+            'fields': ('id', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(UserPreferences)
+class UserPreferencesAdmin(admin.ModelAdmin):
+    """Admin interface for UserPreferences model."""
+    list_display = ['user', 'email_notifications', 'push_notifications', 'timezone', 'language', 'theme']
+    list_filter = ['email_notifications', 'push_notifications', 'language', 'theme']
+    search_fields = ['user__username', 'user__email']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+    
+    fieldsets = (
+        ('User', {
+            'fields': ('user',)
+        }),
+        ('Notification Preferences', {
+            'fields': ('email_notifications', 'push_notifications', 'ticket_updates', 'system_alerts', 'daily_digest')
+        }),
+        ('General Preferences', {
+            'fields': ('timezone', 'language', 'theme')
+        }),
+        ('System Information', {
+            'fields': ('id', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(InAppNotification)
+class InAppNotificationAdmin(admin.ModelAdmin):
+    list_display = ['title', 'user', 'type', 'is_read', 'created_at']
+    list_filter = ['type', 'is_read', 'created_at']
+    search_fields = ['title', 'message', 'user__email']
+    readonly_fields = ['id', 'created_at']
+    ordering = ['-created_at']
+
+
+@admin.register(Plan)
+class PlanAdmin(admin.ModelAdmin):
+    list_display = ['name', 'slug', 'max_teams', 'max_members', 'price_monthly', 'price_yearly', 'is_active']
+    list_filter = ['is_active']
+    search_fields = ['name', 'slug']
+
+
+@admin.register(Subscription)
+class SubscriptionAdmin(admin.ModelAdmin):
+    list_display = ['user', 'plan', 'status', 'current_period_start', 'current_period_end']
+    list_filter = ['status']
+    search_fields = ['user__email']
+
+
+@admin.register(Invoice)
+class InvoiceAdmin(admin.ModelAdmin):
+    list_display = ['id', 'subscription', 'amount', 'currency', 'status', 'created_at']
+    list_filter = ['status']
+    readonly_fields = ['id', 'created_at']

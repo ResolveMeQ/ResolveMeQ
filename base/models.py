@@ -278,10 +278,11 @@ Profile model that extends the User model with additional fields.
         editable=False
     )
 
-    location = models.CharField(max_length=300, verbose_name='Location',
+    location = models.CharField(max_length=300, verbose_name='Location', blank=True, default='',
                                 help_text="The location of the user, e.g., country or city")
 
-    city = models.CharField(max_length=300, verbose_name='City', help_text="The city where the user resides")
+    city = models.CharField(max_length=300, verbose_name='City', blank=True, default='',
+                            help_text="The city where the user resides")
 
     def __str__(self):
         return self.user.username
@@ -380,3 +381,404 @@ Profile model that extends the User model with additional fields.
         """Override delete to clean up image files."""
         self.delete_images()
         super().delete(*args, **kwargs)
+
+
+class Team(models.Model):
+    """
+    Team model for organizing users into groups.
+    """
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text=_("Unique identifier for the team")
+    )
+
+    name = models.CharField(
+        _("team name"),
+        max_length=200,
+        unique=True,
+        help_text=_("Name of the team")
+    )
+
+    description = models.TextField(
+        _("description"),
+        blank=True,
+        help_text=_("Description of the team's purpose and responsibilities")
+    )
+
+    department = models.CharField(
+        _("department"),
+        max_length=100,
+        blank=True,
+        help_text=_("Department the team belongs to")
+    )
+
+    location = models.CharField(
+        _("location"),
+        max_length=200,
+        blank=True,
+        help_text=_("Physical or virtual location of the team")
+    )
+
+    owner = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='owned_teams',
+        verbose_name=_("team owner"),
+        help_text=_("User who owns this team and can invite/remove members")
+    )
+
+    lead = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='led_teams',
+        verbose_name=_("team lead"),
+        help_text=_("User who leads this team")
+    )
+
+    members = models.ManyToManyField(
+        User,
+        related_name='teams',
+        blank=True,
+        verbose_name=_("team members"),
+        help_text=_("Users who are members of this team")
+    )
+
+    is_active = models.BooleanField(
+        _("active"),
+        default=True,
+        help_text=_("Whether this team is currently active")
+    )
+
+    created_at = models.DateTimeField(
+        _("created at"),
+        auto_now_add=True,
+        help_text=_("When the team was created")
+    )
+
+    updated_at = models.DateTimeField(
+        _("updated at"),
+        auto_now=True,
+        help_text=_("When the team was last updated")
+    )
+
+    class Meta:
+        verbose_name = _("Team")
+        verbose_name_plural = _("Teams")
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['name']),
+            models.Index(fields=['department']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def member_count(self):
+        """Get the number of members in the team."""
+        return self.members.count()
+
+    @property
+    def active_member_count(self):
+        """Get the number of active members in the team."""
+        return self.members.filter(is_active=True).count()
+
+
+class TeamInvitation(models.Model):
+    """
+    Invitation to join a team. Owner invites by email; invitee accepts or declines.
+    """
+    class Status(models.TextChoices):
+        PENDING = 'pending', _('Pending')
+        ACCEPTED = 'accepted', _('Accepted')
+        DECLINED = 'declined', _('Declined')
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name='invitations',
+        verbose_name=_("team"),
+    )
+    email = models.EmailField(_("invitee email"), max_length=254)
+    invited_by = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='sent_team_invitations',
+        verbose_name=_("invited by"),
+    )
+    status = models.CharField(
+        _("status"),
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("Team invitation")
+        verbose_name_plural = _("Team invitations")
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['team', 'email'],
+                condition=models.Q(status='pending'),
+                name='unique_pending_invitation_per_team_email',
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.email} → {self.team.name} ({self.status})"
+
+
+class UserPreferences(models.Model):
+    """
+    User preferences and settings model.
+    """
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text=_("Unique identifier")
+    )
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='preferences',
+        verbose_name=_("user"),
+        help_text=_("User associated with these preferences")
+    )
+
+    # Notification preferences
+    email_notifications = models.BooleanField(
+        _("email notifications"),
+        default=True,
+        help_text=_("Receive email notifications")
+    )
+
+    push_notifications = models.BooleanField(
+        _("push notifications"),
+        default=True,
+        help_text=_("Receive push notifications")
+    )
+
+    ticket_updates = models.BooleanField(
+        _("ticket updates"),
+        default=True,
+        help_text=_("Notify on ticket updates")
+    )
+
+    system_alerts = models.BooleanField(
+        _("system alerts"),
+        default=True,
+        help_text=_("Receive system alerts")
+    )
+
+    daily_digest = models.BooleanField(
+        _("daily digest"),
+        default=False,
+        help_text=_("Receive daily digest emails")
+    )
+
+    # General preferences
+    timezone = models.CharField(
+        _("timezone"),
+        max_length=50,
+        default='UTC',
+        help_text=_("User's timezone")
+    )
+
+    language = models.CharField(
+        _("language"),
+        max_length=10,
+        default='en',
+        help_text=_("Preferred language")
+    )
+
+    theme = models.CharField(
+        _("theme"),
+        max_length=20,
+        default='light',
+        choices=[
+            ('light', 'Light'),
+            ('dark', 'Dark'),
+            ('auto', 'Auto'),
+        ],
+        help_text=_("UI theme preference")
+    )
+
+    # Which team's plan/context the user is currently using (one active team at a time)
+    active_team = models.ForeignKey(
+        Team,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='users_with_active',
+        verbose_name=_("active team"),
+        help_text=_("Team context for usage and billing; user must be a member")
+    )
+
+    created_at = models.DateTimeField(
+        _("created at"),
+        auto_now_add=True,
+        help_text=_("When preferences were created")
+    )
+
+    updated_at = models.DateTimeField(
+        _("updated at"),
+        auto_now=True,
+        help_text=_("When preferences were last updated")
+    )
+
+    class Meta:
+        verbose_name = _("User Preferences")
+        verbose_name_plural = _("User Preferences")
+
+    def __str__(self):
+        return f"Preferences for {self.user.username}"
+
+
+class Plan(models.Model):
+    """
+    Billing plan (Starter, Pro, Enterprise).
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    name = models.CharField(_("plan name"), max_length=50, unique=True)
+    slug = models.SlugField(max_length=50, unique=True)
+    max_teams = models.PositiveIntegerField(_("max teams"), default=10)
+    max_members = models.PositiveIntegerField(_("max members per plan"), default=50, help_text=_("Total seats"))
+    price_monthly = models.DecimalField(_("price monthly"), max_digits=10, decimal_places=2, default=0)
+    price_yearly = models.DecimalField(_("price yearly"), max_digits=10, decimal_places=2, default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['price_monthly']
+
+    def __str__(self):
+        return self.name
+
+
+class Subscription(models.Model):
+    """
+    User/account subscription to a plan.
+    """
+    class Status(models.TextChoices):
+        ACTIVE = 'active', _('Active')
+        PAST_DUE = 'past_due', _('Past due')
+        CANCELED = 'canceled', _('Canceled')
+        TRIAL = 'trial', _('Trial')
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='subscription',
+        verbose_name=_("user"),
+    )
+    plan = models.ForeignKey(
+        Plan,
+        on_delete=models.PROTECT,
+        related_name='subscriptions',
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.ACTIVE,
+    )
+    current_period_start = models.DateTimeField(null=True, blank=True)
+    current_period_end = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Subscription")
+        verbose_name_plural = _("Subscriptions")
+
+    def __str__(self):
+        return f"{self.user.email} - {self.plan_id or 'No plan'}"
+
+    @property
+    def max_teams(self):
+        return self.plan.max_teams if self.plan else getattr(settings, 'PLAN_MAX_TEAMS', 20)
+
+
+class Invoice(models.Model):
+    """
+    Invoice for a subscription period.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    subscription = models.ForeignKey(
+        Subscription,
+        on_delete=models.CASCADE,
+        related_name='invoices',
+    )
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    currency = models.CharField(max_length=3, default='USD')
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('draft', _('Draft')),
+            ('open', _('Open')),
+            ('paid', _('Paid')),
+            ('void', _('Void')),
+        ],
+        default='draft',
+    )
+    period_start = models.DateTimeField(null=True, blank=True)
+    period_end = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Invoice {self.id} - {self.amount} {self.currency}"
+
+
+class InAppNotification(models.Model):
+    """
+    In-app notification for the bell dropdown (ticket updates, assignments, etc.).
+    """
+    class Type(models.TextChoices):
+        INFO = 'info', _('Info')
+        SUCCESS = 'success', _('Success')
+        WARNING = 'warning', _('Warning')
+        ERROR = 'error', _('Error')
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='in_app_notifications',
+        verbose_name=_("user"),
+    )
+    type = models.CharField(
+        max_length=20,
+        choices=Type.choices,
+        default=Type.INFO,
+    )
+    title = models.CharField(_("title"), max_length=255)
+    message = models.TextField(_("message"), blank=True)
+    link = models.CharField(_("link"), max_length=500, blank=True, help_text=_("Optional URL or path to open on click"))
+    is_read = models.BooleanField(_("read"), default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = _("In-app notification")
+        verbose_name_plural = _("In-app notifications")
+
+    def __str__(self):
+        return f"{self.title} ({self.user_id})"

@@ -17,6 +17,10 @@ urlpatterns = [
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 
     path('profile/', views.CurrentUserProfileView.as_view(), name='profile'),
+    path('preferences/', views.CurrentUserPreferencesView.as_view(), name='preferences'),
+    path('notifications/', views.InAppNotificationListView.as_view(), name='notifications-list'),
+    path('notifications/<uuid:notification_id>/read/', views.InAppNotificationMarkReadView.as_view(), name='notification-mark-read'),
+    path('notifications/read-all/', views.InAppNotificationMarkAllReadView.as_view(), name='notifications-mark-all-read'),
 
     path('resend-verification-code/', views.ResendVerificationCodeAPIView.as_view(), name='resend-verification-code'),
 

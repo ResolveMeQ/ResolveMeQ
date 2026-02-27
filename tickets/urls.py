@@ -11,6 +11,7 @@ from .views import (
     list_tickets,
     get_ticket,
     update_ticket,
+    delete_ticket,
     search_tickets,
     upload_attachment,
     add_comment,
@@ -22,7 +23,14 @@ from .views import (
     suggest_kb_articles,
     add_internal_note,
     audit_log,
-    ai_suggestions
+    ai_suggestions,
+    agent_analytics,
+    enhanced_kb_search,
+    agent_recommendations,
+    rollback_action,
+    action_history,
+    submit_resolution_feedback,
+    resolution_analytics,
 )
 
 urlpatterns = [
@@ -35,6 +43,7 @@ urlpatterns = [
     path("list/", list_tickets, name="list-tickets"),
     path("<int:ticket_id>/", get_ticket, name="get-ticket"),
     path("<int:ticket_id>/update/", update_ticket, name="update-ticket"),
+    path("<int:ticket_id>/delete/", delete_ticket, name="delete-ticket"),
     path("<int:ticket_id>/clarify/", clarify_ticket, name="clarify-ticket"),
     path("<int:ticket_id>/feedback/", feedback_ticket, name="feedback-ticket"),
     path("<int:ticket_id>/history/", ticket_history, name="ticket-history"),
@@ -50,4 +59,14 @@ urlpatterns = [
     path("<int:ticket_id>/internal-note/", add_internal_note, name="add-internal-note"),
     path("<int:ticket_id>/audit-log/", audit_log, name="audit-log"),
     path("<int:ticket_id>/ai-suggestions/", ai_suggestions, name="ai-suggestions"),
+    # AI Agent endpoints
+    path("agent/analytics/", agent_analytics, name="agent-analytics"),
+    path("agent/kb-search/", enhanced_kb_search, name="enhanced-kb-search"),
+    path("agent/recommendations/", agent_recommendations, name="agent-recommendations"),
+    
+    # Rollback and feedback endpoints
+    path("actions/<uuid:action_history_id>/rollback/", rollback_action, name="rollback-action"),
+    path("<int:ticket_id>/action-history/", action_history, name="action-history"),
+    path("<int:ticket_id>/resolution-feedback/", submit_resolution_feedback, name="submit-resolution-feedback"),
+    path("resolution-analytics/", resolution_analytics, name="resolution-analytics"),
 ]

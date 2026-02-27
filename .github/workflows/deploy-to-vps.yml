@@ -1,0 +1,163 @@
+name: Deploy Django Backend to VPS
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy (e.g., latest, v1.0.0, main-abc123)'
+        required: true
+        default: 'latest'
+      vps_host:
+        description: 'VPS hostname or IP address'
+        required: true
+      ssh_user:
+        description: 'SSH username'
+        required: true
+        default: 'root'
+      deployment_path:
+        description: 'Deployment path on VPS'
+        required: true
+        default: '/opt/resolvemeq'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+
+      - name: Add VPS to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ inputs.vps_host }} >> ~/.ssh/known_hosts
+
+      - name: Create deployment directory on VPS
+        run: |
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "mkdir -p ${{ inputs.deployment_path }}"
+
+      - name: Copy docker-compose file to VPS
+        run: |
+          scp docker-compose.production.yml ${{ inputs.ssh_user }}@${{ inputs.vps_host }}:${{ inputs.deployment_path }}/docker-compose.yml
+
+      - name: Copy environment template
+        run: |
+          scp .env.example ${{ inputs.ssh_user }}@${{ inputs.vps_host }}:${{ inputs.deployment_path }}/.env.template
+
+      - name: Create shared network if not exists
+        run: |
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
+          # Create shared network for inter-service communication (shared with agent)
+          if ! docker network inspect resolvemeq-shared >/dev/null 2>&1; then
+            docker network create resolvemeq-shared
+            echo "Created resolvemeq-shared network"
+          fi
+          ENDSSH
+
+      - name: Create .env file on VPS
+        run: |
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
+          cd ${{ inputs.deployment_path }}
+          
+          # Create .env if it doesn't exist
+          if [ ! -f .env ]; then
+            echo "Creating new .env file from secrets..."
+            cat > .env << 'EOF'
+          # Database Configuration
+          DB_NAME=${{ secrets.DB_NAME }}
+          DB_USER=${{ secrets.DB_USER }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          
+          # Redis Configuration
+          REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+          
+          # Django Configuration
+          SECRET_KEY=${{ secrets.SECRET_KEY }}
+          DEBUG=False
+          ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}
+          
+          # AI Agent URL (configure based on deployment)
+          AI_AGENT_URL=${{ secrets.AI_AGENT_URL }}
+          
+          # Sentry Configuration
+          SENTRY_DSN=${{ secrets.SENTRY_DSN }}
+          ENVIRONMENT=production
+          
+          # Image Configuration
+          GITHUB_REPOSITORY_OWNER=${{ github.repository_owner }}
+          IMAGE_TAG=${{ inputs.image_tag }}
+          WEB_PORT=8000
+          EOF
+          else
+            echo ".env file already exists, updating image tag..."
+            sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=${{ inputs.image_tag }}/' .env
+          fi
+          ENDSSH
+
+      - name: Login to GitHub Container Registry on VPS
+        run: |
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
+          echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          ENDSSH
+
+      - name: Pull Docker images
+        run: |
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
+          cd ${{ inputs.deployment_path }}
+          docker compose pull
+          ENDSSH
+
+      - name: Deploy with Docker Compose
+        run: |
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
+          cd ${{ inputs.deployment_path }}
+          
+          # Run migrations
+          docker compose run --rm web python manage.py migrate --noinput
+          
+          # Collect static files
+          docker compose run --rm web python manage.py collectstatic --noinput --clear
+          
+          # Start services
+          docker compose up -d
+          
+          # Wait for services to be healthy
+          echo "Waiting for services to be healthy..."
+          sleep 10
+          docker compose ps
+          ENDSSH
+
+      - name: Cleanup old images
+        run: |
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
+          docker image prune -f
+          ENDSSH
+
+      - name: Health check
+        run: |
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
+          cd ${{ inputs.deployment_path }}
+          
+          # Check if all services are running
+          if docker compose ps | grep -q "Up"; then
+            echo "✅ Deployment successful! Services are running."
+            docker compose ps
+          else
+            echo "❌ Deployment failed! Some services are not running."
+            docker compose logs --tail=50
+            exit 1
+          fi
+          ENDSSH
+
+      - name: Send deployment notification
+        if: always()
+        run: |
+          echo "Deployment completed for image tag: ${{ inputs.image_tag }}"
+          echo "Agent image tag: ${{ inputs.agent_image_tag }}"
+          echo "VPS: ${{ inputs.vps_host }}"
+          echo "Path: ${{ inputs.deployment_path }}"

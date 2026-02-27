@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from django.conf import settings
+from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare
@@ -276,3 +277,267 @@ class UserProfileSerializer(serializers.ModelSerializer):
             validated_data['profile_image'] = optimized_image
 
         return super().update(instance, validated_data)
+
+
+class UserManagementSerializer(serializers.ModelSerializer):
+    """
+    Serializer for user management with profile information.
+    """
+    profile_location = serializers.CharField(source='profile.location', required=False, allow_blank=True)
+    profile_city = serializers.CharField(source='profile.city', required=False, allow_blank=True)
+    full_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = User
+        fields = [
+            'id', 
+            'email', 
+            'username', 
+            'first_name', 
+            'last_name',
+            'full_name',
+            'is_active', 
+            'is_staff',
+            'is_verified',
+            'date_joined',
+            'last_login',
+            'profile_location',
+            'profile_city'
+        ]
+        read_only_fields = ['id', 'date_joined', 'last_login']
+    
+    def get_full_name(self, obj):
+        """Get user's full name."""
+        return obj.get_full_name() if hasattr(obj, 'get_full_name') else f"{obj.first_name} {obj.last_name}".strip()
+    
+    def update(self, instance, validated_data):
+        """Handle updates including nested profile data."""
+        profile_data = {}
+        if 'profile' in validated_data:
+            profile_data = validated_data.pop('profile')
+        
+        # Update user fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        
+        # Update or create profile
+        if profile_data:
+            Profile.objects.update_or_create(
+                user=instance,
+                defaults=profile_data
+            )
+        
+        return instance
+
+
+class TeamSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Team model with member and lead information.
+    """
+    lead_name = serializers.SerializerMethodField()
+    lead_email = serializers.SerializerMethodField()
+    member_count = serializers.SerializerMethodField()
+    active_member_count = serializers.SerializerMethodField()
+    is_owner = serializers.SerializerMethodField()
+    member_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        write_only=True,
+        required=False,
+        allow_empty=True
+    )
+    members_details = serializers.SerializerMethodField(read_only=True)
+    
+    class Meta:
+        from base.models import Team
+        model = Team
+        fields = [
+            'id',
+            'name',
+            'description',
+            'department',
+            'location',
+            'owner',
+            'is_owner',
+            'lead',
+            'lead_name',
+            'lead_email',
+            'members_details',
+            'member_ids',
+            'member_count',
+            'active_member_count',
+            'is_active',
+            'created_at',
+            'updated_at'
+        ]
+        read_only_fields = ['id', 'owner', 'created_at', 'updated_at', 'member_count', 'active_member_count']
+    
+    def get_is_owner(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user:
+            return False
+        return obj.owner_id == request.user.id
+    
+    def get_lead_name(self, obj):
+        """Get the team lead's full name."""
+        if obj.lead:
+            return obj.lead.get_full_name() if hasattr(obj.lead, 'get_full_name') else f"{obj.lead.first_name} {obj.lead.last_name}".strip()
+        return None
+    
+    def get_lead_email(self, obj):
+        """Get the team lead's email."""
+        return obj.lead.email if obj.lead else None
+    
+    def get_member_count(self, obj):
+        """Get the total number of members in the team."""
+        return obj.member_count
+    
+    def get_active_member_count(self, obj):
+        """Get the number of active members in the team."""
+        return obj.active_member_count
+    
+    def get_members_details(self, obj):
+        """Get detailed information about team members."""
+        return [
+            {
+                'id': str(member.id),
+                'name': member.get_full_name() if hasattr(member, 'get_full_name') else f"{member.first_name} {member.last_name}".strip(),
+                'email': member.email,
+                'is_active': member.is_active
+            }
+            for member in obj.members.all()
+        ]
+    
+    def create(self, validated_data):
+        """Handle team creation with members."""
+        member_ids = validated_data.pop('member_ids', [])
+        team = super().create(validated_data)
+        
+        if member_ids:
+            from base.models import User
+            members = User.objects.filter(id__in=member_ids)
+            team.members.set(members)
+        
+        return team
+    
+    def update(self, instance, validated_data):
+        """Handle team updates including members."""
+        member_ids = validated_data.pop('member_ids', None)
+        
+        # Update basic fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        
+        # Update members if provided
+        if member_ids is not None:
+            from base.models import User
+            members = User.objects.filter(id__in=member_ids)
+            instance.members.set(members)
+        
+        return instance
+
+
+class UserPreferencesSerializer(serializers.ModelSerializer):
+    """
+    Serializer for UserPreferences model.
+    """
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+    user_name = serializers.SerializerMethodField()
+    active_team_name = serializers.SerializerMethodField()
+
+    class Meta:
+        from base.models import UserPreferences
+        model = UserPreferences
+        fields = [
+            'id',
+            'user',
+            'user_email',
+            'user_name',
+            'email_notifications',
+            'push_notifications',
+            'ticket_updates',
+            'system_alerts',
+            'daily_digest',
+            'timezone',
+            'language',
+            'theme',
+            'active_team',
+            'active_team_name',
+            'created_at',
+            'updated_at'
+        ]
+        read_only_fields = ['id', 'user', 'created_at', 'updated_at', 'active_team_name']
+
+    def get_user_name(self, obj):
+        """Get user's full name."""
+        return obj.user.get_full_name() if hasattr(obj.user, 'get_full_name') else obj.user.username
+
+    def get_active_team_name(self, obj):
+        """Get active team name for display."""
+        return obj.active_team.name if obj.active_team_id else None
+
+    def validate_active_team(self, value):
+        """User can only set active_team to a team they belong to (member or owner)."""
+        if value is None:
+            return value
+        request = self.context.get('request')
+        if not request or not request.user:
+            return value
+        from base.models import Team
+        if not Team.objects.filter(pk=value.pk).filter(
+            Q(owner=request.user) | Q(members=request.user)
+        ).exists():
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError('You can only set your active team to a team you belong to.')
+        return value
+
+
+class InAppNotificationSerializer(serializers.ModelSerializer):
+    """Serializer for in-app notifications (bell dropdown)."""
+    time = serializers.SerializerMethodField()
+
+    class Meta:
+        from base.models import InAppNotification
+        model = InAppNotification
+        fields = ['id', 'type', 'title', 'message', 'link', 'is_read', 'created_at', 'time']
+        read_only_fields = ['id', 'type', 'title', 'message', 'link', 'created_at']
+
+    def get_time(self, obj):
+        from django.utils.timesince import timesince
+        return timesince(obj.created_at) + ' ago'
+
+
+class PlanSerializer(serializers.ModelSerializer):
+    class Meta:
+        from base.models import Plan
+        model = Plan
+        fields = [
+            'id', 'name', 'slug', 'max_teams', 'max_members',
+            'price_monthly', 'price_yearly', 'is_active',
+        ]
+
+
+class SubscriptionSerializer(serializers.ModelSerializer):
+    plan_detail = PlanSerializer(source='plan', read_only=True)
+
+    class Meta:
+        from base.models import Subscription
+        model = Subscription
+        fields = [
+            'id', 'plan', 'plan_detail', 'status',
+            'current_period_start', 'current_period_end',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class InvoiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        from base.models import Invoice
+        model = Invoice
+        fields = [
+            'id', 'subscription', 'amount', 'currency', 'status',
+            'period_start', 'period_end', 'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']

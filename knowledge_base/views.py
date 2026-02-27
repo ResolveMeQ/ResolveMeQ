@@ -35,11 +35,15 @@ class KnowledgeBaseArticleViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        q = self.request.query_params.get('q', '').strip()
+        if q:
+            queryset = queryset.filter(
+                Q(title__icontains=q) | Q(content__icontains=q)
+            )
         tags = self.request.query_params.get('tags')
         if tags:
             tag = tags.lower()
-            # SQLite-compatible: filter in Python
-            queryset = [a for a in queryset if tag in [str(t).lower() for t in a.tags]]
+            queryset = [a for a in queryset if tag in [str(t).lower() for t in (a.tags or [])]]
         return queryset
 
     @action(detail=True, methods=['post'])

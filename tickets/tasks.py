@@ -2,12 +2,14 @@ from celery import shared_task
 from celery.exceptions import MaxRetriesExceededError
 from django.conf import settings
 import requests
-from .models import Ticket
+from .models import Ticket, ActionHistory, TicketResolution
 import logging
 from core.celery import app
 from integrations.views import notify_user_agent_response  # Restored import for Slack feedback
 from solutions.models import Solution
 from .autonomous_agent import AutonomousAgent, AgentAction
+from monitoring.metrics import AgentMetrics
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -125,69 +127,145 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None):
 def execute_autonomous_action(ticket_id, action, params):
     """
     Execute the autonomous action decided by the agent.
+    Now includes action history tracking and metrics.
     """
+    success = False
     try:
         ticket = Ticket.objects.get(ticket_id=ticket_id)
+        confidence = ticket.agent_response.get('confidence', 0.0) if isinstance(ticket.agent_response, dict) else 0.0
+        
         logger.info(f"Executing autonomous action {action} for ticket {ticket_id}")
         
         if action == AgentAction.AUTO_RESOLVE.value:
-            return handle_auto_resolve(ticket, params)
+            success = handle_auto_resolve(ticket, params)
         elif action == AgentAction.ESCALATE.value:
-            return handle_escalate(ticket, params)
+            success = handle_escalate(ticket, params)
         elif action == AgentAction.REQUEST_CLARIFICATION.value:
-            return handle_request_clarification(ticket, params)
+            success = handle_request_clarification(ticket, params)
         elif action == AgentAction.ASSIGN_TO_TEAM.value:
-            return handle_assign_to_team(ticket, params)
+            success = handle_assign_to_team(ticket, params)
         elif action == AgentAction.SCHEDULE_FOLLOWUP.value:
-            return handle_schedule_followup(ticket, params)
+            success = handle_schedule_followup(ticket, params)
         elif action == AgentAction.CREATE_KB_ARTICLE.value:
-            return handle_create_kb_article(ticket, params)
+            success = handle_create_kb_article(ticket, params)
         else:
             logger.warning(f"Unknown autonomous action: {action}")
-            return False
+            success = False
+        
+        # Track the action with monitoring
+        AgentMetrics.track_autonomous_action(action, ticket_id, confidence, success)
+        
+        return success
             
     except Exception as e:
+        # Track error with monitoring
+        AgentMetrics.track_agent_error(e, ticket_id, {'action': action, 'params': params})
         logger.error(f"Error executing autonomous action {action} for ticket {ticket_id}: {str(e)}")
         return False
 
 def handle_auto_resolve(ticket, params):
-    """Automatically resolve the ticket."""
+    """
+    Automatically resolve the ticket.
+    Enhanced with action history tracking and follow-up scheduling.
+    """
     from integrations.views import notify_user_auto_resolution
+    from tickets.models import TicketInteraction
     
+    # Capture state before action
+    before_state = {
+        'status': ticket.status,
+        'assigned_to_id': ticket.assigned_to.user_id if ticket.assigned_to else None,
+    }
+    
+    resolution_steps = params.get("resolution_steps", "No steps provided")
+    confidence = ticket.agent_response.get('confidence', 0.0) if isinstance(ticket.agent_response, dict) else 0.0
+    reasoning = ticket.agent_response.get('explanation', '') if isinstance(ticket.agent_response, dict) else ''
+    
+    # Execute action
     ticket.status = "resolved"
-    ticket.resolution_summary = f"Auto-resolved by AI Agent. {params.get('reasoning', '')}"
     ticket.save()
     
+    # Capture state after action
+    after_state = {
+        'status': ticket.status,
+        'assigned_to_id': ticket.assigned_to.user_id if ticket.assigned_to else None,
+    }
+    
+    # Record action in history for rollback capability
+    ActionHistory.objects.create(
+        ticket=ticket,
+        action_type='AUTO_RESOLVE',
+        action_params=params,
+        confidence_score=confidence,
+        agent_reasoning=reasoning,
+        rollback_possible=True,
+        rollback_steps={'handler': 'rollback_auto_resolve'},
+        before_state=before_state,
+        after_state=after_state,
+    )
+    
     # Create interaction record
-    from tickets.models import TicketInteraction
     TicketInteraction.objects.create(
         ticket=ticket,
         user=ticket.user,
-        interaction_type="agent_auto_resolve",
-        content=f"Ticket automatically resolved. Steps: {params.get('resolution_steps', [])}"
+        interaction_type="agent_response",
+        content=f"🤖 Auto-resolved by AI Agent.\n\nResolution:\n{resolution_steps}"
+    )
+    
+    # Create resolution tracking for feedback loop
+    TicketResolution.objects.get_or_create(
+        ticket=ticket,
+        defaults={'autonomous_action': 'AUTO_RESOLVE'}
     )
     
     # Notify user
     notify_user_auto_resolution(str(ticket.user.id), ticket.ticket_id, params)
     
-    logger.info(f"Auto-resolved ticket {ticket.ticket_id}")
+    # Schedule 24-hour follow-up to verify resolution actually worked
+    schedule_resolution_followup.apply_async(
+        args=[ticket.ticket_id],
+        countdown=86400  # 24 hours
+    )
+    
+    logger.info(f"Auto-resolved ticket {ticket.ticket_id} with follow-up scheduled")
     return True
 
 def handle_escalate(ticket, params):
-    """Escalate the ticket to human support."""
+    """Escalate the ticket to human support with action history."""
     from integrations.views import notify_escalation
+    from tickets.models import TicketInteraction
+    
+    # Capture state before
+    before_state = {'status': ticket.status}
     
     ticket.status = "escalated"
-    ticket.priority = params.get("priority", "medium")
     ticket.save()
     
+    # Capture state after
+    after_state = {'status': ticket.status}
+    
+    confidence = ticket.agent_response.get('confidence', 0.0) if isinstance(ticket.agent_response, dict) else 0.0
+    reasoning = params.get('escalation_reason', 'Requires human attention')
+    
+    # Record action in history
+    ActionHistory.objects.create(
+        ticket=ticket,
+        action_type='ESCALATE',
+        action_params=params,
+        confidence_score=confidence,
+        agent_reasoning=reasoning,
+        rollback_possible=True,
+        rollback_steps={'handler': 'rollback_escalate'},
+        before_state=before_state,
+        after_state=after_state,
+    )
+    
     # Create interaction record
-    from tickets.models import TicketInteraction
     TicketInteraction.objects.create(
         ticket=ticket,
         user=ticket.user,
-        interaction_type="agent_escalate",
-        content=f"Escalated: {params.get('escalation_reason', 'Requires human attention')}"
+        interaction_type="agent_response",
+        content=f"⚠️ Escalated: {reasoning}"
     )
     
     # Notify user and support team
@@ -219,13 +297,49 @@ def handle_request_clarification(ticket, params):
     return True
 
 def handle_assign_to_team(ticket, params):
-    """Assign ticket to specific team."""
-    ticket.assigned_team = params.get("assigned_team", "IT Support")
-    ticket.priority = params.get("priority", "medium")
+    """Assign ticket to specific team with action history."""
+    from tickets.models import TicketInteraction
+    
+    # Capture state before
+    before_state = {
+        'assigned_to_id': ticket.assigned_to.user_id if ticket.assigned_to else None,
+        'status': ticket.status
+    }
+    
+    assigned_team = params.get("assigned_team", "IT Support")
     ticket.status = "assigned"
     ticket.save()
     
-    logger.info(f"Assigned ticket {ticket.ticket_id} to {ticket.assigned_team}")
+    # Capture state after
+    after_state = {
+        'assigned_to_id': ticket.assigned_to.user_id if ticket.assigned_to else None,
+        'status': ticket.status
+    }
+    
+    confidence = ticket.agent_response.get('confidence', 0.0) if isinstance(ticket.agent_response, dict) else 0.0
+    
+    # Record action in history
+    ActionHistory.objects.create(
+        ticket=ticket,
+        action_type='ASSIGN_TO_TEAM',
+        action_params=params,
+        confidence_score=confidence,
+        agent_reasoning=f"Assigned to {assigned_team}",
+        rollback_possible=True,
+        rollback_steps={'handler': 'rollback_assign_to_team'},
+        before_state=before_state,
+        after_state=after_state,
+    )
+    
+    # Create interaction
+    TicketInteraction.objects.create(
+        ticket=ticket,
+        user=ticket.user,
+        interaction_type="agent_response",
+        content=f"👥 Assigned to {assigned_team}"
+    )
+    
+    logger.info(f"Assigned ticket {ticket.ticket_id} to {assigned_team}")
     return True
 
 def handle_schedule_followup(ticket, params):
@@ -269,3 +383,43 @@ def check_ticket_followup(ticket_id, original_params):
             
     except Exception as e:
         logger.error(f"Error in follow-up check for ticket {ticket_id}: {str(e)}")
+
+
+@app.task
+def schedule_resolution_followup(ticket_id):
+    """
+    Send follow-up message 24 hours after auto-resolve to verify success.
+    This is critical for validating autonomous resolutions actually worked.
+    """
+    try:
+        ticket = Ticket.objects.get(ticket_id=ticket_id)
+        
+        # Get or create resolution tracking
+        resolution, created = TicketResolution.objects.get_or_create(
+            ticket=ticket,
+            defaults={
+                'autonomous_action': ticket.agent_response.get('recommended_action', 'unknown') 
+                if isinstance(ticket.agent_response, dict) else 'unknown'
+            }
+        )
+        
+        if resolution.followup_sent_at:
+            logger.info(f"Follow-up already sent for ticket {ticket_id}")
+            return
+        
+        # Mark follow-up as sent
+        resolution.followup_sent_at = timezone.now()
+        resolution.save()
+        
+        # Send Slack message with interactive buttons (if Slack integration available)
+        # For now, log it - actual Slack implementation would go here
+        logger.info(f"Would send follow-up message for ticket {ticket_id}")
+        
+        # TODO: Implement actual Slack interactive message
+        # from integrations.views import send_slack_feedback_request
+        # send_slack_feedback_request(ticket, resolution)
+        
+    except Ticket.DoesNotExist:
+        logger.error(f"Ticket {ticket_id} not found for follow-up")
+    except Exception as e:
+        logger.error(f"Error sending follow-up for ticket {ticket_id}: {str(e)}")

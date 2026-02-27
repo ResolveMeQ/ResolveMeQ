@@ -1,0 +1,118 @@
+version: '3.8'
+
+# ResolveMeQ Django Backend - Standalone Development Environment
+# This runs the Django application independently
+# For integration with the Agent, set AI_AGENT_URL in .env
+
+services:
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${DB_NAME:-resolvemeq}
+      POSTGRES_USER: ${DB_USER:-resolvemeq}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-resolvemeq_password}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-resolvemeq}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - resolvemeq-network
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - resolvemeq-network
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    command: gunicorn resolvemeq.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 120
+    volumes:
+      - ./staticfiles:/app/staticfiles
+      - ./media:/app/media
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-resolvemeq}:${DB_PASSWORD:-resolvemeq_password}@db:5432/${DB_NAME:-resolvemeq}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      # AI_AGENT_URL should be set in .env file
+      # For local dev with agent: AI_AGENT_URL=http://localhost:8001
+      # For VPS deployment: AI_AGENT_URL=https://your-domain.com/agent
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/tickets/analytics/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - resolvemeq-network
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A resolvemeq worker -l info
+    volumes:
+      - ./media:/app/media
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-resolvemeq}:${DB_PASSWORD:-resolvemeq_password}@db:5432/${DB_NAME:-resolvemeq}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    networks:
+      - resolvemeq-network
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A resolvemeq beat -l info
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-resolvemeq}:${DB_PASSWORD:-resolvemeq_password}@db:5432/${DB_NAME:-resolvemeq}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - resolvemeq-network
+
+networks:
+  resolvemeq-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
