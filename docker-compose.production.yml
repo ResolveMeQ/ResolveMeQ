@@ -50,6 +50,8 @@ services:
       - DEBUG=False
       - ALLOWED_HOSTS=${ALLOWED_HOSTS}
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      - DB_HOST=db
+      - DB_PORT=5432
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - AI_AGENT_URL=${AI_AGENT_URL}  # Set in .env: http://agent-web:8001 or https://domain.com/agent
