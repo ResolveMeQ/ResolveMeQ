@@ -48,11 +48,6 @@ jobs:
           # Verify file was copied
           ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "ls -la ${{ inputs.deployment_path }}/docker-compose.yml"
 
-      - name: Copy environment template (optional)
-        continue-on-error: true
-        run: |
-          scp .env.example ${{ inputs.ssh_user }}@${{ inputs.vps_host }}:${{ inputs.deployment_path }}/.env.template || echo "No .env.example found, skipping"
-
       - name: Create shared network if not exists
         run: |
           ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
