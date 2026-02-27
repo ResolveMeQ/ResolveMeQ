@@ -76,6 +76,7 @@ services:
   celery_worker:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-celery:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    command: ["/app/venv/bin/celery", "-A", "resolvemeq", "worker", "-l", "info"]
     volumes:
       - media_files:/app/media
     environment:
@@ -102,7 +103,7 @@ services:
   celery_beat:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-celery:${IMAGE_TAG:-latest}
     restart: unless-stopped
-    command: celery -A resolvemeq beat -l info
+    command: ["/app/venv/bin/celery", "-A", "resolvemeq", "beat", "-l", "info"]
     environment:
       - DEBUG=False
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
