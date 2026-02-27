@@ -39,11 +39,11 @@ jobs:
 
       - name: Create deployment directory on VPS
         run: |
-          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
-          sudo mkdir -p ${{ inputs.deployment_path }}
-          sudo chown -R ${{ inputs.ssh_user }}:${{ inputs.ssh_user }} ${{ inputs.deployment_path }}
-          ls -la ${{ inputs.deployment_path }}
-          ENDSSH
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "sudo mkdir -p ${{ inputs.deployment_path }} && sudo chown -R ${{ inputs.ssh_user }}:${{ inputs.ssh_user }} ${{ inputs.deployment_path }}"
+          
+      - name: Verify deployment directory exists
+        run: |
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "ls -la ${{ inputs.deployment_path }}"
 
       - name: Copy docker-compose file to VPS
         run: |
