@@ -37,19 +37,15 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ inputs.vps_host }} >> ~/.ssh/known_hosts
 
-      - name: Create deployment directory and copy files
+
+      - name: Ensure deployment directory exists and copy docker-compose
         env:
           SSH_USER: ${{ inputs.ssh_user }}
           VPS_HOST: ${{ inputs.vps_host }}
           DEPLOY_PATH: ${{ inputs.deployment_path }}
         run: |
-          # Ensure directory exists
           ssh ${SSH_USER}@${VPS_HOST} "sudo mkdir -p ${DEPLOY_PATH} && sudo chown -R ${SSH_USER}:${SSH_USER} ${DEPLOY_PATH} && ls -ld ${DEPLOY_PATH}"
-          
-          # Copy docker-compose file
           scp docker-compose.production.yml ${SSH_USER}@${VPS_HOST}:${DEPLOY_PATH}/docker-compose.yml
-          
-          # Verify file was copied
           ssh ${SSH_USER}@${VPS_HOST} "ls -la ${DEPLOY_PATH}/docker-compose.yml"
 
       - name: Create shared network if not exists
@@ -66,32 +62,19 @@ jobs:
         run: |
           ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
           cd ${{ inputs.deployment_path }}
-          
-          # Create .env if it doesn't exist
           if [ ! -f .env ]; then
             echo "Creating new .env file from secrets..."
             cat > .env << 'EOF'
-          # Database Configuration
           DB_NAME=${{ secrets.DB_NAME }}
           DB_USER=${{ secrets.DB_USER }}
           DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-          
-          # Redis Configuration
           REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
-          
-          # Django Configuration
           SECRET_KEY=${{ secrets.SECRET_KEY }}
           DEBUG=False
           ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}
-          
-          # AI Agent URL (configure based on deployment)
           AI_AGENT_URL=${{ secrets.AI_AGENT_URL }}
-          
-          # Sentry Configuration
           SENTRY_DSN=${{ secrets.SENTRY_DSN }}
           ENVIRONMENT=production
-          
-          # Image Configuration
           GITHUB_REPOSITORY_OWNER=${{ github.repository_owner }}
           IMAGE_TAG=${{ inputs.image_tag }}
           WEB_PORT=8000
@@ -104,51 +87,27 @@ jobs:
 
       - name: Login to GitHub Container Registry on VPS
         run: |
-          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
-          echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          ENDSSH
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
 
       - name: Remove old images and pull fresh ones
         run: |
-          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
-          cd ${{ inputs.deployment_path }}
-          
-          # Stop running containers
-          docker compose down || true
-          
-          # Remove old images to force fresh pull
-          docker rmi ghcr.io/${{ github.repository_owner }}/resolvemeq-web:${{ inputs.image_tag }} || true
-          docker rmi ghcr.io/${{ github.repository_owner }}/resolvemeq-celery:${{ inputs.image_tag }} || true
-          
-          # Pull fresh images
-          docker compose pull --ignore-pull-failures
-          ENDSSH
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "cd ${{ inputs.deployment_path }} && docker compose down || true && docker rmi ghcr.io/${{ github.repository_owner }}/resolvemeq-web:${{ inputs.image_tag }} || true && docker rmi ghcr.io/${{ github.repository_owner }}/resolvemeq-celery:${{ inputs.image_tag }} || true && docker compose pull --ignore-pull-failures"
 
-      - name: Deploy with Docker Compose
+      - name: Start services with Docker Compose
         run: |
-          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
-          cd ${{ inputs.deployment_path }}
-          
-          # Run migrations
-          docker compose run --rm web python manage.py migrate --noinput
-          
-          # Collect static files
-          docker compose run --rm web python manage.py collectstatic --noinput --clear
-          
-          # Start services
-          docker compose up -d
-          
-          # Wait for services to be healthy
-          echo "Waiting for services to be healthy..."
-          sleep 10
-          docker compose ps
-          ENDSSH
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "cd ${{ inputs.deployment_path }} && docker compose up -d"
+
+      - name: Run migrations in running container
+        run: |
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "cd ${{ inputs.deployment_path }} && docker compose exec web python manage.py migrate --noinput"
+
+      - name: Collect static files in running container
+        run: |
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "cd ${{ inputs.deployment_path }} && docker compose exec web python manage.py collectstatic --noinput --clear"
 
       - name: Cleanup old images
         run: |
-          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
-          docker image prune -f
-          ENDSSH
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "docker image prune -f"
 
       - name: Health check
         run: |
