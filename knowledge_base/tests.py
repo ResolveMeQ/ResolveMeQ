@@ -87,11 +87,12 @@ class KnowledgeBaseTests(TestCase):
         self.assertEqual(response.data['title'], 'VPN Connection Issue')
 
     def test_unauthorized_access(self):
-        """Test unauthorized access to KB articles"""
+        """Test KB articles are accessible (AllowAny for FastAPI agent)"""
         self.client.force_authenticate(user=self.user)  # Non-admin user
         url = reverse('knowledgebasearticle-list')
         response = self.client.get(url)
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        # Knowledge base is publicly accessible for the FastAPI agent
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     def test_kb_article_tag_filtering(self):
         """Test filtering KB articles by tags"""

@@ -18,7 +18,9 @@ def slack_signature(secret, body, timestamp):
 class SlackIntegrationTests(TestCase):
     def setUp(self):
         self.client = Client()
-        self.signing_secret = settings.SLACK_SIGNING_SECRET or "testsecret"
+        self.signing_secret = "testsecret"
+        # Override settings for tests
+        settings.SLACK_SIGNING_SECRET = self.signing_secret
         self.timestamp = str(int(time.time()))
         self.oauth_url = reverse("slack_oauth_redirect")
         self.events_url = reverse("slack_events")

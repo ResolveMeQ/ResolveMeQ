@@ -76,6 +76,11 @@ def verify_slack_request(request):
         bool: True if the request is verified, False otherwise.
     """
     slack_signing_secret = settings.SLACK_SIGNING_SECRET
+    
+    # If no signing secret is configured, return False (not verified)
+    if not slack_signing_secret:
+        return False
+    
     request_body = request.body
     timestamp = request.headers.get("X-Slack-Request-Timestamp")
     slack_signature = request.headers.get("X-Slack-Signature")
