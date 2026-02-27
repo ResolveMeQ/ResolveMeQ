@@ -108,11 +108,20 @@ jobs:
           echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           ENDSSH
 
-      - name: Pull Docker images
+      - name: Remove old images and pull fresh ones
         run: |
           ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
           cd ${{ inputs.deployment_path }}
-          docker compose pull
+          
+          # Stop running containers
+          docker compose down || true
+          
+          # Remove old images to force fresh pull
+          docker rmi ghcr.io/${{ github.repository_owner }}/resolvemeq-web:${{ inputs.image_tag }} || true
+          docker rmi ghcr.io/${{ github.repository_owner }}/resolvemeq-celery:${{ inputs.image_tag }} || true
+          
+          # Pull fresh images
+          docker compose pull --ignore-pull-failures
           ENDSSH
 
       - name: Deploy with Docker Compose
