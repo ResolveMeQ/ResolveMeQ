@@ -1,4 +1,10 @@
 import os
+CORS_ALLOWED_ORIGINS = [
+    "https://app.resolvemeq.net",
+    "https://resolvemeq.net",
+    "https://agent.resolvemeq.net",
+]
+import os
 from datetime import timedelta
 from pathlib import Path
 
