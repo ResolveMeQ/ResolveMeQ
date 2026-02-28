@@ -1,17 +1,3 @@
-# CSRF trusted origins for cross-domain POST requests
-CSRF_TRUSTED_ORIGINS = [
-    "https://app.resolvemeq.net",
-    "https://resolvemeq.net",
-    "https://agent.resolvemeq.net",
-    "https://api.resolvemeq.net",
-]
-import os
-CORS_ALLOWED_ORIGINS = [
-    "https://app.resolvemeq.net",
-    "https://resolvemeq.net",
-    "https://agent.resolvemeq.net",
-]
-import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -141,6 +127,9 @@ CSRF_TRUSTED_ORIGINS = [
     "https://app.resolvemeq.com",
     "https://api.resolvemeq.com",
     "https://agent.resolvemeq.com",
+    "https://app.resolvemeq.net",
+    "https://api.resolvemeq.net",
+    "https://resolvemeq.net",
     "http://localhost:5173",
     "http://localhost:5174",
     "http://localhost:3000",
