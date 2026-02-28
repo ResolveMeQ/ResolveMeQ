@@ -39,7 +39,11 @@ SECRET_KEY = "django-insecure-xoeau&915nx&jsisbu$@p4h3^iva-4s4bxov6nj5l@y2l48d%r
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+raw_hosts = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1")
+if raw_hosts == "*":
+    ALLOWED_HOSTS = ["*"]
+else:
+    ALLOWED_HOSTS = [h.strip() for h in raw_hosts.split(",")]
 FRONTEND_URL = "https://app.resolvemeq.net"
 # Application definition
 
