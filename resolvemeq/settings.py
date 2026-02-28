@@ -1,3 +1,10 @@
+# CSRF trusted origins for cross-domain POST requests
+CSRF_TRUSTED_ORIGINS = [
+    "https://app.resolvemeq.net",
+    "https://resolvemeq.net",
+    "https://agent.resolvemeq.net",
+    "https://api.resolvemeq.net",
+]
 import os
 CORS_ALLOWED_ORIGINS = [
     "https://app.resolvemeq.net",
