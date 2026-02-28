@@ -5,22 +5,6 @@ version: '3.8'
 # For integration with the Agent, set AI_AGENT_URL in .env
 
 services:
-  db:
-    image: postgres:15-alpine
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: ${DB_NAME:-resolvemeq}
-      POSTGRES_USER: ${DB_USER:-resolvemeq}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-resolvemeq_password}
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-resolvemeq}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - resolvemeq-network
-
   redis:
     image: redis:7-alpine
     command: redis-server --appendonly yes
@@ -47,15 +31,12 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql://${DB_USER:-resolvemeq}:${DB_PASSWORD:-resolvemeq_password}@db:5432/${DB_NAME:-resolvemeq}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       # AI_AGENT_URL should be set in .env file
       # For local dev with agent: AI_AGENT_URL=http://localhost:8001
       # For VPS deployment: AI_AGENT_URL=https://your-domain.com/agent
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -77,12 +58,9 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql://${DB_USER:-resolvemeq}:${DB_PASSWORD:-resolvemeq_password}@db:5432/${DB_NAME:-resolvemeq}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
       web:
@@ -98,12 +76,9 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql://${DB_USER:-resolvemeq}:${DB_PASSWORD:-resolvemeq_password}@db:5432/${DB_NAME:-resolvemeq}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -127,5 +102,4 @@ networks:
     driver: bridge
 
 volumes:
-  postgres_data:
   redis_data:
