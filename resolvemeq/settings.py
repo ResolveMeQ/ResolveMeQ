@@ -280,4 +280,5 @@ SWAGGER_SETTINGS = {
         }
     },
     'DEFAULT_API_URL': 'https://api.resolvemeq.net' if not DEBUG else 'http://localhost:8000',
+    'SUPPORTED_SUBMIT_METHODS': ['get', 'post', 'put', 'delete', 'patch'],
 }
