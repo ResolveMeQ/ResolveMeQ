@@ -14,6 +14,7 @@ from .serializers import TicketSerializer, TicketInteractionSerializer
 import logging
 from django.conf import settings
 from base.models import User
+from base.permissions import IsAuthenticatedOrAgent
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.core.files.storage import default_storage
@@ -406,10 +407,12 @@ def assign_ticket(request, ticket_id):
     return Response({"message": f"Ticket assigned to {agent.name}."})
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticatedOrAgent])
 def update_ticket_status(request, ticket_id):
     """
     Update ticket status (close, cancel, reopen, etc.).
     Body: {"status": "resolved"}
+    Allows both authenticated users and AI Agent with API key.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
     status_val = request.data.get("status")
@@ -417,10 +420,14 @@ def update_ticket_status(request, ticket_id):
         return Response({"error": "status is required."}, status=400)
     ticket.status = status_val
     ticket.save()
+    
+    # Determine who made the change
+    user = request.user if request.user and request.user.is_authenticated else ticket.user
+    
     TicketInteraction.objects.create(
         ticket=ticket,
-        user=ticket.user,
-        interaction_type="user_message",
+        user=user,
+        interaction_type="agent_response" if request.auth and not request.user else "user_message",
         content=f"Status updated to {status_val}."
     )
     return Response({"message": f"Ticket status updated to {status_val}."})

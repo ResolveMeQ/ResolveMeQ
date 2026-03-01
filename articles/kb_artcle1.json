@@ -1,0 +1,97 @@
+{
+    "version": "1.0",
+    "source": "internal_docs",
+    "imported_at": "2026-02-28",
+    "articles": [
+        {
+            "title": "How to Unlock a Locked User Account",
+            "content": "## Overview\n\nAccounts may lock after multiple failed login attempts.\n\n### Steps\n1. Wait 15 minutes and try again.\n2. Use the self-service password reset tool.\n3. Ensure Caps Lock is off.\n4. Contact IT if the account remains locked.\n\n### Prevention\n- Avoid repeated incorrect password attempts.\n- Use a password manager if needed.",
+            "tags": ["account", "lockout", "login", "security"],
+            "category": "user_access"
+        },
+        {
+            "title": "How to Set Up Multi-Factor Authentication (MFA)",
+            "content": "## Overview\n\nMFA adds an extra layer of security to your account.\n\n### Setup Steps\n1. Log into the security portal.\n2. Navigate to Security Settings.\n3. Select 'Enable MFA'.\n4. Register your mobile number or authenticator app.\n5. Verify with a test code.\n\n### Troubleshooting\n- Ensure phone time is set automatically.\n- Reinstall authenticator app if codes fail.",
+            "tags": ["mfa", "security", "authentication", "account"],
+            "category": "user_access"
+        },
+        {
+            "title": "Wi-Fi Not Connecting on Laptop",
+            "content": "## Overview\n\nIf your laptop cannot connect to Wi-Fi, follow these steps.\n\n### Troubleshooting\n1. Turn Wi-Fi off and on.\n2. Restart your router.\n3. Forget and reconnect to the network.\n4. Run the network troubleshooter.\n5. Update network drivers.\n\n### Escalation\n- Other devices cannot connect.\n- Network adapter not detected.",
+            "tags": ["wifi", "network", "connectivity", "laptop"],
+            "category": "network_issue"
+        },
+        {
+            "title": "How to Map a Network Drive",
+            "content": "## Overview\n\nMapping a drive allows easy access to shared folders.\n\n### Steps (Windows)\n1. Open File Explorer.\n2. Click 'This PC' > 'Map Network Drive'.\n3. Enter the folder path (e.g., \\\\server\\shared).\n4. Select 'Reconnect at sign-in'.\n5. Click Finish.\n\n### Troubleshooting\n- Ensure VPN is connected.\n- Confirm permissions are granted.",
+            "tags": ["network_drive", "shared_folder", "windows", "access"],
+            "category": "network_issue"
+        },
+        {
+            "title": "Software Installation Request Process",
+            "content": "## Overview\n\nEmployees must request approval before installing new software.\n\n### Steps\n1. Submit a ticket via the IT portal.\n2. Provide business justification.\n3. Await manager approval.\n4. IT will install the software remotely.\n\n### Notes\n- Unauthorized installations are blocked.\n- Only licensed software is permitted.",
+            "tags": ["software", "installation", "approval", "request"],
+            "category": "software"
+        },
+        {
+            "title": "Laptop Battery Draining Quickly",
+            "content": "## Overview\n\nIf your laptop battery drains rapidly, try the following.\n\n### Steps\n1. Lower screen brightness.\n2. Close unused applications.\n3. Disable Bluetooth if not needed.\n4. Check battery health settings.\n5. Update operating system.\n\n### Escalation\n- Battery health below 60%.\n- Device shuts down unexpectedly.",
+            "tags": ["battery", "laptop", "hardware", "power"],
+            "category": "hardware"
+        },
+        {
+            "title": "Blue Screen Error (Windows) Troubleshooting",
+            "content": "## Overview\n\nA Blue Screen error may be caused by driver or hardware issues.\n\n### Steps\n1. Restart the computer.\n2. Note the error code.\n3. Update drivers.\n4. Run Windows Memory Diagnostic.\n5. Check for Windows updates.\n\n### Escalation\n- Repeated crashes.\n- Hardware failure suspected.",
+            "tags": ["bsod", "windows", "error", "troubleshooting"],
+            "category": "software"
+        },
+        {
+            "title": "Cannot Access Shared Folder",
+            "content": "## Overview\n\nAccess issues may be permission-related.\n\n### Steps\n1. Confirm VPN connection.\n2. Verify correct folder path.\n3. Request access from folder owner.\n4. Clear cached credentials.\n\n### Escalation\n- Permission denied errors persist.",
+            "tags": ["shared_folder", "permissions", "network", "access"],
+            "category": "network_issue"
+        },
+        {
+            "title": "How to Configure Email Signature",
+            "content": "## Steps (Outlook)\n1. Open Outlook.\n2. Go to File > Options > Mail.\n3. Click 'Signatures'.\n4. Create new signature.\n5. Save and set as default.\n\n### Best Practices\n- Include name, title, company.\n- Keep formatting professional.",
+            "tags": ["email", "signature", "outlook", "configuration"],
+            "category": "email"
+        },
+        {
+            "title": "Disk Space Almost Full Warning",
+            "content": "## Overview\n\nLow disk space can slow performance.\n\n### Steps\n1. Empty Recycle Bin.\n2. Run Disk Cleanup.\n3. Delete temporary files.\n4. Move large files to shared storage.\n5. Uninstall unused programs.\n\n### Escalation\n- Disk remains above 90% usage.",
+            "tags": ["disk_space", "storage", "performance", "windows"],
+            "category": "software"
+        },
+        {
+            "title": "Keyboard or Mouse Not Working",
+            "content": "## Troubleshooting\n1. Check cable or battery.\n2. Try a different USB port.\n3. Restart computer.\n4. Update drivers.\n\n### Escalation\n- Device not detected in Device Manager.",
+            "tags": ["keyboard", "mouse", "hardware", "peripheral"],
+            "category": "hardware"
+        },
+        {
+            "title": "How to Join a Microsoft Teams Meeting",
+            "content": "## Steps\n1. Click the meeting link.\n2. Choose 'Open in Teams'.\n3. Allow microphone and camera access.\n4. Click 'Join Now'.\n\n### Troubleshooting\n- Ensure internet connection is stable.\n- Restart Teams if audio fails.",
+            "tags": ["teams", "meeting", "collaboration", "video_call"],
+            "category": "software"
+        },
+        {
+            "title": "Phishing Email Reporting Procedure",
+            "content": "## Overview\n\nReport suspicious emails immediately.\n\n### Steps\n1. Do not click links.\n2. Use the 'Report Phishing' button.\n3. Forward email to security team.\n4. Delete email after reporting.\n\n### Indicators\n- Urgent language.\n- Suspicious attachments.\n- Unknown sender domain.",
+            "tags": ["phishing", "security", "email", "cybersecurity"],
+            "category": "security"
+        },
+        {
+            "title": "Monitor Not Displaying Image",
+            "content": "## Troubleshooting\n1. Ensure monitor is powered on.\n2. Check HDMI/DisplayPort cable.\n3. Test with another cable.\n4. Restart computer.\n5. Try different input source.\n\n### Escalation\n- No signal after testing with another device.",
+            "tags": ["monitor", "display", "hardware", "video"],
+            "category": "hardware"
+        },
+        {
+            "title": "How to Update Windows Operating System",
+            "content": "## Steps\n1. Open Settings.\n2. Click 'Update & Security'.\n3. Select 'Check for Updates'.\n4. Install available updates.\n5. Restart if prompted.\n\n### Notes\n- Keep device plugged in during update.\n- Schedule updates outside work hours if possible.",
+            "tags": ["windows", "update", "os", "maintenance"],
+            "category": "software"
+        }
+    ]
+}
