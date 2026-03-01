@@ -63,31 +63,27 @@ jobs:
           fi
           ENDSSH
 
-      - name: Create .env file on VPS
+      - name: Update .env file variables on VPS
         run: |
           ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << ENDSSH
           cd ${{ inputs.deployment_path }}
-          echo "Creating/updating .env file from secrets..."
-          cat > .env << 'EOF'
-          DB_NAME=${{ secrets.DB_NAME }}
-          DB_USER=${{ secrets.DB_USER }}
-          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-          DB_HOST=${{ secrets.DB_HOST }}
-          DB_PORT=${{ secrets.DB_PORT || '5432' }}
-          REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
-          SECRET_KEY=${{ secrets.SECRET_KEY }}
-          DEBUG=False
-          ALLOWED_HOSTS=localhost,127.0.0.1,${{ secrets.ALLOWED_HOSTS }}
-          AI_AGENT_URL=${{ secrets.AI_AGENT_URL }}
-          AGENT_API_KEY=${{ secrets.AGENT_API_KEY }}
-          SENTRY_DSN=${{ secrets.SENTRY_DSN }}
-          ENVIRONMENT=production
-          GITHUB_REPOSITORY_OWNER=${{ steps.lowercase.outputs.owner }}
-          IMAGE_TAG=${{ inputs.image_tag }}
-          WEB_PORT=8000
-          USE_EXTERNAL_DB=true
-          EOF
-          echo "✅ .env file updated"
+          echo "Updating .env file with deployment variables..."
+          
+          # Only update specific deployment variables, preserve existing configuration
+          if [ -f .env ]; then
+            # Update only IMAGE_TAG and GITHUB_REPOSITORY_OWNER
+            sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=${{ inputs.image_tag }}/' .env
+            sed -i 's/^GITHUB_REPOSITORY_OWNER=.*/GITHUB_REPOSITORY_OWNER=${{ steps.lowercase.outputs.owner }}/' .env
+            
+            # Add if missing
+            grep -q "^IMAGE_TAG=" .env || echo "IMAGE_TAG=${{ inputs.image_tag }}" >> .env
+            grep -q "^GITHUB_REPOSITORY_OWNER=" .env || echo "GITHUB_REPOSITORY_OWNER=${{ steps.lowercase.outputs.owner }}" >> .env
+            
+            echo "✅ .env file updated (preserved existing configuration)"
+          else
+            echo "⚠️  Warning: .env file does not exist. Please create it manually with required credentials."
+            exit 1
+          fi
           ENDSSH
 
       - name: Login to GitHub Container Registry on VPS
