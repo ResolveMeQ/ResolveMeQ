@@ -9,8 +9,6 @@ services:
   db:
     image: postgres:15-alpine
     restart: unless-stopped
-    profiles:
-      - local-db  # Only start this when using local database
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
@@ -65,14 +63,16 @@ services:
       - SENTRY_DSN=${SENTRY_DSN}
       - ENVIRONMENT=production
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health/ || exit 1"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 60s
+      retries: 3
+      start_period: 40s
     networks:
       - resolvemeq-backend
       - resolvemeq-shared  # Can communicate with agent via this network
@@ -100,6 +100,8 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - SENTRY_DSN=${SENTRY_DSN}
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
       web:
@@ -127,6 +129,8 @@ services:
       - AGENT_API_KEY=${AGENT_API_KEY}
       - SECRET_KEY=${SECRET_KEY}
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
