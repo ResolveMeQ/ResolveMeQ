@@ -65,7 +65,7 @@ jobs:
 
       - name: Create .env file on VPS
         run: |
-          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << ENDSSH
           cd ${{ inputs.deployment_path }}
           echo "Creating/updating .env file from secrets..."
           cat > .env << 'EOF'
@@ -116,7 +116,7 @@ jobs:
 
       - name: Health check
         run: |
-          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << ENDSSH
           cd ${{ inputs.deployment_path }}
           
           # Check if all services are running
