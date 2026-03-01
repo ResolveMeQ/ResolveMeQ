@@ -13,9 +13,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # Force lowercase for Docker image names (Docker requires lowercase)
-  WEB_IMAGE_NAME: resolvemeq/resolvemeq-web
-  CELERY_IMAGE_NAME: resolvemeq/resolvemeq-celery
+  WEB_IMAGE_NAME: ${{ github.repository_owner }}/resolvemeq-web
+  CELERY_IMAGE_NAME: ${{ github.repository_owner }}/resolvemeq-celery
 
 jobs:
   build-and-push-web:

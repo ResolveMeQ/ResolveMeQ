@@ -77,7 +77,7 @@ jobs:
           AGENT_API_KEY=${{ secrets.AGENT_API_KEY }}
           SENTRY_DSN=${{ secrets.SENTRY_DSN }}
           ENVIRONMENT=production
-          GITHUB_REPOSITORY_OWNER=resolvemeq
+          GITHUB_REPOSITORY_OWNER=${{ github.repository_owner }}
           IMAGE_TAG=${{ inputs.image_tag }}
           WEB_PORT=8000
           USE_EXTERNAL_DB=true
@@ -91,7 +91,7 @@ jobs:
 
       - name: Remove old images and pull fresh ones
         run: |
-          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "cd ${{ inputs.deployment_path }} && docker compose down || true && docker rmi ghcr.io/resolvemeq/resolvemeq-web:${{ inputs.image_tag }} || true && docker rmi ghcr.io/resolvemeq/resolvemeq-celery:${{ inputs.image_tag }} || true && docker compose pull --ignore-pull-failures"
+          ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} "cd ${{ inputs.deployment_path }} && docker compose down || true && docker rmi ghcr.io/${{ github.repository_owner }}/resolvemeq-web:${{ inputs.image_tag }} || true && docker rmi ghcr.io/${{ github.repository_owner }}/resolvemeq-celery:${{ inputs.image_tag }} || true && docker compose pull --ignore-pull-failures"
 
       - name: Start services with Docker Compose
         run: |
