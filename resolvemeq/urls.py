@@ -15,6 +15,8 @@ schema_view = get_schema_view(
    ),
    public=True,
    permission_classes=(permissions.AllowAny,),
+   url='https://api.resolvemeq.net/' if not settings.DEBUG else None,
+   schemes=['https'] if not settings.DEBUG else ['http', 'https'],
 )
 
 urlpatterns = [

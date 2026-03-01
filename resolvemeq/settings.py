@@ -268,6 +268,7 @@ AUTH_USER_MODEL = 'base.User'
 
 # Swagger Settings
 SWAGGER_SETTINGS = {
+    'USE_SESSION_AUTH': False,
     'SECURITY_DEFINITIONS': {
         'Basic': {
             'type': 'basic'
@@ -277,5 +278,6 @@ SWAGGER_SETTINGS = {
             'name': 'Authorization',
             'in': 'header'
         }
-    }
+    },
+    'DEFAULT_API_URL': 'https://api.resolvemeq.net' if not DEBUG else 'http://localhost:8000',
 }

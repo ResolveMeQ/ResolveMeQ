@@ -62,9 +62,8 @@ jobs:
         run: |
           ssh ${{ inputs.ssh_user }}@${{ inputs.vps_host }} << 'ENDSSH'
           cd ${{ inputs.deployment_path }}
-          if [ ! -f .env ]; then
-            echo "Creating new .env file from secrets..."
-            cat > .env << 'EOF'
+          echo "Creating/updating .env file from secrets..."
+          cat > .env << 'EOF'
           DB_NAME=${{ secrets.DB_NAME }}
           DB_USER=${{ secrets.DB_USER }}
           DB_PASSWORD=${{ secrets.DB_PASSWORD }}
@@ -73,16 +72,14 @@ jobs:
           DEBUG=False
           ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}
           AI_AGENT_URL=${{ secrets.AI_AGENT_URL }}
+          AGENT_API_KEY=${{ secrets.AGENT_API_KEY }}
           SENTRY_DSN=${{ secrets.SENTRY_DSN }}
           ENVIRONMENT=production
           GITHUB_REPOSITORY_OWNER=${{ github.repository_owner }}
           IMAGE_TAG=${{ inputs.image_tag }}
           WEB_PORT=8000
           EOF
-          else
-            echo ".env file already exists, updating image tag..."
-            sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=${{ inputs.image_tag }}/' .env
-          fi
+          echo "✅ .env file updated"
           ENDSSH
 
       - name: Login to GitHub Container Registry on VPS
