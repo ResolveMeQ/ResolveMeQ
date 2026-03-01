@@ -130,6 +130,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://agent.resolvemeq.com",
     "https://app.resolvemeq.net",
     "https://api.resolvemeq.net",
+    "https://agent.resolvemeq.net",
     "https://resolvemeq.net",
     "http://localhost:5173",
     "http://localhost:5174",
@@ -209,15 +210,20 @@ SLACK_REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI")
 PLAN_MAX_TEAMS = int(os.getenv('PLAN_MAX_TEAMS', '20'))
 
 # AI Agent Settings
-AI_AGENT_URL = 'https://agent.resolvemeq.com/tickets/analyze/'
+AI_AGENT_URL = 'https://agent.resolvemeq.net/tickets/analyze/'
+AGENT_API_KEY = os.getenv('AGENT_API_KEY', 'resolvemeq-agent-secret-key-2026')
 
 # Agent Rate Limiting
 MAX_AUTONOMOUS_ACTIONS_PER_DAY = int(os.getenv('MAX_AUTONOMOUS_ACTIONS_PER_DAY', '500'))
 MAX_AUTONOMOUS_ACTIONS_PER_HOUR = int(os.getenv('MAX_AUTONOMOUS_ACTIONS_PER_HOUR', '100'))
 
+# Redis Settings
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
 # Celery Configuration
-CELERY_BROKER_URL = "rediss://:bSEDHclfM2KUs4iJGubgw1lt2S8p6mLF7AzCaLnaDRU=@celery-redis-cache.redis.cache.windows.net:6380/0?ssl_cert_reqs=CERT_NONE"
-CELERY_RESULT_BACKEND = "rediss://:bSEDHclfM2KUs4iJGubgw1lt2S8p6mLF7AzCaLnaDRU=@celery-redis-cache.redis.cache.windows.net:6380/0?ssl_cert_reqs=CERT_NONE"
+# Use environment variable (set by Docker) or fallback to local Redis
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', REDIS_URL)
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
@@ -225,9 +231,6 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BROKER_HEARTBEAT = 60
 CELERY_BROKER_CONNECTION_TIMEOUT = 30
-
-# Redis Settings
-REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 
 # Email Settings
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
@@ -241,6 +244,7 @@ DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL')
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'base.authentication.AgentAPIKeyAuthentication',
     ),
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
