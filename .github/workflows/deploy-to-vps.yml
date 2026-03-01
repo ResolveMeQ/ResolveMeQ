@@ -72,7 +72,7 @@ jobs:
           REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
           SECRET_KEY=${{ secrets.SECRET_KEY }}
           DEBUG=False
-          ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}
+          ALLOWED_HOSTS=localhost,127.0.0.1,${{ secrets.ALLOWED_HOSTS }}
           AI_AGENT_URL=${{ secrets.AI_AGENT_URL }}
           AGENT_API_KEY=${{ secrets.AGENT_API_KEY }}
           SENTRY_DSN=${{ secrets.SENTRY_DSN }}
