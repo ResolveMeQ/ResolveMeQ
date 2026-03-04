@@ -294,36 +294,38 @@ def _get_ai_chat_response(ticket, message, conversation, user):
     # Check if ticket has agent response already
     agent_data = ticket.agent_response if ticket.agent_processed else None
     
-    # Prepare payload for AI agent
+    # Prepare payload for AI agent (use standard /analyze/ endpoint format)
+    # Include chat context in the description for context-aware responses
+    description_with_context = ticket.description
+    if context:
+        # Add conversation context to description
+        context_summary = "\n\n--- Conversation Context ---\n"
+        for msg in context[-3:]:  # Last 3 messages for context
+            context_summary += f"{msg['sender']}: {msg['text']}\n"
+        context_summary += f"User's current message: {message}"
+        description_with_context = ticket.description + context_summary
+    else:
+        description_with_context = f"{ticket.description}\n\nUser message: {message}"
+    
     payload = {
         'ticket_id': ticket.ticket_id,
-        'user_message': message,
-        'context': context,
-        'ticket_data': {
-            'issue_type': ticket.issue_type,
-            'description': ticket.description,
-            'category': ticket.category,
-            'status': ticket.status,
-            'tags': ticket.tags or [],
-        },
-        'agent_analysis': agent_data,
+        'issue_type': ticket.issue_type,
+        'description': description_with_context,
+        'category': ticket.category,
+        'tags': ticket.tags or [],
         'user': {
             'id': str(user.id),
             'name': user.username,
-            'role': getattr(user, 'role', 'user'),
+            'department': getattr(user, 'department', ''),
         }
     }
     
     # Try to get response from AI agent
     agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
     
-    # For chat, we might want a different endpoint
-    # For now, use the suggest endpoint which is simpler
-    chat_url = agent_url.replace('/analyze/', '/suggest/')
-    
     try:
         response = requests.post(
-            chat_url,
+            agent_url,  # Use the standard /analyze/ endpoint
             json=payload,
             headers={'Content-Type': 'application/json'},
             timeout=15
@@ -331,27 +333,46 @@ def _get_ai_chat_response(ticket, message, conversation, user):
         response.raise_for_status()
         data = response.json()
         
-        # Format response for chat
-        if 'solution' in data:
-            # Full analysis response
-            solution = data['solution']
-            return {
-                'text': solution if isinstance(solution, str) else solution.get('steps', ['AI is processing...'])[0],
-                'confidence': data.get('confidence', 0.5),
-                'message_type': 'text',
-                'metadata': {
-                    'suggested_actions': _extract_actions_from_response(data),
-                    'quick_replies': _generate_quick_replies(data, ticket),
-                }
-            }
+        # Format response for chat - convert full analysis to conversational response
+        solution = data.get('solution', {})
+        
+        # Extract the solution text
+        if isinstance(solution, dict):
+            steps = solution.get('steps', [])
+            if isinstance(steps, list) and steps:
+                # Create conversational response from steps
+                if len(steps) == 1:
+                    chat_text = steps[0]
+                elif len(steps) <= 3:
+                    chat_text = "Here's what I suggest:\n\n" + "\n".join(f"{i+1}. {step}" for i, step in enumerate(steps))
+                else:
+                    # Show first 3 steps, offer to show more
+                    chat_text = "Here are the first steps to try:\n\n"
+                    chat_text += "\n".join(f"{i+1}. {step}" for i, step in enumerate(steps[:3]))
+                    chat_text += f"\n\nThere are {len(steps) - 3} more steps. Would you like to see them?"
+            else:
+                chat_text = solution.get('description', "I've analyzed your issue. Let me help you resolve it.")
+        elif isinstance(solution, str):
+            chat_text = solution
         else:
-            # Simple response
-            return {
-                'text': data.get('solution', "I'm analyzing your request..."),
-                'confidence': 0.7,
-                'message_type': 'text',
-                'metadata': {}
+            chat_text = "I've analyzed your issue and I'm here to help. Can you provide more details?"
+        
+        # Determine message type
+        message_type = 'text'
+        if isinstance(solution, dict) and solution.get('steps'):
+            message_type = 'steps' if len(solution['steps']) > 1 else 'text'
+        
+        return {
+            'text': chat_text,
+            'confidence': data.get('confidence', 0.5),
+            'message_type': message_type,
+            'metadata': {
+                'full_solution': solution if isinstance(solution, dict) else None,
+                'analysis': data.get('analysis', {}),
+                'suggested_actions': _extract_actions_from_response(data),
+                'quick_replies': _generate_quick_replies(data, ticket),
             }
+        }
             
     except Exception as e:
         logger.error(f"Error calling AI agent for chat: {e}")
