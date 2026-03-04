@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Ticket
+from .models import Ticket, ResolutionTemplate
 from integrations.models import SlackToken
 from integrations.views import notify_user_ticket_resolved
 import requests
@@ -69,3 +69,111 @@ class TicketAdmin(admin.ModelAdmin):
     )
     actions = [mark_as_resolved, respond_via_bot, export_tickets_csv]
     autocomplete_fields = ["user", "assigned_to"]
+
+
+@admin.action(description="Activate selected templates")
+def activate_templates(modeladmin, request, queryset):
+    """Bulk activate resolution templates."""
+    updated = queryset.update(is_active=True)
+    modeladmin.message_user(request, f"{updated} templates activated successfully.")
+
+
+@admin.action(description="Deactivate selected templates")
+def deactivate_templates(modeladmin, request, queryset):
+    """Bulk deactivate resolution templates."""
+    updated = queryset.update(is_active=False)
+    modeladmin.message_user(request, f"{updated} templates deactivated successfully.")
+
+
+@admin.action(description="Mark as AI-generated")
+def mark_as_ai_generated(modeladmin, request, queryset):
+    """Mark templates as AI-generated."""
+    updated = queryset.update(is_ai_generated=True)
+    modeladmin.message_user(request, f"{updated} templates marked as AI-generated.")
+
+
+@admin.action(description="Export templates as CSV")
+def export_templates_csv(modeladmin, request, queryset):
+    """Export selected templates to CSV."""
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = 'attachment; filename="resolution_templates.csv"'
+    writer = csv.writer(response)
+    writer.writerow([
+        'ID', 'Name', 'Category', 'Issue Types', 'Tags', 'Estimated Time (min)',
+        'Use Count', 'Success Count', 'Success Rate %', 'Is Active', 'Is AI Generated'
+    ])
+    for template in queryset:
+        writer.writerow([
+            str(template.id),
+            template.name,
+            template.category,
+            ', '.join(template.issue_types) if template.issue_types else '',
+            ', '.join(template.tags) if template.tags else '',
+            template.estimated_time,
+            template.use_count,
+            template.success_count,
+            f"{template.success_rate:.1f}",
+            template.is_active,
+            template.is_ai_generated,
+        ])
+    return response
+
+
+@admin.register(ResolutionTemplate)
+class ResolutionTemplateAdmin(admin.ModelAdmin):
+    """Admin interface for Resolution Templates."""
+    list_display = [
+        'name', 'category', 'display_issue_types', 'estimated_time', 
+        'use_count', 'success_rate_display', 'is_active', 'is_ai_generated'
+    ]
+    list_filter = ['category', 'is_active', 'is_ai_generated', 'created_at']
+    search_fields = ['name', 'description', 'tags']
+    readonly_fields = ['id', 'use_count', 'success_count', 'success_rate_display', 'created_at', 'updated_at']
+    ordering = ['-success_count', '-use_count']
+    
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('name', 'description', 'category')
+        }),
+        ('Classification', {
+            'fields': ('issue_types', 'tags')
+        }),
+        ('Resolution Steps', {
+            'fields': ('steps', 'estimated_time'),
+            'description': 'JSON array of steps with step_number, title, description, estimated_minutes'
+        }),
+        ('Usage Statistics', {
+            'fields': ('use_count', 'success_count', 'success_rate_display'),
+            'classes': ('collapse',)
+        }),
+        ('Status', {
+            'fields': ('is_active', 'is_ai_generated')
+        }),
+        ('System Information', {
+            'fields': ('id', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    actions = [activate_templates, deactivate_templates, mark_as_ai_generated, export_templates_csv]
+    
+    def display_issue_types(self, obj):
+        """Display issue types as comma-separated string."""
+        if obj.issue_types:
+            return ', '.join(obj.issue_types[:3]) + ('...' if len(obj.issue_types) > 3 else '')
+        return '-'
+    display_issue_types.short_description = 'Issue Types'
+    
+    def success_rate_display(self, obj):
+        """Display success rate with color coding."""
+        rate = obj.success_rate
+        if rate >= 80:
+            color = 'green'
+        elif rate >= 60:
+            color = 'orange'
+        else:
+            color = 'red'
+        return f'<span style="color: {color}; font-weight: bold;">{rate:.1f}%</span>'
+    success_rate_display.short_description = 'Success Rate'
+    success_rate_display.allow_tags = True
+
