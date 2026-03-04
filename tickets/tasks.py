@@ -463,7 +463,7 @@ def batch_process_tickets(self, batch_id, ticket_ids, action, force=False):
             
             if action == 'process':
                 # Process with agent
-                process_ticket_with_agent(ticket_id, force=force)
+                process_ticket_with_agent.delay(ticket_id, force=force)
                 result_status = 'completed'
                 success = True
                 
