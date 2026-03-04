@@ -13,6 +13,11 @@ ResolveMeQ is a modular Django-based IT support and automation platform with Sla
 - **[Installation & Setup](DEPLOYMENT.md)** - Basic deployment instructions
 - **[Integration Setup](INTEGRATION_SETUP.md)** - Slack and external integrations
 
+### API Documentation (NEW - March 2026)
+- **[AI Agent API Documentation](AGENT_API.md)** - Complete guide to AI agent endpoints with interactive examples
+- **[Agent API Quick Reference](AGENT_API_QUICK_REFERENCE.md)** - Fast lookup for all agent endpoints
+- **[Marketing Site API](MARKETING_API.md)** - Newsletter subscription and contact request endpoints
+
 ### Trust & Reliability (NEW - Feb 2026)
 - **[Platform Assessment](PLATFORM_ASSESSMENT.md)** - Comprehensive trust & reliability analysis
 - **[Quick Start Improvements](QUICK_START_IMPROVEMENTS.md)** - Week-by-week implementation guide

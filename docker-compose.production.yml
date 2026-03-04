@@ -64,6 +64,7 @@ services:
       - SENTRY_DSN=${SENTRY_DSN}
       - ENVIRONMENT=production
       - AGENT_API_KEY=${AGENT_API_KEY}
+      - FORCE_SYNC_AGENT_PROCESSING=${FORCE_SYNC_AGENT_PROCESSING:-false}
     depends_on:
       redis:
         condition: service_healthy
@@ -82,7 +83,7 @@ services:
   celery_worker:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-celery:${IMAGE_TAG:-latest}
     restart: unless-stopped
-    command: ["/app/venv/bin/celery", "-A", "resolvemeq", "worker", "-l", "info"]
+    command: ["/app/venv/bin/celery", "-A", "resolvemeq", "worker", "-l", "info", "--pool=prefork", "--concurrency=4"]
     volumes:
       - media_files:/app/media
     environment:
@@ -99,6 +100,7 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - SENTRY_DSN=${SENTRY_DSN}
       - AGENT_API_KEY=${AGENT_API_KEY}
+      - FORCE_SYNC_AGENT_PROCESSING=${FORCE_SYNC_AGENT_PROCESSING:-false}
     depends_on:
       redis:
         condition: service_healthy

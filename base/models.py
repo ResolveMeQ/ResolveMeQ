@@ -782,3 +782,50 @@ class InAppNotification(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.user_id})"
+
+
+class NewsletterSubscription(models.Model):
+    """
+    Newsletter subscription from marketing site.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    email = models.EmailField(_("email"), unique=True, max_length=254)
+    subscribed_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(_("active"), default=True)
+    ip_address = models.GenericIPAddressField(_("IP address"), null=True, blank=True)
+
+    class Meta:
+        ordering = ['-subscribed_at']
+        verbose_name = _("Newsletter subscription")
+        verbose_name_plural = _("Newsletter subscriptions")
+
+    def __str__(self):
+        return self.email
+
+
+class ContactRequest(models.Model):
+    """
+    Demo/Contact request from marketing site.
+    """
+    COMPANY_SIZE_CHOICES = [
+        ('1-50', '1-50 employees'),
+        ('51-200', '51-200 employees'),
+        ('201-500', '201-500 employees'),
+        ('501+', '501+ employees'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    email = models.EmailField(_("email"), max_length=254)
+    company_size = models.CharField(_("company size"), max_length=10, choices=COMPANY_SIZE_CHOICES)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    is_contacted = models.BooleanField(_("contacted"), default=False)
+    ip_address = models.GenericIPAddressField(_("IP address"), null=True, blank=True)
+    notes = models.TextField(_("notes"), blank=True)
+
+    class Meta:
+        ordering = ['-requested_at']
+        verbose_name = _("Contact request")
+        verbose_name_plural = _("Contact requests")
+
+    def __str__(self):
+        return f"{self.email} ({self.company_size})"

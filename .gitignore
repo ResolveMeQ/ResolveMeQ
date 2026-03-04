@@ -192,3 +192,7 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# ResolveMeQ Agent Service
+# Separate FastAPI agent service - has its own repository
+resolvemeq-agent/

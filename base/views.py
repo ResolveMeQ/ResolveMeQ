@@ -638,3 +638,152 @@ class TeamRemoveMemberView(GenericAPIView):
             return Response({'error': 'User is not a member of this team.'}, status=status.HTTP_400_BAD_REQUEST)
         team.members.remove(member)
         return Response({'message': 'Member removed.'})
+
+
+class NewsletterSubscribeView(GenericAPIView):
+    """
+    Public endpoint for newsletter subscription from marketing site.
+    No authentication required.
+    """
+    permission_classes = [permissions.AllowAny]
+    serializer_class = None  # Will import dynamically
+
+    def get_client_ip(self, request):
+        """Extract client IP address from request"""
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(',')[0]
+        else:
+            ip = request.META.get('REMOTE_ADDR')
+        return ip
+
+    @swagger_auto_schema(
+        operation_description="Subscribe to newsletter",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['email'],
+            properties={
+                'email': openapi.Schema(type=openapi.TYPE_STRING, format='email', description='Email address'),
+            },
+        ),
+        responses={
+            201: openapi.Response(
+                description="Subscribed successfully",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'ok': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                    }
+                )
+            ),
+            400: openapi.Response(description="Invalid email or already subscribed"),
+        }
+    )
+    def post(self, request):
+        from base.serializers import NewsletterSubscribeSerializer
+        from base.models import NewsletterSubscription
+        
+        serializer = NewsletterSubscribeSerializer(data=request.data)
+        
+        if not serializer.is_valid():
+            return Response({
+                'ok': False,
+                'error': serializer.errors.get('email', ['Invalid email'])[0]
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        email = serializer.validated_data['email']
+        
+        # Check if already exists and is active
+        existing = NewsletterSubscription.objects.filter(email=email).first()
+        if existing and existing.is_active:
+            return Response({
+                'ok': False,
+                'error': 'Already subscribed'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create or reactivate subscription
+        validated_data = serializer.validated_data.copy()
+        validated_data['ip_address'] = self.get_client_ip(request)
+        serializer.create(validated_data)
+        
+        return Response({
+            'ok': True,
+            'message': 'Subscribed successfully'
+        }, status=status.HTTP_201_CREATED)
+
+
+class ContactRequestView(GenericAPIView):
+    """
+    Public endpoint for demo/contact requests from marketing site.
+    No authentication required.
+    """
+    permission_classes = [permissions.AllowAny]
+    serializer_class = None  # Will import dynamically
+
+    def get_client_ip(self, request):
+        """Extract client IP address from request"""
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(',')[0]
+        else:
+            ip = request.META.get('REMOTE_ADDR')
+        return ip
+
+    @swagger_auto_schema(
+        operation_description="Submit contact/demo request",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['email', 'company_size'],
+            properties={
+                'email': openapi.Schema(type=openapi.TYPE_STRING, format='email', description='Work email'),
+                'company_size': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    enum=['1-50', '51-200', '201-500', '501+'],
+                    description='Company size range'
+                ),
+            },
+        ),
+        responses={
+            201: openapi.Response(
+                description="Request received",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'ok': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                    }
+                )
+            ),
+            400: openapi.Response(description="Invalid data"),
+        }
+    )
+    def post(self, request):
+        from base.serializers import ContactRequestSerializer
+        
+        serializer = ContactRequestSerializer(data=request.data)
+        
+        if not serializer.is_valid():
+            # Extract first error message
+            errors = serializer.errors
+            if 'email' in errors:
+                error_msg = errors['email'][0]
+            elif 'company_size' in errors:
+                error_msg = errors['company_size'][0]
+            else:
+                error_msg = 'Invalid data'
+            
+            return Response({
+                'ok': False,
+                'error': error_msg
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create contact request
+        validated_data = serializer.validated_data.copy()
+        validated_data['ip_address'] = self.get_client_ip(request)
+        serializer.create(validated_data)
+        
+        return Response({
+            'ok': True,
+            'message': 'Request received'
+        }, status=status.HTTP_201_CREATED)

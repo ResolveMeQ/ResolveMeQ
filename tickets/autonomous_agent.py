@@ -61,6 +61,11 @@ class AutonomousAgent:
                 return AgentAction.ESCALATE, self._prepare_escalate_params()
             elif recommended_action == "assign_to_team":
                 return AgentAction.ASSIGN_TO_TEAM, self._prepare_assign_params()
+            elif recommended_action == "request_clarification":
+                return AgentAction.REQUEST_CLARIFICATION, self._prepare_clarification_params()
+            else:
+                # Default for high confidence: schedule followup
+                return AgentAction.SCHEDULE_FOLLOWUP, self._prepare_followup_params()
         
         # Medium confidence - take cautious action with user notification
         elif confidence >= self.MEDIUM_CONFIDENCE_THRESHOLD:

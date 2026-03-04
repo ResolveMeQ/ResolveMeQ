@@ -6,6 +6,7 @@ from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
 from django.conf import settings
 from django.conf.urls.static import static
+from base.views import NewsletterSubscribeView, ContactRequestView
 
 schema_view = get_schema_view(
    openapi.Info(
@@ -21,6 +22,12 @@ schema_view = get_schema_view(
 urlpatterns = [
    path("admin/", admin.site.urls),
    path("health/", health_check, name="health_check"),
+   
+   # Marketing endpoints (public, no auth required)
+   path("api/subscribe", NewsletterSubscribeView.as_view(), name="newsletter_subscribe"),
+   path("api/contact", ContactRequestView.as_view(), name="contact_request"),
+   
+   # Application endpoints
    path("api/monitoring/", include("monitoring.urls")),
    path("api/tickets/", include("tickets.urls")),
    path("api/solutions/", include("solutions.urls")),

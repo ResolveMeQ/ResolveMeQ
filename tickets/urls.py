@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, include
 from .views import (
     ticket_analytics,
     process_with_agent,
@@ -33,6 +33,33 @@ from .views import (
     resolution_analytics,
 )
 
+# Enhanced views for improved UX/UI
+from .enhanced_views import (
+    paginated_action_history,
+    dashboard_summary,
+    filtered_recommendations,
+    batch_process_tickets,
+    batch_status,
+    validate_action,
+)
+
+# Resolution Template views (P2)
+from .template_views import (
+    list_resolution_templates,
+    get_resolution_template,
+    create_resolution_template,
+    update_resolution_template,
+    delete_resolution_template,
+    apply_template_to_ticket,
+    get_templates_for_ticket,
+)
+
+# AI Insights views (P3)
+from .ai_insights_views import (
+    get_confidence_explanation,
+    get_similar_tickets,
+)
+
 urlpatterns = [
     # Add ticket-related endpoints here
     path("analytics/", ticket_analytics, name="ticket-analytics"),
@@ -64,9 +91,35 @@ urlpatterns = [
     path("agent/kb-search/", enhanced_kb_search, name="enhanced-kb-search"),
     path("agent/recommendations/", agent_recommendations, name="agent-recommendations"),
     
+    # Enhanced UX/UI endpoints (Quick Wins)
+    path("agent/dashboard-summary/", dashboard_summary, name="dashboard-summary"),
+    path("agent/recommendations/filtered/", filtered_recommendations, name="filtered-recommendations"),
+    path("<int:ticket_id>/action-history-paginated/", paginated_action_history, name="paginated-action-history"),
+    
+    # Batch Operations (P0)
+    path("agent/batch-process/", batch_process_tickets, name="batch-process"),
+    path("agent/batch/<str:batch_id>/status/", batch_status, name="batch-status"),
+    path("<int:ticket_id>/actions/validate/", validate_action, name="validate-action"),
+    
     # Rollback and feedback endpoints
     path("actions/<uuid:action_history_id>/rollback/", rollback_action, name="rollback-action"),
     path("<int:ticket_id>/action-history/", action_history, name="action-history"),
     path("<int:ticket_id>/resolution-feedback/", submit_resolution_feedback, name="submit-resolution-feedback"),
     path("resolution-analytics/", resolution_analytics, name="resolution-analytics"),
+    
+    # Resolution Templates (P2)
+    path("agent/templates/", list_resolution_templates, name="list-resolution-templates"),
+    path("agent/templates/create/", create_resolution_template, name="create-resolution-template"),
+    path("agent/templates/<uuid:template_id>/", get_resolution_template, name="get-resolution-template"),
+    path("agent/templates/<uuid:template_id>/update/", update_resolution_template, name="update-resolution-template"),
+    path("agent/templates/<uuid:template_id>/delete/", delete_resolution_template, name="delete-resolution-template"),
+    path("<int:ticket_id>/apply-template/", apply_template_to_ticket, name="apply-template"),
+    path("<int:ticket_id>/recommended-templates/", get_templates_for_ticket, name="get-templates-for-ticket"),
+    
+    # AI Insights & Transparency (P3)
+    path("<int:ticket_id>/confidence-explanation/", get_confidence_explanation, name="confidence-explanation"),
+    path("<int:ticket_id>/similar/", get_similar_tickets, name="similar-tickets"),
+    
+    # Chat conversation endpoints
+    path("", include('tickets.chat_urls')),
 ]

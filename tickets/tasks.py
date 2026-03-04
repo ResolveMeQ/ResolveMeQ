@@ -4,7 +4,7 @@ from django.conf import settings
 import requests
 from .models import Ticket, ActionHistory, TicketResolution
 import logging
-from core.celery import app
+from resolvemeq.celery import app
 from integrations.views import notify_user_agent_response  # Restored import for Slack feedback
 from solutions.models import Solution
 from .autonomous_agent import AutonomousAgent, AgentAction
@@ -14,18 +14,23 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 @app.task(bind=True, max_retries=3)
-def process_ticket_with_agent(self, ticket_id, thread_ts=None):
+def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False):
     """
     Celery task to process a ticket with the AI agent.
     Now includes autonomous decision-making and actions.
+    
+    Args:
+        ticket_id: ID of the ticket to process
+        thread_ts: Slack thread timestamp (optional)
+        force: If True, re-process even if already processed
     """
-    logger.info(f"Celery task started for ticket_id={ticket_id}")
+    logger.info(f"Celery task started for ticket_id={ticket_id} (force={force})")
     try:
         ticket = Ticket.objects.get(ticket_id=ticket_id)
         
-        # Skip if already processed
-        if ticket.agent_processed:
-            logger.info(f"Ticket {ticket_id} already processed by agent")
+        # Skip if already processed (unless force=True)
+        if ticket.agent_processed and not force:
+            logger.info(f"Ticket {ticket_id} already processed by agent (use force=True to re-process)")
             return False
 
         # Prepare the payload as expected by FastAPI
@@ -423,3 +428,103 @@ def schedule_resolution_followup(ticket_id):
         logger.error(f"Ticket {ticket_id} not found for follow-up")
     except Exception as e:
         logger.error(f"Error sending follow-up for ticket {ticket_id}: {str(e)}")
+
+
+@app.task(bind=True)
+def batch_process_tickets(self, batch_id, ticket_ids, action, force=False):
+    """
+    Process multiple tickets in batch.
+    
+    Args:
+        batch_id: Unique identifier for this batch
+        ticket_ids: List of ticket IDs to process
+        action: Action to perform (process, accept, reject)
+        force: Force re-processing
+    """
+    from django.core.cache import cache
+    
+    logger.info(f"Batch {batch_id}: Processing {len(ticket_ids)} tickets with action '{action}'")
+    
+    # Initialize batch status
+    batch_data = {
+        'batch_id': batch_id,
+        'total': len(ticket_ids),
+        'completed': 0,
+        'failed': 0,
+        'in_progress': len(ticket_ids),
+        'results': []
+    }
+    cache.set(f'batch_{batch_id}', batch_data, timeout=3600)  # 1 hour
+    
+    # Process each ticket
+    for ticket_id in ticket_ids:
+        try:
+            logger.info(f"Batch {batch_id}: Processing ticket {ticket_id}")
+            
+            if action == 'process':
+                # Process with agent
+                process_ticket_with_agent(ticket_id, force=force)
+                result_status = 'completed'
+                success = True
+                
+            elif action == 'accept':
+                # Accept agent recommendation (auto-resolve)
+                ticket = Ticket.objects.get(ticket_id=ticket_id)
+                if ticket.agent_response:
+                    recommended_action = ticket.agent_response.get('recommended_action')
+                    if recommended_action:
+                        # Execute the recommendation
+                        agent = AutonomousAgent(ticket)
+                        action_enum = AgentAction(recommended_action)
+                        params = agent._prepare_action_params(action_enum)
+                        execute_autonomous_action(ticket_id, action_enum.value, params)
+                        result_status = 'completed'
+                        success = True
+                    else:
+                        result_status = 'failed'
+                        success = False
+                        error_msg = 'No recommendation available'
+                else:
+                    result_status = 'failed'
+                    success = False
+                    error_msg = 'Ticket not processed by agent'
+                    
+            elif action == 'reject':
+                # Reject agent recommendation
+                ticket = Ticket.objects.get(ticket_id=ticket_id)
+                ticket.agent_response = None
+                ticket.agent_processed = False
+                ticket.save()
+                result_status = 'completed'
+                success = True
+            
+            # Update batch status
+            batch_data = cache.get(f'batch_{batch_id}')
+            batch_data['completed'] += 1
+            batch_data['in_progress'] -= 1
+            batch_data['results'].append({
+                'ticket_id': ticket_id,
+                'status': result_status,
+                'success': success
+            })
+            cache.set(f'batch_{batch_id}', batch_data, timeout=3600)
+            
+            logger.info(f"Batch {batch_id}: Ticket {ticket_id} {result_status}")
+            
+        except Exception as e:
+            logger.error(f"Batch {batch_id}: Failed to process ticket {ticket_id}: {str(e)}")
+            
+            # Update batch status with failure
+            batch_data = cache.get(f'batch_{batch_id}')
+            batch_data['failed'] += 1
+            batch_data['in_progress'] -= 1
+            batch_data['results'].append({
+                'ticket_id': ticket_id,
+                'status': 'failed',
+                'success': False,
+                'error': str(e)
+            })
+            cache.set(f'batch_{batch_id}', batch_data, timeout=3600)
+    
+    logger.info(f"Batch {batch_id}: Completed. Success: {batch_data['completed']}, Failed: {batch_data['failed']}")
+    return batch_data

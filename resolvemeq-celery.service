@@ -1,0 +1,37 @@
+[Unit]
+Description=ResolveMeQ Celery Worker
+After=network.target redis.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/resolvemeq
+Environment="PATH=/var/www/resolvemeq/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DJANGO_SETTINGS_MODULE=resolvemeq.settings"
+
+# Load environment variables from .env file
+EnvironmentFile=/var/www/resolvemeq/.env
+
+# Start Celery worker with prefork pool
+ExecStart=/var/www/resolvemeq/venv/bin/celery -A resolvemeq worker \
+          --loglevel=info \
+          --pool=prefork \
+          --concurrency=4 \
+          --logfile=/var/log/celery/worker.log \
+          --pidfile=/var/run/celery/worker.pid
+
+# Graceful shutdown
+ExecStop=/var/www/resolvemeq/venv/bin/celery -A resolvemeq control shutdown
+TimeoutStopSec=30
+
+# Restart on failure
+Restart=always
+RestartSec=10
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

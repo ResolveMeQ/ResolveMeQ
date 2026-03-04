@@ -1,6 +1,7 @@
 import os
 from celery import Celery
 import ssl
+from django.conf import settings
 
 # Set the default Django settings module for the 'celery' program.
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'resolvemeq.settings')
@@ -14,19 +15,22 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks()
 
-# Configure Celery to use Redis as the message broker with SSL
-redis_url = "rediss://:bSEDHclfM2KUs4iJGubgw1lt2S8p6mLF7AzCaLnaDRU=@celery-redis-cache.redis.cache.windows.net:6380/0"
+# Get broker URL from environment (supports both local and production)
+broker_url = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+result_backend = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
 
-app.conf.broker_url = redis_url
-app.conf.result_backend = redis_url
+app.conf.broker_url = broker_url
+app.conf.result_backend = result_backend
 
-# Configure SSL settings
-app.conf.broker_use_ssl = {
-    'ssl_cert_reqs': None,
-    'ssl_ca_certs': None,
-    'ssl_certfile': None,
-    'ssl_keyfile': None,
-}
+# Configure SSL settings for Azure Redis (only if using rediss://)
+if broker_url.startswith('rediss://'):
+    app.conf.broker_use_ssl = {
+        'ssl_cert_reqs': None,
+        'ssl_ca_certs': None,
+        'ssl_certfile': None,
+        'ssl_keyfile': None,
+    }
+    app.conf.broker_connection_retry_on_startup = True
 
 # Configure task settings
 app.conf.task_serializer = 'json'

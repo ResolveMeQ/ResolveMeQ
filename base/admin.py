@@ -3,7 +3,10 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django import forms
 
-from base.models import Profile, Team, UserPreferences, Plan, Subscription, Invoice, InAppNotification
+from base.models import (
+    Profile, Team, UserPreferences, Plan, Subscription, Invoice, 
+    InAppNotification, NewsletterSubscription, ContactRequest
+)
 
 User = get_user_model()
 
@@ -157,3 +160,46 @@ class InvoiceAdmin(admin.ModelAdmin):
     list_display = ['id', 'subscription', 'amount', 'currency', 'status', 'created_at']
     list_filter = ['status']
     readonly_fields = ['id', 'created_at']
+
+
+@admin.register(NewsletterSubscription)
+class NewsletterSubscriptionAdmin(admin.ModelAdmin):
+    """Admin interface for Newsletter Subscriptions from marketing site."""
+    list_display = ['email', 'is_active', 'subscribed_at', 'ip_address']
+    list_filter = ['is_active', 'subscribed_at']
+    search_fields = ['email']
+    readonly_fields = ['id', 'subscribed_at', 'ip_address']
+    ordering = ['-subscribed_at']
+    
+    fieldsets = (
+        ('Subscription Info', {
+            'fields': ('email', 'is_active')
+        }),
+        ('System Information', {
+            'fields': ('id', 'subscribed_at', 'ip_address'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(ContactRequest)
+class ContactRequestAdmin(admin.ModelAdmin):
+    """Admin interface for Contact/Demo Requests from marketing site."""
+    list_display = ['email', 'company_size', 'is_contacted', 'requested_at']
+    list_filter = ['company_size', 'is_contacted', 'requested_at']
+    search_fields = ['email', 'notes']
+    readonly_fields = ['id', 'requested_at', 'ip_address']
+    ordering = ['-requested_at']
+    
+    fieldsets = (
+        ('Request Info', {
+            'fields': ('email', 'company_size', 'is_contacted')
+        }),
+        ('Follow-up', {
+            'fields': ('notes',)
+        }),
+        ('System Information', {
+            'fields': ('id', 'requested_at', 'ip_address'),
+            'classes': ('collapse',)
+        }),
+    )

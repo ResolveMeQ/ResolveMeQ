@@ -541,3 +541,64 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'period_start', 'period_end', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
+
+
+class NewsletterSubscribeSerializer(serializers.Serializer):
+    """
+    Serializer for newsletter subscription endpoint.
+    """
+    email = serializers.EmailField(required=True, max_length=254)
+
+    def validate_email(self, value):
+        """Normalize email to lowercase"""
+        return value.lower().strip()
+
+    def create(self, validated_data):
+        from base.models import NewsletterSubscription
+        
+        email = validated_data['email']
+        ip_address = validated_data.get('ip_address')
+        
+        # Check if already subscribed
+        subscription, created = NewsletterSubscription.objects.get_or_create(
+            email=email,
+            defaults={'ip_address': ip_address, 'is_active': True}
+        )
+        
+        if not created and not subscription.is_active:
+            # Reactivate if previously unsubscribed
+            subscription.is_active = True
+            subscription.save()
+        
+        return subscription
+
+
+class ContactRequestSerializer(serializers.Serializer):
+    """
+    Serializer for contact/demo request endpoint.
+    """
+    COMPANY_SIZE_CHOICES = ['1-50', '51-200', '201-500', '501+']
+    
+    email = serializers.EmailField(required=True, max_length=254)
+    company_size = serializers.CharField(required=True)
+
+    def validate_email(self, value):
+        """Normalize email to lowercase"""
+        return value.lower().strip()
+
+    def validate_company_size(self, value):
+        """Validate company size is one of the allowed values"""
+        if value not in self.COMPANY_SIZE_CHOICES:
+            raise serializers.ValidationError(
+                f"Invalid company size. Must be one of: {', '.join(self.COMPANY_SIZE_CHOICES)}"
+            )
+        return value
+
+    def create(self, validated_data):
+        from base.models import ContactRequest
+        
+        return ContactRequest.objects.create(
+            email=validated_data['email'],
+            company_size=validated_data['company_size'],
+            ip_address=validated_data.get('ip_address')
+        )
