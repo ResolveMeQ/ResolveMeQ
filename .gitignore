@@ -195,4 +195,4 @@ cython_debug/
 
 # ResolveMeQ Agent Service
 # Separate FastAPI agent service - has its own repository
-resolvemeq-agent/
+resolvemeq-agent/test_endpoints.py
