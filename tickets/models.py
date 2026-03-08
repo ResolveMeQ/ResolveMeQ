@@ -121,20 +121,28 @@ class Ticket(models.Model):
         super().save(*args, **kwargs)
         if self.status == "resolved" and self.agent_response and not was_resolved:
             self.sync_to_knowledge_base()
-            # Create Solution if agent_response has steps
+            # Create or update Solution from agent_response (steps can be in solution.steps, resolution_steps, or steps)
             from solutions.models import Solution
             steps = None
+            confidence = 0.0
             if isinstance(self.agent_response, dict):
-                steps = self.agent_response.get("resolution_steps") or self.agent_response.get("steps")
+                sol = self.agent_response.get("solution") or {}
+                steps = (
+                    self.agent_response.get("resolution_steps")
+                    or self.agent_response.get("steps")
+                    or (sol.get("steps") if isinstance(sol, dict) else None)
+                )
                 if steps and isinstance(steps, list):
                     steps = "\n".join(steps)
+                confidence = float(self.agent_response.get("confidence", 0) or 0)
             if steps:
-                Solution.objects.get_or_create(
+                Solution.objects.update_or_create(
                     ticket=self,
                     defaults={
                         "steps": steps,
                         "worked": True,
                         "created_by": self.user,
+                        "confidence_score": confidence,
                     }
                 )
 

@@ -36,23 +36,26 @@ class Solution(models.Model):
         return f"Solution for Ticket {self.ticket.ticket_id}"
 
     def save(self, *args, **kwargs):
-        # If solution is marked as worked, create/update KB entry
-        if self.worked and not self._state.adding:
+        super().save(*args, **kwargs)
+        # When solution is marked as worked, create/update KB entry (for new and existing)
+        if self.worked and self.ticket_id:
+            tags = getattr(self.ticket, 'tags', None)
+            if tags is None or not isinstance(tags, list):
+                tags = []
             KnowledgeBaseEntry.objects.update_or_create(
                 ticket=self.ticket,
                 defaults={
-                    'issue_type': self.ticket.issue_type,
-                    'description': self.ticket.description,
+                    'issue_type': self.ticket.issue_type or '',
+                    'description': self.ticket.description or '',
                     'solution': self.steps,
-                    'category': self.ticket.category,
-                    'tags': self.ticket.tags,
+                    'category': self.ticket.category or 'other',
+                    'tags': tags,
                     'confidence_score': self.confidence_score,
                     'verified': bool(self.verified_by),
                     'verified_by': self.verified_by,
                     'verification_date': self.verification_date
                 }
             )
-        super().save(*args, **kwargs)
 
 class KnowledgeBaseEntry(models.Model):
     ticket = models.OneToOneField(

@@ -11,7 +11,7 @@ from django.conf import settings
 import requests
 import logging
 
-from .models import Ticket
+from .models import Ticket, TicketResolution
 from .chat_models import Conversation, ChatMessage, QuickReply
 from .chat_serializers import (
     ConversationSerializer, ChatMessageSerializer, QuickReplySerializer
@@ -265,8 +265,20 @@ def get_suggested_questions(request, ticket_id):
     
     all_replies = list(quick_replies) + list(general_replies)
     
-    serializer = QuickReplySerializer(all_replies, many=True)
+    # Default suggestions when no QuickReply entries exist so users always have a way to start
+    if not all_replies:
+        default_suggestions = [
+            {'label': 'Analyze this ticket', 'message_text': 'Please analyze this ticket', 'category': ticket.category or 'general'},
+            {'label': 'Show possible solutions', 'message_text': 'Show me possible solutions', 'category': 'general'},
+            {'label': 'Similar resolved tickets', 'message_text': 'Show similar resolved tickets', 'category': 'general'},
+        ]
+        return Response({
+            'suggestions': default_suggestions,
+            'ticket_id': ticket.ticket_id,
+            'category': ticket.category
+        })
     
+    serializer = QuickReplySerializer(all_replies, many=True)
     return Response({
         'suggestions': serializer.data,
         'ticket_id': ticket.ticket_id,
@@ -274,50 +286,73 @@ def get_suggested_questions(request, ticket_id):
     })
 
 
+def _build_resolution_state(ticket, conversation):
+    """Build resolution/feedback state so the agent can adapt actions and response."""
+    state = {
+        'ticket_status': getattr(ticket, 'status', 'open'),
+        'conversation_resolved': getattr(conversation, 'resolved', False),
+        'resolution_applied': getattr(conversation, 'resolution_applied', False),
+    }
+    resolution = TicketResolution.objects.filter(ticket=ticket).first()
+    if resolution:
+        state['resolution_confirmed'] = resolution.resolution_confirmed
+        state['reopened'] = getattr(resolution, 'reopened', False)
+        state['reopened_reason'] = getattr(resolution, 'reopened_reason', '') or ''
+        state['user_feedback_text'] = (resolution.user_feedback_text or '').strip()
+        state['satisfaction_score'] = resolution.satisfaction_score
+    else:
+        state['resolution_confirmed'] = None
+        state['reopened'] = False
+        state['reopened_reason'] = ''
+        state['user_feedback_text'] = ''
+        state['satisfaction_score'] = None
+    # Last AI message feedback (so model knows if previous reply was unhelpful)
+    last_ai = (
+        conversation.messages.filter(sender_type='ai')
+        .order_by('-created_at')
+        .first()
+    )
+    if last_ai:
+        state['last_ai_was_helpful'] = last_ai.was_helpful
+        state['last_ai_feedback_comment'] = (last_ai.feedback_comment or '').strip()
+    else:
+        state['last_ai_was_helpful'] = None
+        state['last_ai_feedback_comment'] = ''
+    return state
+
+
 def _get_ai_chat_response(ticket, message, conversation, user):
     """
     Internal function to get AI response for a chat message.
-    
-    This integrates with the existing AI agent or can use a chat-specific endpoint.
+    Sends full conversation history and resolution state so the agent responds
+    to the user's latest message in context and suggests contextual actions.
     """
-    # Build context from conversation history
-    previous_messages = conversation.messages.order_by('created_at')[:10]
-    context = [
-        {
-            'sender': msg.sender_type,
-            'text': msg.text,
-            'type': msg.message_type
-        }
-        for msg in previous_messages
-    ]
-    
-    # Check if ticket has agent response already
+    # Full conversation history for continuity (last 15 messages; model responds to latest)
+    previous_messages = conversation.messages.order_by('created_at')[:15]
+    conversation_history = []
+    for msg in previous_messages:
+        role = 'user' if msg.sender_type == 'user' else 'assistant'
+        conversation_history.append({'role': role, 'text': msg.text or ''})
+    # Current message is the one the model must respond to
+    conversation_history.append({'role': 'user', 'text': message})
+
+    resolution_state = _build_resolution_state(ticket, conversation)
     agent_data = ticket.agent_response if ticket.agent_processed else None
-    
-    # Prepare payload for AI agent (use standard /analyze/ endpoint format)
-    # Include chat context in the description for context-aware responses
-    description_with_context = ticket.description
-    if context:
-        # Add conversation context to description
-        context_summary = "\n\n--- Conversation Context ---\n"
-        for msg in context[-3:]:  # Last 3 messages for context
-            context_summary += f"{msg['sender']}: {msg['text']}\n"
-        context_summary += f"User's current message: {message}"
-        description_with_context = ticket.description + context_summary
-    else:
-        description_with_context = f"{ticket.description}\n\nUser message: {message}"
-    
+
+    # Original ticket description only; conversation and state sent separately
     payload = {
         'ticket_id': ticket.ticket_id,
         'issue_type': ticket.issue_type,
-        'description': description_with_context,
+        'description': ticket.description or '',
         'category': ticket.category,
         'tags': ticket.tags or [],
         'user': {
             'id': str(user.id),
             'name': user.username,
             'department': getattr(user, 'department', ''),
-        }
+        },
+        'conversation_history': conversation_history,
+        'resolution_state': resolution_state,
     }
     
     # Try to get response from AI agent
@@ -328,7 +363,7 @@ def _get_ai_chat_response(ticket, message, conversation, user):
             agent_url,  # Use the standard /analyze/ endpoint
             json=payload,
             headers={'Content-Type': 'application/json'},
-            timeout=15
+            timeout=25  # Chat may include RAG + long context; allow a bit more time
         )
         response.raise_for_status()
         data = response.json()
@@ -357,21 +392,36 @@ def _get_ai_chat_response(ticket, message, conversation, user):
         else:
             chat_text = "I've analyzed your issue and I'm here to help. Can you provide more details?"
         
-        # Determine message type
+        # Determine message type and metadata so frontend can show steps, time, success rate
         message_type = 'text'
-        if isinstance(solution, dict) and solution.get('steps'):
-            message_type = 'steps' if len(solution['steps']) > 1 else 'text'
-        
+        steps_list = []
+        estimated_time = None
+        success_probability = None
+        if isinstance(solution, dict):
+            if solution.get('steps'):
+                message_type = 'steps' if len(solution['steps']) > 1 else 'text'
+                steps_list = solution['steps']
+            estimated_time = solution.get('estimated_time')
+            success_probability = solution.get('success_probability')
+
+        metadata = {
+            'full_solution': solution if isinstance(solution, dict) else None,
+            'analysis': data.get('analysis', {}),
+            'suggested_actions': _extract_actions_from_response(data, ticket, resolution_state),
+            'quick_replies': _generate_quick_replies(data, ticket, resolution_state),
+        }
+        if steps_list:
+            metadata['steps'] = steps_list
+        if estimated_time:
+            metadata['estimated_time'] = estimated_time
+        if success_probability is not None:
+            metadata['success_probability'] = success_probability
+
         return {
             'text': chat_text,
             'confidence': data.get('confidence', 0.5),
             'message_type': message_type,
-            'metadata': {
-                'full_solution': solution if isinstance(solution, dict) else None,
-                'analysis': data.get('analysis', {}),
-                'suggested_actions': _extract_actions_from_response(data),
-                'quick_replies': _generate_quick_replies(data, ticket),
-            }
+            'metadata': metadata,
         }
             
     except Exception as e:
@@ -381,45 +431,103 @@ def _get_ai_chat_response(ticket, message, conversation, user):
         return _generate_fallback_response(message, ticket, agent_data)
 
 
-def _extract_actions_from_response(data):
-    """Extract suggested actions from agent response."""
+def _extract_actions_from_response(data, ticket, resolution_state=None):
+    """Extract suggested actions from agent response; filter by resolution state."""
     actions = []
-    
+    state = resolution_state or {}
+    ticket_status = getattr(ticket, 'status', '') or state.get('ticket_status', '')
+    reopened = state.get('reopened', False)
+    resolution_confirmed = state.get('resolution_confirmed')
+
     if 'recommended_action' in data:
-        actions.append(data['recommended_action'].replace('_', ' ').title())
-    
+        ra = data['recommended_action'].replace('_', ' ').title()
+        # Don't suggest Auto Resolve if ticket was reopened or user said it didn't work
+        if reopened or resolution_confirmed is False:
+            if 'auto' in ra.lower() or 'resolve' in ra.lower():
+                ra = 'Escalate'  # Prefer escalation after failed resolution
+        # Friendlier label for users going step-by-step: "Mark as resolved" encourages good closure
+        if ra.lower() == 'auto resolve':
+            ra = 'Mark as resolved'
+        actions.append(ra)
+
     if 'solution' in data and isinstance(data['solution'], dict):
         immediate = data['solution'].get('immediate_actions', [])
         if immediate:
             actions.extend(immediate[:3])
-    
+
+    # If already resolved, drop "Apply this solution" style actions
+    if ticket_status == 'resolved':
+        actions = [a for a in actions if 'apply' not in a.lower() and 'resolve' not in a.lower()]
     return actions[:5]
 
 
-def _generate_quick_replies(data, ticket):
-    """Generate contextual quick replies."""
+def _generate_quick_replies(data, ticket, resolution_state=None):
+    """Generate quick replies based on resolution outcome and ticket status."""
     replies = []
-    
-    # Based on recommended action
+    state = resolution_state or {}
+    ticket_status = getattr(ticket, 'status', '') or state.get('ticket_status', '')
+    reopened = state.get('reopened', False)
+    resolution_confirmed = state.get('resolution_confirmed')
+    last_ai_was_helpful = state.get('last_ai_was_helpful')
+
     if data.get('recommended_action') == 'request_clarification':
         replies.append({
             'label': 'Provide more details',
             'value': 'I can provide more information about the issue'
         })
-    
-    if data.get('confidence', 0) >= 0.8:
+
+    # Only suggest "Apply this solution" if not already resolved and not reopened
+    if ticket_status != 'resolved' and not reopened and resolution_confirmed is not False:
+        if data.get('confidence', 0) >= 0.8:
+            replies.append({
+                'label': 'Apply this solution',
+                'value': 'Please apply this solution to my ticket'
+            })
+
+    # After failed resolution or reopen, offer alternatives
+    if reopened or resolution_confirmed is False:
         replies.append({
-            'label': 'Apply this solution',
-            'value': 'Please apply this solution to my ticket'
+            'label': 'Try a different approach',
+            'value': 'The previous solution did not work, I need a different approach'
         })
-    
-    # Always offer these
-    replies.extend([
-        {'label': 'Show similar tickets', 'value': 'Show me similar resolved tickets'},
-        {'label': 'Talk to a human', 'value': 'I need to speak with support staff'},
-    ])
-    
-    return replies[:4]
+        replies.append({
+            'label': 'Escalate to human',
+            'value': 'I need to speak with support staff'
+        })
+    if last_ai_was_helpful is False and not any(r.get('value', '').find('different') >= 0 for r in replies):
+        replies.append({
+            'label': 'That didn\'t help',
+            'value': 'That didn\'t help me, I need different guidance'
+        })
+
+    # Step-by-step follow-up: when we have solution steps and ticket not resolved, help user until they mark resolved
+    if ticket_status != 'resolved' and not reopened:
+        solution = data.get('solution') or {}
+        steps = solution.get('steps') or []
+        if len(steps) > 1:
+            if not any(r.get('value', '').find('first step') >= 0 for r in replies):
+                replies.append({'label': 'I did the first step', 'value': 'I tried the first step. What should I do next?'})
+            if not any(r.get('value', '').find('next step') >= 0 for r in replies):
+                replies.append({'label': 'Next step', 'value': 'I\'m ready for the next step'})
+            if not any(r.get('value', '').find('fixed') >= 0 for r in replies):
+                replies.append({'label': 'It\'s fixed', 'value': 'It\'s fixed now, thank you!'})
+            if not any(r.get('value', '').find('Still not working') >= 0 for r in replies):
+                replies.append({'label': 'Still not working', 'value': 'Still not working. What else can I try?'})
+        elif len(steps) == 1:
+            if not any(r.get('value', '').find('fixed') >= 0 for r in replies):
+                replies.append({'label': 'It\'s fixed', 'value': 'It\'s fixed now, thank you!'})
+            if not any(r.get('value', '').find('Still not working') >= 0 for r in replies):
+                replies.append({'label': 'Still not working', 'value': 'Still not working. What else can I try?'})
+
+    # Always offer these (avoid duplicates)
+    for label, value in [
+        ('Show similar tickets', 'Show me similar resolved tickets'),
+        ('Talk to a human', 'I need to speak with support staff'),
+    ]:
+        if not any(r.get('value') == value for r in replies):
+            replies.append({'label': label, 'value': value})
+
+    return replies[:8]
 
 
 def _generate_fallback_response(message, ticket, agent_data):

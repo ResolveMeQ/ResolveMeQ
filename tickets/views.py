@@ -15,7 +15,7 @@ from .cache_decorators import cache_api_response, no_cache
 import logging
 import os
 from django.conf import settings
-from base.models import User
+from base.models import User, InAppNotification
 from base.permissions import IsAuthenticatedOrAgent
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -279,6 +279,16 @@ def create_ticket(request):
             interaction_type="user_message",
             content=f"Ticket created: {ticket.description}"
         )
+        try:
+            InAppNotification.objects.create(
+                user=user,
+                type=InAppNotification.Type.INFO,
+                title="Ticket created",
+                message=f"Ticket #{ticket.ticket_id} has been created. We'll get back to you soon.",
+                link=f"/tickets?highlight={ticket.ticket_id}",
+            )
+        except Exception as e:
+            logger.warning("Failed to create ticket-created notification: %s", e)
         # Optionally trigger agent processing
         from .tasks import process_ticket_with_agent
         process_ticket_with_agent.delay(ticket.ticket_id)
@@ -368,10 +378,30 @@ def list_tickets(request):
 def get_ticket(request, ticket_id):
     """
     Retrieve details for a single ticket by ticket_id.
+    Includes comments (user_message interactions) for the ticket panel.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
     serializer = TicketSerializer(ticket)
-    return Response(serializer.data)
+    data = dict(serializer.data)
+    # Include comments so the ticket panel can display them
+    interactions = TicketInteraction.objects.filter(
+        ticket=ticket,
+        interaction_type="user_message"
+    ).order_by("created_at").select_related("user")
+    comments = []
+    for i in interactions:
+        text = i.content
+        if text.startswith("Comment: "):
+            text = text[9:].strip()
+        author = (getattr(i.user, "get_full_name", lambda: "")() or getattr(i.user, "username", "") or "User").strip() or "User"
+        comments.append({
+            "id": i.id,
+            "content": text,
+            "author": author,
+            "created_at": i.created_at,
+        })
+    data["comments"] = comments
+    return Response(data)
 
 @api_view(["PATCH"])
 def update_ticket(request, ticket_id):
@@ -444,37 +474,55 @@ def upload_attachment(request, ticket_id):
     return Response({"message": "File uploaded.", "file_url": default_storage.url(filename)})
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def add_comment(request, ticket_id):
     """
     Add a comment to a ticket (threaded discussion).
     Body: {"comment": "..."}
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if ticket.user != request.user and not request.user.is_staff:
+        return Response(
+            {"error": "You don't have permission to comment on this ticket."},
+            status=status.HTTP_403_FORBIDDEN
+        )
     comment = request.data.get("comment")
     if not comment:
         return Response({"error": "Comment is required."}, status=400)
     TicketInteraction.objects.create(
         ticket=ticket,
-        user=ticket.user,
+        user=request.user,
         interaction_type="user_message",
         content=f"Comment: {comment}"
     )
     return Response({"message": "Comment added."})
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def escalate_ticket(request, ticket_id):
     """
     Escalate a ticket for priority handling.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if ticket.user != request.user and not request.user.is_staff:
+        return Response(
+            {"error": "You don't have permission to escalate this ticket."},
+            status=status.HTTP_403_FORBIDDEN
+        )
     ticket.status = "escalated"
     ticket.save()
     TicketInteraction.objects.create(
         ticket=ticket,
-        user=ticket.user,
+        user=request.user,
         interaction_type="user_message",
         content="Ticket escalated by user."
     )
+    _notify_ticket_status_change(ticket, "escalated")
+    try:
+        from integrations.views import notify_escalation
+        notify_escalation(str(ticket.user.id), ticket.ticket_id, {"reason": "Escalated by user"})
+    except Exception:
+        pass
     return Response({"message": "Ticket escalated."})
 
 @api_view(["POST"])
@@ -499,6 +547,35 @@ def assign_ticket(request, ticket_id):
     )
     return Response({"message": f"Ticket assigned to {agent.name}."})
 
+def _notify_ticket_status_change(ticket, new_status):
+    """Create in-app notification for ticket owner and trigger Slack if applicable."""
+    try:
+        if new_status == "resolved":
+            InAppNotification.objects.create(
+                user=ticket.user,
+                type=InAppNotification.Type.SUCCESS,
+                title="Ticket resolved",
+                message=f"Ticket #{ticket.ticket_id} has been marked as resolved.",
+                link=f"/tickets?highlight={ticket.ticket_id}",
+            )
+            try:
+                from integrations.views import notify_user_ticket_resolved
+                # Slack expects channel ID; if user has linked Slack it may be stored elsewhere
+                notify_user_ticket_resolved(str(ticket.user.id), ticket.ticket_id)
+            except Exception:
+                pass
+        elif new_status == "escalated":
+            InAppNotification.objects.create(
+                user=ticket.user,
+                type=InAppNotification.Type.WARNING,
+                title="Ticket escalated",
+                message=f"Ticket #{ticket.ticket_id} has been escalated to support.",
+                link=f"/tickets?highlight={ticket.ticket_id}",
+            )
+    except Exception as e:
+        logger.warning("Failed to create status-change notification: %s", e)
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticatedOrAgent])
 def update_ticket_status(request, ticket_id):
@@ -511,6 +588,7 @@ def update_ticket_status(request, ticket_id):
     status_val = request.data.get("status")
     if not status_val:
         return Response({"error": "status is required."}, status=400)
+    previous_status = getattr(ticket, "status", None)
     ticket.status = status_val
     ticket.save()
     
@@ -523,6 +601,8 @@ def update_ticket_status(request, ticket_id):
         interaction_type="agent_response" if request.auth and not request.user else "user_message",
         content=f"Status updated to {status_val}."
     )
+    if previous_status != status_val:
+        _notify_ticket_status_change(ticket, status_val)
     return Response({"message": f"Ticket status updated to {status_val}."})
 
 @api_view(["GET"])
