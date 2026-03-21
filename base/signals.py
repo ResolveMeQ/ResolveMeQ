@@ -1,8 +1,11 @@
 from django.contrib.auth import get_user_model
+from datetime import timedelta
+
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
+from django.utils import timezone
 
-from base.models import Profile
+from base.models import Profile, Plan, Subscription
 
 User = get_user_model()
 from django.db import transaction
@@ -21,6 +24,32 @@ def create_user_profile(sender, instance, created, **kwargs):
                 logger.error(f"Error creating profile for user {instance.id}: {str(e)}")
 
         transaction.on_commit(on_commit)
+
+
+@receiver(post_save, sender=User)
+def create_trial_subscription(sender, instance, created, **kwargs):
+    """Assign 14-day free trial subscription to new users."""
+    if not created:
+        return
+
+    def on_commit():
+        try:
+            if Subscription.objects.filter(user=instance).exists():
+                return
+            trial_plan = Plan.objects.filter(slug='trial', is_active=True).first()
+            if not trial_plan:
+                Subscription.objects.create(user=instance, status=Subscription.Status.ACTIVE)
+                return
+            Subscription.objects.create(
+                user=instance,
+                plan=trial_plan,
+                status=Subscription.Status.TRIAL,
+                trial_ends_at=timezone.now() + timedelta(days=14),
+            )
+        except Exception as e:
+            logger.error("Error creating trial subscription for user %s: %s", instance.id, e)
+
+    transaction.on_commit(on_commit)
 
 
 @receiver(post_save, sender=User)

@@ -8,7 +8,7 @@ from django.utils.crypto import constant_time_compare
 from rest_framework import serializers
 
 from .models import User, Profile
-from .tasks import send_email_with_template
+from .tasks import dispatch_send_email_with_template
 from .utils import ImageProcessor, generate_secure_code
 
 
@@ -89,7 +89,7 @@ class VerifyUserSerializer(serializers.Serializer):
                     "app_name": "ResolveMeQ",
                     "verification_link": settings.FRONTEND_URL + reverse('verify-user'),
                 }
-                send_email_with_template.delay(data, 'welcome.html', context, [user.email])
+                dispatch_send_email_with_template(data, 'welcome.html', context, [user.email])
                 error_message += " A new verification code has been sent."
 
             raise serializers.ValidationError(error_message)
@@ -133,6 +133,11 @@ class ChangePasswordSerializer(serializers.Serializer):
             raise serializers.ValidationError("Old password cannot be the same as new password")
 
         return data
+
+
+class ForgotPasswordRequestSerializer(serializers.Serializer):
+    """Serializer for requesting a password reset email."""
+    email = serializers.EmailField(required=True)
 
 
 class ResetPasswordSerializer(serializers.Serializer):
@@ -513,7 +518,7 @@ class PlanSerializer(serializers.ModelSerializer):
         from base.models import Plan
         model = Plan
         fields = [
-            'id', 'name', 'slug', 'max_teams', 'max_members',
+            'id', 'name', 'slug', 'is_trial', 'max_teams', 'max_members',
             'price_monthly', 'price_yearly', 'is_active',
         ]
 
@@ -526,7 +531,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
         model = Subscription
         fields = [
             'id', 'plan', 'plan_detail', 'status',
-            'current_period_start', 'current_period_end',
+            'current_period_start', 'current_period_end', 'trial_ends_at',
             'gateway', 'gateway_customer_id', 'gateway_subscription_id',
             'created_at', 'updated_at',
         ]
@@ -542,15 +547,20 @@ class BillingCheckoutSessionSerializer(serializers.Serializer):
     return_url = serializers.URLField(required=False)
 
 
+class BillingChangePlanSerializer(serializers.Serializer):
+    plan = serializers.UUIDField()
+    billing_interval = serializers.ChoiceField(choices=['monthly', 'yearly'])
+
+
 class InvoiceSerializer(serializers.ModelSerializer):
     class Meta:
         from base.models import Invoice
         model = Invoice
         fields = [
             'id', 'subscription', 'amount', 'currency', 'status',
-            'period_start', 'period_end', 'created_at',
+            'period_start', 'period_end', 'invoice_url', 'pricing_type', 'created_at',
         ]
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'created_at', 'invoice_url']
 
 
 class NewsletterSubscribeSerializer(serializers.Serializer):

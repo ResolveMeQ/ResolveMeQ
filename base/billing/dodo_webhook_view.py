@@ -1,5 +1,5 @@
 """
-Dodo Payments Standard Webhooks receiver (subscription sync).
+Dodo Payments Standard Webhooks receiver (subscription sync + invoice creation).
 """
 from __future__ import annotations
 
@@ -13,12 +13,14 @@ from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
 from base.billing.exceptions import SubscriptionSyncError
+from base.billing.payment_sync import apply_dodo_payment_succeeded
 from base.billing.subscription_sync import apply_dodo_subscription_payload
 from base.models import BillingWebhookDelivery
 
 logger = logging.getLogger(__name__)
 
 SUBSCRIPTION_EVENT_PREFIX = 'subscription.'
+PAYMENT_SUCCEEDED = 'payment.succeeded'
 
 
 def _webhook_delivery_id(request) -> str | None:
@@ -33,6 +35,7 @@ def _header_map(request) -> dict[str, str]:
 class DodoWebhookView(View):
     """
     POST raw JSON body. Verified with DODO_PAYMENTS_WEBHOOK_KEY (Standard Webhooks).
+    Handles subscription.* (sync subscription) and payment.succeeded (create invoice).
     Configure URL in Dodo dashboard: /api/billing/webhooks/dodo/
     """
 
@@ -69,6 +72,20 @@ class DodoWebhookView(View):
             return HttpResponseBadRequest('invalid webhook')
 
         event_type = getattr(event, 'type', '') or ''
+
+        if event_type == PAYMENT_SUCCEEDED:
+            try:
+                with transaction.atomic():
+                    apply_dodo_payment_succeeded(event.data)
+                    BillingWebhookDelivery.objects.create(
+                        delivery_id=wid,
+                        provider=BillingWebhookDelivery.Provider.DODO,
+                        event_type=event_type,
+                    )
+            except IntegrityError:
+                pass
+            return HttpResponse(status=200)
+
         if not event_type.startswith(SUBSCRIPTION_EVENT_PREFIX):
             return HttpResponse(status=200)
 

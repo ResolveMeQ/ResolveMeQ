@@ -44,7 +44,7 @@ def paginated_action_history(request, ticket_id):
     Example: GET /api/tickets/42/action-history-paginated/?page=1&limit=20&sort=desc
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    
+
     # Get sort parameter
     sort_order = request.query_params.get('sort', 'desc')
     order_by = '-executed_at' if sort_order == 'desc' else 'executed_at'
@@ -82,19 +82,20 @@ def dashboard_summary(request):
     Example: GET /api/tickets/agent/dashboard-summary/
     """
     try:
+        base_qs = Ticket.objects.all()
         # Basic metrics
-        total_tickets = Ticket.objects.count()
-        processed_by_agent = Ticket.objects.filter(agent_processed=True).count()
+        total_tickets = base_qs.count()
+        processed_by_agent = base_qs.filter(agent_processed=True).count()
         
         # Pending review (agent processed but not resolved)
-        pending_review = Ticket.objects.filter(
+        pending_review = base_qs.filter(
             agent_processed=True,
             status__in=['new', 'open', 'in_progress']
         ).count()
         
         # High confidence tickets (confidence >= 0.8)
         high_confidence_tickets = []
-        tickets_with_confidence = Ticket.objects.filter(
+        tickets_with_confidence = base_qs.filter(
             agent_processed=True,
             agent_response__isnull=False,
             status__in=['new', 'open', 'in_progress']
@@ -119,7 +120,7 @@ def dashboard_summary(request):
         
         for i in range(6, -1, -1):  # Last 7 days
             day = today - timedelta(days=i)
-            count = Ticket.objects.filter(
+            count = base_qs.filter(
                 agent_processed=True,
                 status='resolved',
                 updated_at__date=day
@@ -129,14 +130,14 @@ def dashboard_summary(request):
         
         # Top categories
         top_categories = list(
-            Ticket.objects.filter(agent_processed=True)
+            base_qs.filter(agent_processed=True)
             .values('category')
             .annotate(count=Count('ticket_id'))
             .order_by('-count')[:5]
         )
         
         # Agent performance metrics
-        agent_resolved = Ticket.objects.filter(
+        agent_resolved = base_qs.filter(
             agent_processed=True,
             status='resolved'
         ).count()
@@ -145,7 +146,7 @@ def dashboard_summary(request):
         # Average confidence
         total_confidence = 0
         confidence_count = 0
-        for ticket in Ticket.objects.filter(agent_processed=True, agent_response__isnull=False):
+        for ticket in base_qs.filter(agent_processed=True, agent_response__isnull=False):
             if isinstance(ticket.agent_response, dict):
                 conf = ticket.agent_response.get('confidence', 0)
                 if conf > 0:
@@ -156,7 +157,7 @@ def dashboard_summary(request):
         
         # Recent recommendations (last 10)
         recent_recommendations = []
-        recent_tickets = Ticket.objects.filter(
+        recent_tickets = base_qs.filter(
             agent_processed=True,
             agent_response__isnull=False
         ).order_by('-updated_at')[:10]

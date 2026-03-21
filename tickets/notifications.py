@@ -34,8 +34,8 @@ def _send_escalation_email(staff_user, ticket, params):
     }
     data = {"subject": f"[Escalation] Ticket #{ticket.ticket_id}: {ticket.issue_type or 'Support needed'}"}
     try:
-        from base.tasks import send_email_with_template
-        send_email_with_template.delay(data, "escalation_notification.html", context, [email])
+        from base.tasks import dispatch_send_email_with_template
+        dispatch_send_email_with_template(data, "escalation_notification.html", context, [email])
     except Exception as e:
         logger.warning("Failed to queue escalation email for %s: %s", email, e)
 

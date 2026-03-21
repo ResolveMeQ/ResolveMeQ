@@ -1,44 +1,70 @@
 version: '3.8'
 
-# ResolveMeQ Django Backend — dev / VPS-style stack (build from this repo).
-# Copy to your server with .env in the same directory. Billing vars must be in .env
-# or exported before `docker compose up`; the environment: block passes them into `web`.
+# ResolveMeQ Django Backend - Production Deployment
+# This deploys ONLY the Django application stack (web, celery, db, redis)
+# Deploy the Agent separately from its own repository
+# Use external network to communicate between projects on same VPS
 
 services:
-  redis:
-    image: redis:7-alpine
-    command: redis-server --appendonly yes
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    profiles:
+      - local-db  # Only start when --profile local-db is used (for local development)
     volumes:
-      - redis_data:/data
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - resolvemeq-network
+      - resolvemeq-backend
+      - resolvemeq-shared  # Shared network for inter-project communication
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - resolvemeq-backend
 
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile.web
-    command: gunicorn resolvemeq.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 120
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
     volumes:
-      - ./staticfiles:/app/staticfiles
-      - ./media:/app/media
+      - static_files:/app/staticfiles
+      - media_files:/app/media
     ports:
-      - "8000:8000"
-    env_file:
-      - .env
+      - "${WEB_PORT:-8000}:8000"
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - DB_HOST=${DB_HOST}
+      - DEBUG=False
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS}
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST:-db}:${DB_PORT:-5432}/${DB_NAME}
+      - DB_HOST=${DB_HOST:-db}
       - DB_PORT=${DB_PORT:-5432}
-      - DB_NAME=${DB_NAME}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
-      # Dodo / billing (interpolated from host .env — keeps VPS and repo in sync)
+      - DB_NAME=${DB_NAME}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - AI_AGENT_URL=${AI_AGENT_URL}  # Set in .env: http://agent-web:8001 or https://domain.com/agent
+      - SECRET_KEY=${SECRET_KEY}
+      - SENTRY_DSN=${SENTRY_DSN}
+      - ENVIRONMENT=production
+      - AGENT_API_KEY=${AGENT_API_KEY}
+      - FORCE_SYNC_AGENT_PROCESSING=${FORCE_SYNC_AGENT_PROCESSING:-false}
       - FRONTEND_URL=${FRONTEND_URL:-https://app.resolvemeq.net}
       - BILLING_GATEWAY=${BILLING_GATEWAY:-dodo}
       - DODO_PAYMENTS_API_KEY=${DODO_PAYMENTS_API_KEY}
@@ -51,76 +77,83 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/tickets/analytics/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
     networks:
-      - resolvemeq-network
+      - resolvemeq-backend
+      - resolvemeq-shared  # Can communicate with agent via this network
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
 
   celery_worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: celery -A resolvemeq worker -l info
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-celery:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["/app/venv/bin/celery", "-A", "resolvemeq", "worker", "-l", "info", "--pool=prefork", "--concurrency=4"]
     volumes:
-      - ./media:/app/media
-    env_file:
-      - .env
+      - media_files:/app/media
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - DB_HOST=${DB_HOST}
+      - DEBUG=False
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST:-db}:${DB_PORT:-5432}/${DB_NAME}
+      - DB_HOST=${DB_HOST:-db}
       - DB_PORT=${DB_PORT:-5432}
-      - DB_NAME=${DB_NAME}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - AI_AGENT_URL=${AI_AGENT_URL}
+      - SECRET_KEY=${SECRET_KEY}
+      - SENTRY_DSN=${SENTRY_DSN}
+      - AGENT_API_KEY=${AGENT_API_KEY}
+      - FORCE_SYNC_AGENT_PROCESSING=${FORCE_SYNC_AGENT_PROCESSING:-false}
     depends_on:
       redis:
         condition: service_healthy
       web:
         condition: service_healthy
     networks:
-      - resolvemeq-network
+      - resolvemeq-backend
+      - resolvemeq-shared
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
 
   celery_beat:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: celery -A resolvemeq beat -l info
-    env_file:
-      - .env
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-celery:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["/app/venv/bin/celery", "-A", "resolvemeq", "beat", "-l", "info"]
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - DB_HOST=${DB_HOST}
+      - DEBUG=False
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST:-db}:${DB_PORT:-5432}/${DB_NAME}
+      - DB_HOST=${DB_HOST:-db}
       - DB_PORT=${DB_PORT:-5432}
-      - DB_NAME=${DB_NAME}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - AGENT_API_KEY=${AGENT_API_KEY}
     depends_on:
       redis:
         condition: service_healthy
     networks:
-      - resolvemeq-network
-
-  nginx:
-    image: nginx:stable-alpine
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - /opt/resolvemeq-infrastructure:/etc/nginx/conf.d
-      - /etc/letsencrypt:/etc/letsencrypt
-    depends_on:
-      - web
-    networks:
-      - resolvemeq-network
+      - resolvemeq-backend
 
 networks:
-  resolvemeq-network:
+  resolvemeq-backend:
     driver: bridge
+  resolvemeq-shared:
+    external: true  # Created externally, shared with agent project
 
 volumes:
+  postgres_data:
+    name: resolvemeq_postgres_data
   redis_data:
+    name: resolvemeq_redis_data
+  static_files:
+    name: resolvemeq_static_files
+  media_files:
+    name: resolvemeq_media_files

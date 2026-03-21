@@ -1,4 +1,5 @@
 from datetime import timedelta
+from urllib.parse import quote
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -19,9 +20,9 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from base.models import Profile
 from base.serializers import RegisterSerializer, LoginSerializer, UserProfileSerializer, VerifyUserSerializer, \
-    ChangePasswordSerializer, ResetPasswordSerializer, ResendVerificationCodeSerializer, UserManagementSerializer, \
+    ChangePasswordSerializer, ResetPasswordSerializer, ForgotPasswordRequestSerializer, ResendVerificationCodeSerializer, UserManagementSerializer, \
     TeamSerializer, UserPreferencesSerializer, InAppNotificationSerializer
-from base.tasks import send_email_with_template
+from base.tasks import dispatch_send_email_with_template
 from base.utils import generate_secure_code
 
 User = get_user_model()
@@ -67,9 +68,9 @@ class RegisterAPIView(GenericAPIView):
                 "username": user.username,
                 "expiration": user.secure_code_expiry,
                 "app_name": "ResolveMeQ",
-                "verification_link": settings.FRONTEND_URL + reverse('verify-user'),
+                "verification_link": f"{settings.FRONTEND_URL}/verify?token={quote(str(user.secure_code))}&email={quote(user.email)}",
             }
-            send_email_with_template.delay(data, 'welcome.html', context, [user.email])
+            dispatch_send_email_with_template(data, 'welcome.html', context, [user.email])
             print("Email sent to:", user.email)
             print("With token:", user.secure_code)
 
@@ -197,6 +198,42 @@ class ResetPasswordAPIView(GenericAPIView):
         }, status=status.HTTP_200_OK)
 
 
+class ForgotPasswordRequestAPIView(GenericAPIView):
+    """
+    Request a password reset email. Sends reset link to verified users only.
+    Always returns success to prevent email enumeration.
+    """
+    serializer_class = ForgotPasswordRequestSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        ip_address = request.META.get('REMOTE_ADDR')
+        cache_key = f"forgot_password_{ip_address}"
+        if cache.get(cache_key):
+            return Response({"message": "If this email is registered, you will receive reset instructions."}, status=status.HTTP_200_OK)
+        cache.set(cache_key, True, timeout=60)
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+
+        try:
+            user = User.objects.get(email=email)
+            if not user.is_verified:
+                # Don't send; return success anyway for security
+                return Response({"message": "If this email is registered, you will receive reset instructions."}, status=status.HTTP_200_OK)
+            user.secure_code = generate_secure_code()
+            user.secure_code_expiry = timezone.now() + timedelta(minutes=60)
+            user.save(update_fields=['secure_code', 'secure_code_expiry'])
+            reset_url = f"{settings.FRONTEND_URL}/reset-password?token={quote(str(user.secure_code))}&email={quote(user.email)}"
+            data = {"subject": "Reset your password"}
+            context = {"user": user, "reset_url": reset_url, "token": user.secure_code}
+            dispatch_send_email_with_template(data, 'reset_password.html', context, [user.email])
+        except User.DoesNotExist:
+            pass  # Don't reveal; return success anyway
+        return Response({"message": "If this email is registered, you will receive reset instructions."}, status=status.HTTP_200_OK)
+
+
 class ResendVerificationCodeAPIView(GenericAPIView):
     """
     API view for resending the verification code to the user's email.
@@ -219,7 +256,7 @@ class ResendVerificationCodeAPIView(GenericAPIView):
         400: openapi.Response("Invalid email or user not found"),
         """
         ip_address = request.META.get('REMOTE_ADDR')
-        cache_key = f"forgot_password_{ip_address}"
+        cache_key = f"resend_verification_{ip_address}"
 
         if cache.get(cache_key):
             return Response({
@@ -245,9 +282,9 @@ class ResendVerificationCodeAPIView(GenericAPIView):
             "username": user.username,
             "expiration": user.secure_code_expiry,
             "app_name": "ResolveMeQ",
-            "verification_link": settings.FRONTEND_URL + reverse('verify_user'),
+            "verification_link": settings.FRONTEND_URL + '/verify?token=' + str(user.secure_code) + '&email=' + quote(user.email),
         }
-        send_email_with_template.delay(data, 'welcome.html', context, [user.email])
+        dispatch_send_email_with_template(data, 'welcome.html', context, [user.email])
         return Response({
             "message": "Verification code resent successfully."
         }, status=status.HTTP_200_OK)

@@ -648,11 +648,15 @@ class UserPreferences(models.Model):
 
 class Plan(models.Model):
     """
-    Billing plan (Starter, Pro, Enterprise).
+    Billing plan (Trial, Starter, Pro, Enterprise).
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
     name = models.CharField(_("plan name"), max_length=50, unique=True)
     slug = models.SlugField(max_length=50, unique=True)
+    is_trial = models.BooleanField(
+        default=False,
+        help_text=_('Free trial plan. No payment required.')
+    )
     max_teams = models.PositiveIntegerField(_("max teams"), default=10)
     max_members = models.PositiveIntegerField(_("max members per plan"), default=50, help_text=_("Total seats"))
     price_monthly = models.DecimalField(_("price monthly"), max_digits=10, decimal_places=2, default=0)
@@ -707,6 +711,10 @@ class Subscription(models.Model):
     )
     gateway_customer_id = models.CharField(max_length=255, blank=True, default='')
     gateway_subscription_id = models.CharField(max_length=255, blank=True, default='')
+    trial_ends_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text=_('When the free trial expires. Trial plan only.')
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -724,7 +732,9 @@ class Subscription(models.Model):
 
 class Invoice(models.Model):
     """
-    Invoice for a subscription period.
+    Transaction/payment record for a subscription period. Tracks user payments
+    for audit, history, and receipts. Created from Dodo payment.succeeded
+    webhooks or by syncing from Dodo when loading the Billing page.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
     subscription = models.ForeignKey(
@@ -746,6 +756,9 @@ class Invoice(models.Model):
     )
     period_start = models.DateTimeField(null=True, blank=True)
     period_end = models.DateTimeField(null=True, blank=True)
+    gateway_payment_id = models.CharField(max_length=255, blank=True, null=True)
+    invoice_url = models.URLField(max_length=512, blank=True, null=True)
+    pricing_type = models.CharField(max_length=32, default='subscription')  # subscription, one_time, etc.
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

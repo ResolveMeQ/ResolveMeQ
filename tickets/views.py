@@ -1,5 +1,5 @@
 from django.shortcuts import render, get_object_or_404
-from django.db.models import Count, Avg, F, ExpressionWrapper, DurationField
+from django.db.models import Count, Avg, F, ExpressionWrapper, DurationField, Q
 from django.db.models.functions import TruncWeek
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes, parser_classes, throttle_classes
@@ -24,6 +24,27 @@ from django.core.files.storage import default_storage
 logger = logging.getLogger(__name__)
 
 
+def _tickets_for_user(request):
+    """Return ticket queryset for listing/analytics: tickets CREATED BY the current user. Staff see all."""
+    if not getattr(request.user, 'is_authenticated', False):
+        return Ticket.objects.none()
+    if request.user.is_staff:
+        return Ticket.objects.all()
+    return Ticket.objects.filter(user=request.user)
+
+
+def _can_access_ticket(request, ticket):
+    """Return True if the user can access this ticket (staff, creator, or assignee)."""
+    if not getattr(request.user, 'is_authenticated', False):
+        return False
+    if request.user.is_staff:
+        return True
+    return (
+        ticket.user_id == request.user.id
+        or (ticket.assigned_to_id and ticket.assigned_to_id == request.user.id)
+    )
+
+
 class AgentActionThrottle(UserRateThrottle):
     """Custom throttle for agent actions"""
     scope = 'agent_actions'
@@ -36,15 +57,16 @@ class RollbackThrottle(UserRateThrottle):
 # Create your views here.
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def ticket_analytics(request):
     """
     Get ticket analytics data: tickets per week, average resolution time, open/closed ticket count.
     """
-    # Tickets per week (last 8 weeks)
+    base_qs = Ticket.objects.all()
     now = timezone.now()
     weeks_ago = now - timezone.timedelta(weeks=8)
     tickets_per_week = (
-        Ticket.objects.filter(created_at__gte=weeks_ago)
+        base_qs.filter(created_at__gte=weeks_ago)
         .annotate(week=TruncWeek("created_at"))
         .values("week")
         .annotate(count=Count("ticket_id"))
@@ -52,14 +74,14 @@ def ticket_analytics(request):
     )
 
     # Avg resolution time (tickets with status 'resolved')
-    resolved_tickets = Ticket.objects.filter(status="resolved", updated_at__gt=F("created_at"))
+    resolved_tickets = base_qs.filter(status="resolved", updated_at__gt=F("created_at"))
     avg_resolution = resolved_tickets.annotate(
         resolution_time=ExpressionWrapper(F("updated_at") - F("created_at"), output_field=DurationField())
     ).aggregate(avg_time=Avg("resolution_time"))["avg_time"]
 
     # Open vs closed tickets
-    open_count = Ticket.objects.exclude(status="resolved").count()
-    closed_count = Ticket.objects.filter(status="resolved").count()
+    open_count = base_qs.exclude(status="resolved").count()
+    closed_count = base_qs.filter(status="resolved").count()
 
     return Response({
         "tickets_per_week": list(tickets_per_week),
@@ -346,11 +368,11 @@ def ticket_history(request, ticket_id):
     return Response(serializer.data)
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def list_tickets(request):
     """
-    List tickets. Query params: user_id, status, limit, offset.
+    List tickets for the current user (staff see all). Query params: status, limit, offset.
     """
-    user_id = request.GET.get("user_id")
     status_param = request.GET.get("status")
     limit = request.GET.get("limit")
     offset = request.GET.get("offset", "0")
@@ -362,9 +384,7 @@ def list_tickets(request):
         offset = int(offset)
     except ValueError:
         offset = 0
-    queryset = Ticket.objects.all().order_by("-created_at")
-    if user_id:
-        queryset = queryset.filter(user__id=user_id)
+    queryset = _tickets_for_user(request).order_by("-created_at")
     if status_param:
         queryset = queryset.filter(status=status_param)
     if offset:
@@ -375,6 +395,7 @@ def list_tickets(request):
     return Response(serializer.data)
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def get_ticket(request, ticket_id):
     """
     Retrieve details for a single ticket by ticket_id.
@@ -410,9 +431,10 @@ def get_ticket(request, ticket_id):
     return Response(data)
 
 @api_view(["PATCH"])
+@permission_classes([IsAuthenticated])
 def update_ticket(request, ticket_id):
     """
-    Update ticket status or details. Accepts partial updates (e.g., status, description).
+    Update ticket status or details. Accepts partial updates.
     Example body: {"status": "resolved"}
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
@@ -424,9 +446,10 @@ def update_ticket(request, ticket_id):
 
 
 @api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
 def delete_ticket(request, ticket_id):
     """
-    Delete a ticket by id.
+    Delete a ticket.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
     ticket.delete()
@@ -434,12 +457,13 @@ def delete_ticket(request, ticket_id):
 
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def search_tickets(request):
     """
-    Search and filter tickets by keyword, status, category, date, etc.
+    Search and filter tickets (scoped to current user; staff see all).
     Query params: q (keyword), status, category, created_after, created_before
     """
-    queryset = Ticket.objects.all()
+    queryset = _tickets_for_user(request)
     q = request.GET.get("q")
     if q:
         queryset = queryset.filter(description__icontains=q)
@@ -680,6 +704,7 @@ def escalation_queue(request):
 
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def agent_dashboard(request):
     """
     Agent/admin dashboard: summary of open/closed tickets, response times, performance, etc.
@@ -696,6 +721,7 @@ def agent_dashboard(request):
     })
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def bulk_update_tickets(request):
     """
     Bulk update tickets (close, assign, etc.).
@@ -709,6 +735,7 @@ def bulk_update_tickets(request):
     return Response({"message": f"Updated {len(ids)} tickets to {status_val}."})
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def suggest_kb_articles(request, ticket_id):
     """
     Suggest relevant knowledge base articles for a ticket.
@@ -719,6 +746,7 @@ def suggest_kb_articles(request, ticket_id):
     return Response({"suggestions": [a.title for a in articles]})
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def add_internal_note(request, ticket_id):
     """
     Add a private/internal note to a ticket (visible only to agents).
@@ -738,6 +766,7 @@ def add_internal_note(request, ticket_id):
     return Response({"message": "Internal note added."})
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def audit_log(request, ticket_id):
     """
     Get audit log (all interactions) for a ticket.
@@ -748,20 +777,23 @@ def audit_log(request, ticket_id):
     return Response(serializer.data)
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def ai_suggestions(request, ticket_id):
     """
     Get AI-suggested solutions or similar tickets for a ticket.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    # Dummy implementation: return last 3 resolved tickets in same category
+    # Similar tickets can be from other users (suggestions) - return last 3 resolved in same category
     similar = Ticket.objects.filter(category=ticket.category, status="resolved").exclude(ticket_id=ticket_id)[:3]
     return Response({"similar_tickets": TicketSerializer(similar, many=True).data})
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 @cache_api_response(max_age=300)  # Cache for 5 minutes
 def agent_analytics(request):
     """
     Get comprehensive AI agent analytics and performance metrics.
+    Scoped to current user's tickets (staff see all).
     """
     try:
         # Get total tickets processed by agent
@@ -1153,19 +1185,20 @@ def resolution_analytics(request):
     Helps validate autonomous agent performance.
     """
     try:
-        total_resolutions = TicketResolution.objects.count()
-        confirmed_resolutions = TicketResolution.objects.filter(resolution_confirmed=True).count()
-        failed_resolutions = TicketResolution.objects.filter(resolution_confirmed=False).count()
-        reopened_tickets = TicketResolution.objects.filter(reopened=True).count()
+        resolution_qs = TicketResolution.objects.all()
+        total_resolutions = resolution_qs.count()
+        confirmed_resolutions = resolution_qs.filter(resolution_confirmed=True).count()
+        failed_resolutions = resolution_qs.filter(resolution_confirmed=False).count()
+        reopened_tickets = resolution_qs.filter(reopened=True).count()
         
         # Average satisfaction score
-        avg_satisfaction = TicketResolution.objects.filter(
+        avg_satisfaction = resolution_qs.filter(
             satisfaction_score__isnull=False
         ).aggregate(avg=Avg('satisfaction_score'))['avg']
         
         # Success rate by action type
         from django.db import models as django_models
-        action_types = TicketResolution.objects.values('autonomous_action').annotate(
+        action_types = resolution_qs.values('autonomous_action').annotate(
             total=Count('id'),
             confirmed=Count('id', filter=django_models.Q(resolution_confirmed=True)),
             failed=Count('id', filter=django_models.Q(resolution_confirmed=False))

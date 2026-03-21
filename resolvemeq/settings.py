@@ -48,6 +48,7 @@ FRONTEND_URL = "https://app.resolvemeq.net"
 # Application definition
 
 INSTALLED_APPS = [
+    "jazzmin",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -280,6 +281,69 @@ SIMPLE_JWT = {
 }
 
 AUTH_USER_MODEL = 'base.User'
+
+# django-jazzmin (must stay immediately before django.contrib.admin in INSTALLED_APPS)
+JAZZMIN_SETTINGS = {
+    'site_title': 'ResolveMeQ Admin',
+    'site_header': 'ResolveMeQ',
+    'site_brand': 'ResolveMeQ',
+    'welcome_sign': 'Sign in to manage ResolveMeQ',
+    'copyright': 'ResolveMeQ',
+    'search_model': ['base.User', 'auth.Group'],
+    'topmenu_links': [
+        {'name': 'Dashboard', 'url': 'admin:index', 'permissions': ['auth.view_user']},
+        {
+            'name': 'API docs',
+            'url': 'schema-swagger-ui',
+            'new_window': True,
+        },
+    ],
+    'icons': {
+        'auth': 'fas fa-users-cog',
+        'auth.Group': 'fas fa-users',
+        'base': 'fas fa-layer-group',
+        'base.user': 'fas fa-user',
+        'base.team': 'fas fa-people-group',
+        'base.plan': 'fas fa-box-open',
+        'base.subscription': 'fas fa-receipt',
+        'base.invoice': 'fas fa-file-invoice-dollar',
+        'base.plangatewayproduct': 'fas fa-plug',
+        'base.billingwebhookdelivery': 'fas fa-paper-plane',
+        'tickets': 'fas fa-ticket-alt',
+        'tickets.ticket': 'fas fa-ticket-alt',
+        'monitoring': 'fas fa-chart-line',
+    },
+    'default_icon_parents': 'fas fa-chevron-circle-right',
+    'default_icon_children': 'fas fa-circle',
+    'related_modal_active': True,
+    'changeform_format': 'horizontal_tabs',
+    'show_ui_builder': False,
+}
+
+JAZZMIN_UI_TWEAKS = {
+    'navbar_small_text': False,
+    'footer_small_text': False,
+    'body_small_text': False,
+    'brand_small_text': False,
+    'brand_colour': 'navbar-primary',
+    'accent': 'accent-primary',
+    'navbar': 'navbar-dark',
+    'navbar_fixed': False,
+    'layout_boxed': False,
+    'footer_fixed': False,
+    'sidebar_fixed': True,
+    'sidebar': 'sidebar-dark-primary',
+    'sidebar_nav_child_indent': True,
+    'theme': 'default',
+    'button_classes': {
+        'primary': 'btn-primary',
+        'secondary': 'btn-secondary',
+        'info': 'btn-info',
+        'warning': 'btn-warning',
+        'danger': 'btn-danger',
+        'success': 'btn-success',
+    },
+}
 
 # Swagger Settings
 SWAGGER_SETTINGS = {
