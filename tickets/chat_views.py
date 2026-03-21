@@ -31,13 +31,6 @@ def start_or_get_conversation(request, ticket_id):
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
     
-    # Check permissions
-    if ticket.user != request.user and not request.user.is_staff:
-        return Response(
-            {"error": "You don't have permission to access this ticket"},
-            status=status.HTTP_403_FORBIDDEN
-        )
-    
     # Get or create active conversation
     conversation, created = Conversation.objects.get_or_create(
         ticket=ticket,
@@ -82,13 +75,6 @@ def send_chat_message(request, ticket_id):
     }
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    
-    # Permission check
-    if ticket.user != request.user and not request.user.is_staff:
-        return Response(
-            {"error": "You don't have permission to access this ticket"},
-            status=status.HTTP_403_FORBIDDEN
-        )
     
     message_text = request.data.get('message', '').strip()
     if not message_text:
@@ -347,7 +333,6 @@ def _get_ai_chat_response(ticket, message, conversation, user):
     resolution_state = _build_resolution_state(ticket, conversation)
     agent_data = ticket.agent_response if ticket.agent_processed else None
 
-    # Original ticket description only; conversation and state sent separately
     payload = {
         'ticket_id': ticket.ticket_id,
         'issue_type': ticket.issue_type,
