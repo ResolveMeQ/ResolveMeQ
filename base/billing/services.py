@@ -17,14 +17,21 @@ def plan_price_for_interval(plan: Plan, interval: str) -> Decimal:
     raise ValueError(f'Unknown interval: {interval!r}')
 
 
-def sync_dodo_products_for_plan(plan: Plan) -> list[PlanGatewayProduct]:
+def sync_dodo_products_for_plan(plan: Plan, *, recreate: bool = False) -> list[PlanGatewayProduct]:
     """
     Ensure Dodo subscription products exist for this plan (monthly/yearly when price > 0).
-    Skips intervals that already have a PlanGatewayProduct row.
+    Skips intervals that already have a PlanGatewayProduct row unless recreate=True
+    (deletes existing Dodo mappings for this plan first — use after test/live switch or stale IDs).
     """
     gateway = get_billing_gateway()
     if gateway.code != PlanGatewayProduct.Gateway.DODO:
         raise ValueError('sync_dodo_products_for_plan requires BILLING_GATEWAY=dodo')
+
+    if recreate:
+        PlanGatewayProduct.objects.filter(
+            plan=plan,
+            gateway=PlanGatewayProduct.Gateway.DODO,
+        ).delete()
 
     currency = getattr(settings, 'BILLING_DEFAULT_CURRENCY', 'USD')
     tax_category = getattr(settings, 'BILLING_TAX_CATEGORY', 'saas')

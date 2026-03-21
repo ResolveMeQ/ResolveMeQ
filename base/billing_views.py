@@ -195,6 +195,12 @@ class BillingCheckoutSessionView(GenericAPIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
+        def _dodo_error_detail(exc: BaseException) -> str:
+            body = getattr(exc, 'body', None)
+            if isinstance(body, dict):
+                return str(body.get('message') or body.get('code') or getattr(exc, 'message', '') or '')
+            return str(getattr(exc, 'message', '') or '')
+
         try:
             result = gateway.create_checkout_session(
                 product_id=mapping.external_product_id,
@@ -203,10 +209,23 @@ class BillingCheckoutSessionView(GenericAPIView):
                 customer_name=customer_name,
                 metadata=metadata,
             )
-        except dodopayments.APIStatusError:
+        except dodopayments.UnprocessableEntityError as exc:
+            logger.warning('Dodo checkout_sessions.create rejected: %s', exc)
+            detail = _dodo_error_detail(exc) or 'Invalid checkout request.'
+            hint = (
+                ' If the product no longer exists in Dodo, run: '
+                'python manage.py sync_dodo_plan_products --recreate'
+            )
+            if 'does not exist' in detail.lower():
+                detail = detail + hint
+            return Response({'detail': detail}, status=status.HTTP_400_BAD_REQUEST)
+        except dodopayments.APIStatusError as exc:
             logger.exception('Dodo checkout_sessions.create failed')
             return Response(
-                {'detail': 'Unable to start checkout. Please try again later.'},
+                {
+                    'detail': _dodo_error_detail(exc)
+                    or 'Unable to start checkout. Please try again later.',
+                },
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         except dodopayments.APIConnectionError:
