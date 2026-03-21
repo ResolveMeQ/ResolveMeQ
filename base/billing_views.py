@@ -1,13 +1,29 @@
 """
 Billing and subscription API views.
 """
+import logging
+
 from django.conf import settings as django_settings
 from rest_framework import permissions, status
 from rest_framework.generics import GenericAPIView, ListAPIView
 from rest_framework.response import Response
 
-from base.models import Plan, Subscription, Invoice, Team
-from base.serializers import PlanSerializer, SubscriptionSerializer, InvoiceSerializer
+from base.billing.exceptions import BillingConfigurationError
+from base.billing.gateways.factory import get_billing_gateway
+from base.models import Plan, Subscription, Invoice, Team, PlanGatewayProduct
+from base.serializers import (
+    PlanSerializer,
+    SubscriptionSerializer,
+    InvoiceSerializer,
+    BillingCheckoutSessionSerializer,
+)
+
+logger = logging.getLogger(__name__)
+
+try:
+    import dodopayments
+except ImportError:
+    dodopayments = None
 
 
 def get_max_teams_for_user(user):
@@ -101,3 +117,115 @@ class InvoiceListView(ListAPIView):
         return Invoice.objects.filter(
             subscription__user=self.request.user
         ).select_related('subscription')
+
+
+class BillingCheckoutSessionView(GenericAPIView):
+    """
+    Start a hosted checkout for a subscription plan (Dodo product_cart flow).
+    Requires PlanGatewayProduct rows — create them with: manage.py sync_dodo_plan_products
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = BillingCheckoutSessionSerializer
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        plan_id = serializer.validated_data['plan']
+        interval = serializer.validated_data['billing_interval']
+        return_url_in = serializer.validated_data.get('return_url')
+
+        plan = Plan.objects.filter(id=plan_id, is_active=True).first()
+        if not plan:
+            return Response(
+                {'detail': 'Invalid or inactive plan.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            gateway = get_billing_gateway()
+        except BillingConfigurationError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        mapping = PlanGatewayProduct.objects.filter(
+            plan=plan,
+            gateway=gateway.code,
+            interval=interval,
+        ).first()
+        if not mapping:
+            return Response(
+                {
+                    'detail': (
+                        'This plan is not provisioned on the payment provider for the '
+                        'selected billing interval. Run: python manage.py sync_dodo_plan_products'
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if return_url_in:
+            return_url = return_url_in
+        else:
+            default_return = getattr(django_settings, 'BILLING_CHECKOUT_RETURN_URL', '').strip()
+            if default_return:
+                return_url = default_return
+            else:
+                fe = getattr(django_settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+                return_url = f'{fe}/billing/complete'
+
+        email = getattr(request.user, 'email', None) or ''
+        if not email:
+            return Response(
+                {'detail': 'Your account has no email; cannot start checkout.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        metadata = {
+            'resolvemeq_user_id': str(request.user.id),
+            'resolvemeq_plan_id': str(plan.id),
+            'billing_interval': interval,
+        }
+
+        u = request.user
+        name_parts = [getattr(u, 'first_name', None) or '', getattr(u, 'last_name', None) or '']
+        customer_name = ' '.join(p.strip() for p in name_parts if p and str(p).strip()) or None
+
+        if dodopayments is None:
+            return Response(
+                {'detail': 'Payment provider SDK is not installed (dodopayments).'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            result = gateway.create_checkout_session(
+                product_id=mapping.external_product_id,
+                customer_email=email,
+                return_url=return_url,
+                customer_name=customer_name,
+                metadata=metadata,
+            )
+        except dodopayments.APIStatusError:
+            logger.exception('Dodo checkout_sessions.create failed')
+            return Response(
+                {'detail': 'Unable to start checkout. Please try again later.'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except dodopayments.APIConnectionError:
+            logger.exception('Dodo API connection error during checkout')
+            return Response(
+                {'detail': 'Payment provider unreachable. Please try again later.'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        if not result.checkout_url:
+            return Response(
+                {'detail': 'Checkout URL was not returned by the payment provider.'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response(
+            {
+                'checkout_url': result.checkout_url,
+                'session_id': result.session_id,
+            },
+            status=status.HTTP_200_OK,
+        )

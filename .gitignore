@@ -193,6 +193,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Local pip --target scratch (do not commit)
+.vendor_dodo/
+
 # ResolveMeQ Agent Service
 # Separate FastAPI agent service - has its own repository
 resolvemeq-agent/test_endpoints.py

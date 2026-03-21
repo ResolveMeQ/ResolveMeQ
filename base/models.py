@@ -699,6 +699,14 @@ class Subscription(models.Model):
     )
     current_period_start = models.DateTimeField(null=True, blank=True)
     current_period_end = models.DateTimeField(null=True, blank=True)
+    gateway = models.CharField(
+        max_length=32,
+        blank=True,
+        default='',
+        help_text=_("Active payment provider code (e.g. dodo); empty if not linked"),
+    )
+    gateway_customer_id = models.CharField(max_length=255, blank=True, default='')
+    gateway_subscription_id = models.CharField(max_length=255, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -745,6 +753,65 @@ class Invoice(models.Model):
 
     def __str__(self):
         return f"Invoice {self.id} - {self.amount} {self.currency}"
+
+
+class PlanGatewayProduct(models.Model):
+    """
+    Maps a local Plan to a subscription product created via a payment provider API.
+    """
+    class Gateway(models.TextChoices):
+        DODO = 'dodo', _('Dodo Payments')
+
+    class Interval(models.TextChoices):
+        MONTHLY = 'monthly', _('Monthly')
+        YEARLY = 'yearly', _('Yearly')
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    plan = models.ForeignKey(
+        Plan,
+        on_delete=models.CASCADE,
+        related_name='gateway_products',
+    )
+    gateway = models.CharField(max_length=32, choices=Gateway.choices)
+    interval = models.CharField(max_length=16, choices=Interval.choices)
+    external_product_id = models.CharField(max_length=128)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['plan', 'gateway', 'interval'],
+                name='uniq_base_plangatewayproduct_plan_gateway_interval',
+            ),
+        ]
+        verbose_name = _('Plan gateway product')
+        verbose_name_plural = _('Plan gateway products')
+
+    def __str__(self):
+        return f"{self.plan.slug} / {self.gateway} / {self.interval}"
+
+
+class BillingWebhookDelivery(models.Model):
+    """
+    Idempotency record for processed webhook deliveries (e.g. Standard Webhooks webhook-id).
+    """
+    class Provider(models.TextChoices):
+        DODO = 'dodo', _('Dodo Payments')
+
+    id = models.BigAutoField(primary_key=True)
+    delivery_id = models.CharField(max_length=255, unique=True)
+    provider = models.CharField(max_length=32, choices=Provider.choices)
+    event_type = models.CharField(max_length=128)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = _('Billing webhook delivery')
+        verbose_name_plural = _('Billing webhook deliveries')
+
+    def __str__(self):
+        return f"{self.provider} {self.delivery_id[:16]}…"
 
 
 class InAppNotification(models.Model):

@@ -527,9 +527,19 @@ class SubscriptionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'plan', 'plan_detail', 'status',
             'current_period_start', 'current_period_end',
+            'gateway', 'gateway_customer_id', 'gateway_subscription_id',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = [
+            'id', 'created_at', 'updated_at',
+            'gateway', 'gateway_customer_id', 'gateway_subscription_id',
+        ]
+
+
+class BillingCheckoutSessionSerializer(serializers.Serializer):
+    plan = serializers.UUIDField()
+    billing_interval = serializers.ChoiceField(choices=['monthly', 'yearly'])
+    return_url = serializers.URLField(required=False)
 
 
 class InvoiceSerializer(serializers.ModelSerializer):

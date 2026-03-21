@@ -211,6 +211,19 @@ SLACK_ESCALATION_CHANNEL = os.getenv("SLACK_ESCALATION_CHANNEL", "").strip()
 # Plan limits (used for team creation; can be overridden by Subscription later)
 PLAN_MAX_TEAMS = int(os.getenv('PLAN_MAX_TEAMS', '20'))
 
+# Billing / payment gateway (see base.billing.gateways.factory)
+BILLING_GATEWAY = os.getenv('BILLING_GATEWAY', 'dodo').strip().lower()
+DODO_PAYMENTS_API_KEY = os.getenv('DODO_PAYMENTS_API_KEY', '').strip()
+# Signing secret from Dodo dashboard (Settings → Webhooks); required for POST /api/billing/webhooks/dodo/
+DODO_PAYMENTS_WEBHOOK_KEY = os.getenv('DODO_PAYMENTS_WEBHOOK_KEY', '').strip()
+# test_mode (https://test.dodopayments.com) or live_mode (https://live.dodopayments.com)
+DODO_PAYMENTS_ENVIRONMENT = os.getenv('DODO_PAYMENTS_ENVIRONMENT', 'test_mode').strip()
+BILLING_DEFAULT_CURRENCY = os.getenv('BILLING_DEFAULT_CURRENCY', 'USD').strip()
+# Dodo tax_category for API-created products (e.g. saas, digital_products)
+BILLING_TAX_CATEGORY = os.getenv('BILLING_TAX_CATEGORY', 'saas').strip()
+# Optional default redirect after checkout; else FRONTEND_URL + /billing/complete
+BILLING_CHECKOUT_RETURN_URL = os.getenv('BILLING_CHECKOUT_RETURN_URL', '').strip()
+
 # AI Agent Settings
 AI_AGENT_URL = 'https://agent.resolvemeq.net/tickets/analyze/'
 AGENT_API_KEY = os.getenv('AGENT_API_KEY', 'resolvemeq-agent-secret-key-2026')

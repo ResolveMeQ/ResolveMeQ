@@ -4,7 +4,8 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django import forms
 
 from base.models import (
-    Profile, Team, UserPreferences, Plan, Subscription, Invoice, 
+    Profile, Team, UserPreferences, Plan, Subscription, Invoice,
+    PlanGatewayProduct, BillingWebhookDelivery,
     InAppNotification, NewsletterSubscription, ContactRequest
 )
 
@@ -141,18 +142,44 @@ class InAppNotificationAdmin(admin.ModelAdmin):
     ordering = ['-created_at']
 
 
+class PlanGatewayProductInline(admin.TabularInline):
+    model = PlanGatewayProduct
+    extra = 0
+    readonly_fields = ['external_product_id', 'created_at', 'updated_at']
+
+
+@admin.register(PlanGatewayProduct)
+class PlanGatewayProductAdmin(admin.ModelAdmin):
+    list_display = ['plan', 'gateway', 'interval', 'external_product_id', 'updated_at']
+    list_filter = ['gateway', 'interval']
+    search_fields = ['plan__slug', 'plan__name', 'external_product_id']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+@admin.register(BillingWebhookDelivery)
+class BillingWebhookDeliveryAdmin(admin.ModelAdmin):
+    list_display = ['delivery_id', 'provider', 'event_type', 'created_at']
+    list_filter = ['provider', 'event_type']
+    search_fields = ['delivery_id']
+    readonly_fields = ['delivery_id', 'provider', 'event_type', 'created_at']
+
+
 @admin.register(Plan)
 class PlanAdmin(admin.ModelAdmin):
     list_display = ['name', 'slug', 'max_teams', 'max_members', 'price_monthly', 'price_yearly', 'is_active']
     list_filter = ['is_active']
     search_fields = ['name', 'slug']
+    inlines = [PlanGatewayProductInline]
 
 
 @admin.register(Subscription)
 class SubscriptionAdmin(admin.ModelAdmin):
-    list_display = ['user', 'plan', 'status', 'current_period_start', 'current_period_end']
-    list_filter = ['status']
-    search_fields = ['user__email']
+    list_display = [
+        'user', 'plan', 'status', 'gateway', 'gateway_subscription_id',
+        'current_period_start', 'current_period_end',
+    ]
+    list_filter = ['status', 'gateway']
+    search_fields = ['user__email', 'gateway_subscription_id', 'gateway_customer_id']
 
 
 @admin.register(Invoice)
