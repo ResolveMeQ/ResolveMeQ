@@ -65,6 +65,15 @@ services:
       - ENVIRONMENT=production
       - AGENT_API_KEY=${AGENT_API_KEY}
       - FORCE_SYNC_AGENT_PROCESSING=${FORCE_SYNC_AGENT_PROCESSING:-false}
+      # Billing (Dodo Payments) — set in server .env next to this compose file
+      - FRONTEND_URL=${FRONTEND_URL:-https://app.resolvemeq.net}
+      - BILLING_GATEWAY=${BILLING_GATEWAY:-dodo}
+      - DODO_PAYMENTS_API_KEY=${DODO_PAYMENTS_API_KEY}
+      - DODO_PAYMENTS_WEBHOOK_KEY=${DODO_PAYMENTS_WEBHOOK_KEY}
+      - DODO_PAYMENTS_ENVIRONMENT=${DODO_PAYMENTS_ENVIRONMENT:-live_mode}
+      - BILLING_DEFAULT_CURRENCY=${BILLING_DEFAULT_CURRENCY:-USD}
+      - BILLING_TAX_CATEGORY=${BILLING_TAX_CATEGORY:-saas}
+      - BILLING_CHECKOUT_RETURN_URL=${BILLING_CHECKOUT_RETURN_URL:-}
     depends_on:
       redis:
         condition: service_healthy
