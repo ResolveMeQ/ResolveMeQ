@@ -1,8 +1,8 @@
 version: '3.8'
 
-# ResolveMeQ Django Backend - Standalone Development Environment
-# This runs the Django application independently
-# For integration with the Agent, set AI_AGENT_URL in .env
+# ResolveMeQ Django Backend — dev / VPS-style stack (build from this repo).
+# Copy to your server with .env in the same directory. Billing vars must be in .env
+# or exported before `docker compose up`; the environment: block passes them into `web`.
 
 services:
   redis:
@@ -11,7 +11,7 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -38,9 +38,15 @@ services:
       - DB_NAME=${DB_NAME}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
-      # AI_AGENT_URL should be set in .env file
-      # For local dev with agent: AI_AGENT_URL=http://localhost:8001
-      # For VPS deployment: AI_AGENT_URL=https://your-domain.com/agent
+      # Dodo / billing (interpolated from host .env — keeps VPS and repo in sync)
+      - FRONTEND_URL=${FRONTEND_URL:-https://app.resolvemeq.net}
+      - BILLING_GATEWAY=${BILLING_GATEWAY:-dodo}
+      - DODO_PAYMENTS_API_KEY=${DODO_PAYMENTS_API_KEY}
+      - DODO_PAYMENTS_WEBHOOK_KEY=${DODO_PAYMENTS_WEBHOOK_KEY}
+      - DODO_PAYMENTS_ENVIRONMENT=${DODO_PAYMENTS_ENVIRONMENT:-live_mode}
+      - BILLING_DEFAULT_CURRENCY=${BILLING_DEFAULT_CURRENCY:-USD}
+      - BILLING_TAX_CATEGORY=${BILLING_TAX_CATEGORY:-saas}
+      - BILLING_CHECKOUT_RETURN_URL=${BILLING_CHECKOUT_RETURN_URL:-}
     depends_on:
       redis:
         condition: service_healthy
