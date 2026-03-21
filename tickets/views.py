@@ -401,6 +401,12 @@ def get_ticket(request, ticket_id):
             "created_at": i.created_at,
         })
     data["comments"] = comments
+    # Include whether resolution feedback was already submitted (prevent double-submit)
+    try:
+        resolution = TicketResolution.objects.get(ticket=ticket)
+        data["resolution_feedback_submitted"] = resolution.response_received_at is not None
+    except TicketResolution.DoesNotExist:
+        data["resolution_feedback_submitted"] = False
     return Response(data)
 
 @api_view(["PATCH"])
@@ -502,6 +508,7 @@ def add_comment(request, ticket_id):
 def escalate_ticket(request, ticket_id):
     """
     Escalate a ticket for priority handling.
+    Body (optional): {"conversation_summary": "..."} - brief context for human agents.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
     if ticket.user != request.user and not request.user.is_staff:
@@ -511,19 +518,33 @@ def escalate_ticket(request, ticket_id):
         )
     ticket.status = "escalated"
     ticket.save()
+
+    content = "Ticket escalated by user."
+    conversation_summary = (request.data.get("conversation_summary") or "").strip()
+    if conversation_summary:
+        content += f"\n\nConversation context for support:\n{conversation_summary[:2000]}"
+
     TicketInteraction.objects.create(
         ticket=ticket,
         user=request.user,
         interaction_type="user_message",
-        content="Ticket escalated by user."
+        content=content
     )
     _notify_ticket_status_change(ticket, "escalated")
+    params = {"reason": "Escalated by user"}
+    if conversation_summary:
+        params["conversation_summary"] = conversation_summary[:500]
     try:
         from integrations.views import notify_escalation
-        notify_escalation(str(ticket.user.id), ticket.ticket_id, {"reason": "Escalated by user"})
+        notify_escalation(str(ticket.user.id), ticket.ticket_id, params)
     except Exception:
         pass
-    return Response({"message": "Ticket escalated."})
+    from .notifications import notify_support_escalation
+    notify_support_escalation(ticket, params)
+    return Response({
+        "message": "Ticket escalated.",
+        "ticket": TicketSerializer(ticket).data,
+    })
 
 @api_view(["POST"])
 def assign_ticket(request, ticket_id):
@@ -576,6 +597,26 @@ def _notify_ticket_status_change(ticket, new_status):
         logger.warning("Failed to create status-change notification: %s", e)
 
 
+# Allowed ticket statuses; normalize aliases to canonical form for storage
+ALLOWED_TICKET_STATUSES = frozenset([
+    "new", "open", "in_progress", "in-progress", "pending_clarification",
+    "escalated", "resolved"
+])
+CANONICAL_STATUS = {
+    "in-progress": "in_progress",  # normalize hyphen to underscore
+}
+
+
+def _normalize_ticket_status(status_val):
+    """Validate and normalize status; returns (canonical_status, error_msg)."""
+    if not status_val or not isinstance(status_val, str):
+        return None, "status is required."
+    raw = status_val.strip().lower()
+    if raw not in ALLOWED_TICKET_STATUSES:
+        return None, f"status must be one of: new, open, in_progress, pending_clarification, escalated, resolved"
+    return CANONICAL_STATUS.get(raw, raw), None
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticatedOrAgent])
 def update_ticket_status(request, ticket_id):
@@ -583,34 +624,69 @@ def update_ticket_status(request, ticket_id):
     Update ticket status (close, cancel, reopen, etc.).
     Body: {"status": "resolved"}
     Allows both authenticated users and AI Agent with API key.
+    Returns updated ticket for immediate UI updates.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
     status_val = request.data.get("status")
-    if not status_val:
-        return Response({"error": "status is required."}, status=400)
+    canonical, err = _normalize_ticket_status(status_val)
+    if err:
+        return Response({"error": err}, status=400)
     previous_status = getattr(ticket, "status", None)
-    ticket.status = status_val
+    ticket.status = canonical
     ticket.save()
-    
+
     # Determine who made the change
     user = request.user if request.user and request.user.is_authenticated else ticket.user
-    
+
     TicketInteraction.objects.create(
         ticket=ticket,
         user=user,
         interaction_type="agent_response" if request.auth and not request.user else "user_message",
-        content=f"Status updated to {status_val}."
+        content=f"Status updated to {canonical}.",
     )
-    if previous_status != status_val:
-        _notify_ticket_status_change(ticket, status_val)
-    return Response({"message": f"Ticket status updated to {status_val}."})
+    if previous_status != canonical:
+        _notify_ticket_status_change(ticket, canonical)
+    return Response({
+        "message": f"Ticket status updated to {canonical}.",
+        "ticket": TicketSerializer(ticket).data,
+    })
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def escalation_queue(request):
+    """
+    List escalated tickets for support staff.
+    Staff only (is_staff=True). Returns tickets needing human attention.
+    Query params: limit (default 50), offset (default 0).
+    """
+    if not getattr(request.user, "is_staff", False):
+        return Response({"error": "Staff access required."}, status=status.HTTP_403_FORBIDDEN)
+    limit = min(int(request.GET.get("limit", 50)), 100)
+    offset = int(request.GET.get("offset", 0))
+    queryset = (
+        Ticket.objects.filter(status="escalated")
+        .select_related("user")
+        .order_by("-created_at")
+    )
+    total = queryset.count()
+    queryset = queryset[offset : offset + limit]
+    serializer = TicketSerializer(queryset, many=True)
+    return Response({
+        "tickets": serializer.data,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    })
+
 
 @api_view(["GET"])
 def agent_dashboard(request):
     """
     Agent/admin dashboard: summary of open/closed tickets, response times, performance, etc.
     """
-    open_tickets = Ticket.objects.filter(status__in=["new", "in-progress", "escalated"]).count()
+    open_tickets = Ticket.objects.filter(
+        status__in=["new", "open", "in_progress", "in-progress", "escalated"]
+    ).count()
     closed_tickets = Ticket.objects.filter(status="resolved").count()
     avg_response = TicketInteraction.objects.filter(interaction_type="agent_response").aggregate(avg=Avg("created_at"))
     return Response({

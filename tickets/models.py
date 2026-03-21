@@ -97,7 +97,30 @@ class Ticket(models.Model):
         if self.status == "resolved" and self.agent_response:
             from knowledge_base.models import KnowledgeBaseArticle
             title = f"Resolved: {self.issue_type}"
-            content = f"Description: {self.description}\n\nAgent Response: {self.agent_response}"
+            # Extract human-readable content from agent_response (avoid dumping raw JSON)
+            parts = [f"## Description\n{self.description or 'N/A'}"]
+            ar = self.agent_response
+            if isinstance(ar, dict):
+                if ar.get("reasoning"):
+                    parts.append(f"\n## Analysis\n{ar['reasoning']}")
+                sol = ar.get("solution") or {}
+                if isinstance(sol, dict):
+                    steps = sol.get("steps") or sol.get("immediate_actions") or []
+                    if steps:
+                        parts.append("\n## Resolution Steps")
+                        for i, s in enumerate(steps[:10], 1):
+                            parts.append(f"{i}. {s}")
+                    if sol.get("preventive_measures"):
+                        parts.append("\n## Prevention")
+                        for pm in (sol["preventive_measures"] or [])[:5]:
+                            parts.append(f"- {pm}")
+                elif isinstance(sol, list):
+                    parts.append("\n## Resolution Steps")
+                    for i, s in enumerate(sol[:10], 1):
+                        parts.append(f"{i}. {s}")
+            else:
+                parts.append(f"\n## Agent Response\n{str(ar)[:2000]}")
+            content = "\n".join(parts)
             tags = [self.category] + (self.tags if self.tags else [])
             # Try to find an existing article for this ticket
             article, created = KnowledgeBaseArticle.objects.get_or_create(

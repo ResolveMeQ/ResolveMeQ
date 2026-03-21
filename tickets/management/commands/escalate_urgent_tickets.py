@@ -11,7 +11,7 @@ class Command(BaseCommand):
         two_hours_ago = timezone.now() - timezone.timedelta(hours=2)
         # Find urgent tickets not resolved and not updated in 2 hours
         urgent_tickets = Ticket.objects.filter(
-            status__in=["new", "in-progress"],
+            status__in=["new", "open", "in_progress", "in-progress"],
             issue_type__icontains="urgent",
             updated_at__lt=two_hours_ago
         )

@@ -273,9 +273,14 @@ def handle_escalate(ticket, params):
         content=f"⚠️ Escalated: {reasoning}"
     )
     
-    # Notify user and support team
+    # Notify user (Slack + in-app)
     notify_escalation(str(ticket.user.id), ticket.ticket_id, params)
-    
+    from .views import _notify_ticket_status_change
+    _notify_ticket_status_change(ticket, "escalated")
+    # Notify support staff (in-app + optional Slack channel)
+    from .notifications import notify_support_escalation
+    notify_support_escalation(ticket, params)
+
     logger.info(f"Escalated ticket {ticket.ticket_id}")
     return True
 

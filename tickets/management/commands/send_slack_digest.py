@@ -7,7 +7,9 @@ class Command(BaseCommand):
     help = "Send daily Slack digest of open tickets"
 
     def handle(self, *args, **kwargs):
-        open_tickets = Ticket.objects.filter(status__in=["new", "in-progress"])
+        open_tickets = Ticket.objects.filter(
+            status__in=["new", "open", "in_progress", "in-progress"]
+        )
         if not open_tickets.exists():
             return
 

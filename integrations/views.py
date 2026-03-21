@@ -362,7 +362,10 @@ def slack_modal_submission(request):
             issue_type = values["issue_type_block"]["issue_type"]["value"]
             user_id = payload["user"]["id"]
             from tickets.models import Ticket, TicketInteraction
-            ticket = Ticket.objects.filter(user__user_id=user_id, status__in=["new", "in-progress"]).order_by("-created_at").first()
+            ticket = Ticket.objects.filter(
+                user__user_id=user_id,
+                status__in=["new", "open", "in_progress", "in-progress"],
+            ).order_by("-created_at").first()
             if not ticket:
                 # Notify user in Slack if ticket not found
                 token_obj = SlackToken.objects.order_by("-created_at").first()
@@ -1058,6 +1061,79 @@ def notify_escalation(user_id, ticket_id, params):
     
     resp = requests.post("https://slack.com/api/chat.postMessage", headers=headers, json=payload)
     logging.getLogger(__name__).info(f"Sent escalation notification: {resp.text}")
+
+
+def notify_support_escalation_slack(ticket, params):
+    """
+    Post escalated ticket to a dedicated Slack channel for support visibility.
+    Requires SLACK_ESCALATION_CHANNEL to be set (channel ID, e.g. C01234ABCD).
+    """
+    from django.conf import settings
+    channel = getattr(settings, "SLACK_ESCALATION_CHANNEL", "") or ""
+    if not channel:
+        return
+    from .models import SlackToken
+    token_obj = SlackToken.objects.order_by("-created_at").first()
+    if not token_obj:
+        return
+    headers = {
+        "Authorization": f"Bearer {token_obj.access_token}",
+        "Content-Type": "application/json",
+    }
+    user_name = getattr(ticket.user, "name", None) or getattr(ticket.user, "username", None) or str(ticket.user.id)
+    if hasattr(ticket.user, "get_full_name") and ticket.user.get_full_name():
+        user_name = ticket.user.get_full_name()
+    elif hasattr(ticket.user, "email"):
+        user_name = ticket.user.email or user_name
+    desc = (ticket.description or "")[:300]
+    if len((ticket.description or "")) > 300:
+        desc += "..."
+    summary = params.get("conversation_summary", "")
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"🚨 *New Escalation – Ticket #{ticket.ticket_id}*\n\n*From:* {user_name}\n*Subject:* {ticket.issue_type or 'No title'}"
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Description:*\n{desc or '_No description_'}"
+            }
+        },
+    ]
+    if summary:
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Conversation context:*\n{summary[:400]}{'...' if len(summary) > 400 else ''}"
+            }
+        })
+    blocks.append({
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "View Ticket"},
+                "url": f"{getattr(settings, 'FRONTEND_URL', 'https://app.resolvemeq.net')}/tickets?highlight={ticket.ticket_id}",
+            }
+        ]
+    })
+    payload = {
+        "channel": channel,
+        "blocks": blocks,
+        "text": f"Ticket #{ticket.ticket_id} escalated – {ticket.issue_type or 'Support needed'}",
+    }
+    try:
+        resp = requests.post("https://slack.com/api/chat.postMessage", headers=headers, json=payload)
+        logging.getLogger(__name__).info(f"Sent support escalation notification: {resp.text}")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Failed to post escalation to Slack: {e}")
+
 
 def request_clarification_from_user(user_id, ticket_id, params):
     """

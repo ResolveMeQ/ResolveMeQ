@@ -114,7 +114,13 @@ def send_chat_message(request, ticket_id):
             is_active=True,
             defaults={'summary': f'Chat about: {ticket.issue_type}'}
         )
-    
+
+    # First message in conversation = user is actively working on the ticket
+    is_first_message = not ChatMessage.objects.filter(conversation=conversation).exists()
+    if is_first_message and ticket.status in ("new", "open"):
+        ticket.status = "in_progress"
+        ticket.save(update_fields=["status"])
+
     # Save user message
     user_message = ChatMessage.objects.create(
         conversation=conversation,
@@ -146,7 +152,8 @@ def send_chat_message(request, ticket_id):
         return Response({
             'conversation_id': str(conversation.id),
             'user_message': ChatMessageSerializer(user_message).data,
-            'ai_message': ChatMessageSerializer(ai_message).data
+            'ai_message': ChatMessageSerializer(ai_message).data,
+            'ticket_status': ticket.status,  # may have changed to in_progress on first message
         })
         
     except Exception as e:
@@ -163,7 +170,8 @@ def send_chat_message(request, ticket_id):
         return Response({
             'conversation_id': str(conversation.id),
             'user_message': ChatMessageSerializer(user_message).data,
-            'ai_message': ChatMessageSerializer(fallback_message).data
+            'ai_message': ChatMessageSerializer(fallback_message).data,
+            'ticket_status': ticket.status,
         }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
@@ -432,7 +440,9 @@ def _get_ai_chat_response(ticket, message, conversation, user):
 
 
 def _extract_actions_from_response(data, ticket, resolution_state=None):
-    """Extract suggested actions from agent response; filter by resolution state."""
+    """Extract suggested actions from agent response. Only include real actions (resolve, escalate, clarify).
+    Do NOT include immediate_actions - those are step-like instructions already shown in the main content.
+    Showing them as clickable buttons causes confusion; steps are read, not clicked."""
     actions = []
     state = resolution_state or {}
     ticket_status = getattr(ticket, 'status', '') or state.get('ticket_status', '')
@@ -450,10 +460,8 @@ def _extract_actions_from_response(data, ticket, resolution_state=None):
             ra = 'Mark as resolved'
         actions.append(ra)
 
-    if 'solution' in data and isinstance(data['solution'], dict):
-        immediate = data['solution'].get('immediate_actions', [])
-        if immediate:
-            actions.extend(immediate[:3])
+    # Do NOT add immediate_actions - they are instructional steps, not clickable actions.
+    # They duplicate the steps already shown and confuse users when rendered as buttons.
 
     # If already resolved, drop "Apply this solution" style actions
     if ticket_status == 'resolved':

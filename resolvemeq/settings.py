@@ -205,6 +205,8 @@ SLACK_CLIENT_ID = os.getenv("SLACK_CLIENT_ID")
 SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET")
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET")
 SLACK_REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI")
+# Optional: Slack channel ID (e.g. C01234ABCD) to post escalated tickets for support visibility
+SLACK_ESCALATION_CHANNEL = os.getenv("SLACK_ESCALATION_CHANNEL", "").strip()
 
 # Plan limits (used for team creation; can be overridden by Subscription later)
 PLAN_MAX_TEAMS = int(os.getenv('PLAN_MAX_TEAMS', '20'))
