@@ -1220,22 +1220,23 @@ def agent_recommendations(request):
 @throttle_classes([RollbackThrottle])
 def rollback_action(request, action_history_id):
     """
-    Rollback an autonomous action on a ticket the user owns or is assigned to.
-    
+    Rollback an autonomous action (staff/superuser only).
+
     Request body:
     {
         "reason": "Reason for rollback"
     }
     """
     from .rollback import RollbackManager
-    
+
+    if not (request.user.is_staff or request.user.is_superuser):
+        return Response(
+            {"error": "You do not have permission to rollback this action."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     try:
         action_history = ActionHistory.objects.select_related("ticket").get(id=action_history_id)
-        if not user_can_access_ticket(request.user, action_history.ticket):
-            return Response(
-                {"error": "You do not have permission to rollback this action."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
 
         # Check if already rolled back
         if action_history.rolled_back:
