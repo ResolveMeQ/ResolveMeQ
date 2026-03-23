@@ -208,7 +208,13 @@ class GoogleAuthAPIView(GenericAPIView):
             idinfo = verify_google_id_token(credential)
         except RuntimeError:
             return Response(
-                {"error": "Google sign-in is not configured on the server."},
+                {
+                    "error": (
+                        "Google sign-in is not configured on the server. "
+                        "Set environment variable GOOGLE_OAUTH_CLIENT_ID to your OAuth Web client ID "
+                        "(same value as VITE_GOOGLE_CLIENT_ID on the frontend)."
+                    ),
+                },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         except ValueError:

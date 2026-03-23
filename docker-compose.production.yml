@@ -67,6 +67,8 @@ services:
       - FORCE_SYNC_AGENT_PROCESSING=${FORCE_SYNC_AGENT_PROCESSING:-false}
       # Billing (Dodo Payments) — set in server .env next to this compose file
       - FRONTEND_URL=${FRONTEND_URL:-https://app.resolvemeq.net}
+      # Google Sign-In — same Web client ID as frontend VITE_GOOGLE_CLIENT_ID (Compose must pass it into the container)
+      - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:-}
       - BILLING_GATEWAY=${BILLING_GATEWAY:-dodo}
       - DODO_PAYMENTS_API_KEY=${DODO_PAYMENTS_API_KEY}
       - DODO_PAYMENTS_WEBHOOK_KEY=${DODO_PAYMENTS_WEBHOOK_KEY}

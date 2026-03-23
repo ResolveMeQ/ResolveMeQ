@@ -420,8 +420,12 @@ def _get_ai_chat_response(ticket, message, conversation, user):
         metadata = {
             'full_solution': solution if isinstance(solution, dict) else None,
             'analysis': data.get('analysis', {}),
-            'suggested_actions': _extract_actions_from_response(data, ticket, resolution_state),
-            'quick_replies': _generate_quick_replies(data, ticket, resolution_state),
+            'suggested_actions': _normalize_suggested_actions_metadata(
+                data.get('suggested_actions'), data, ticket, resolution_state
+            ),
+            'quick_replies': _normalize_quick_replies_metadata(
+                data.get('quick_replies'), data, ticket, resolution_state
+            ),
         }
         if steps_list:
             metadata['steps'] = steps_list
@@ -449,6 +453,63 @@ def _get_ai_chat_response(ticket, message, conversation, user):
         
         # Fallback - make it clear this is a service issue, not the AI being unhelpful
         return _generate_fallback_response(message, ticket, agent_data, agent_error=str(e))
+
+
+def _normalize_quick_replies_metadata(raw, data, ticket, resolution_state):
+    """
+    Prefer quick_replies from the AI agent (dynamic, situation-specific).
+    If missing or empty after validation, use a small rule-based fallback.
+    """
+    if isinstance(raw, list) and raw:
+        out = []
+        for x in raw[:8]:
+            if not isinstance(x, dict):
+                continue
+            label = (x.get("label") or "").strip()
+            value = (x.get("value") or "").strip()
+            if label and value:
+                out.append({"label": label[:200], "value": value[:2000]})
+        if out:
+            return out
+    return _generate_quick_replies(data, ticket, resolution_state)
+
+
+def _suggested_action_struct_from_string(s):
+    low = str(s).lower()
+    if "escalat" in low:
+        return {"label": str(s)[:120], "intent": "escalate", "message": None}
+    if "resolv" in low or "mark" in low:
+        return {"label": str(s)[:120], "intent": "auto_resolve", "message": None}
+    if "clarif" in low or "detail" in low:
+        return {"label": str(s)[:120], "intent": "request_clarification", "message": None}
+    return {"label": str(s)[:120], "intent": "compose", "message": str(s)[:2000]}
+
+
+def _normalize_suggested_actions_metadata(raw, data, ticket, resolution_state):
+    """
+    Prefer suggested_actions from the AI (list of {label, intent, message}).
+    If absent, derive from recommended_action via legacy string extraction.
+    """
+    if isinstance(raw, list) and raw:
+        out = []
+        allowed = frozenset({"auto_resolve", "escalate", "request_clarification", "compose"})
+        for item in raw[:5]:
+            if isinstance(item, dict):
+                label = (item.get("label") or "").strip()
+                if not label:
+                    continue
+                intent = str(item.get("intent") or "compose").lower().strip()
+                if intent not in allowed:
+                    intent = "compose"
+                msg = item.get("message")
+                msg = str(msg).strip()[:2000] if msg is not None and str(msg).strip() else None
+                out.append({"label": label[:120], "intent": intent, "message": msg})
+            elif isinstance(item, str) and item.strip():
+                out.append(_suggested_action_struct_from_string(item.strip()))
+        if out:
+            return out
+    strings = _extract_actions_from_response(data, ticket, resolution_state)
+    return [_suggested_action_struct_from_string(s) for s in strings]
 
 
 def _extract_actions_from_response(data, ticket, resolution_state=None):
@@ -520,24 +581,7 @@ def _generate_quick_replies(data, ticket, resolution_state=None):
             'value': 'That didn\'t help me, I need different guidance'
         })
 
-    # Step-by-step follow-up: when we have solution steps and ticket not resolved, help user until they mark resolved
-    if ticket_status != 'resolved' and not reopened:
-        solution = data.get('solution') or {}
-        steps = solution.get('steps') or []
-        if len(steps) > 1:
-            if not any(r.get('value', '').find('first step') >= 0 for r in replies):
-                replies.append({'label': 'I did the first step', 'value': 'I tried the first step. What should I do next?'})
-            if not any(r.get('value', '').find('next step') >= 0 for r in replies):
-                replies.append({'label': 'Next step', 'value': 'I\'m ready for the next step'})
-            if not any(r.get('value', '').find('fixed') >= 0 for r in replies):
-                replies.append({'label': 'It\'s fixed', 'value': 'It\'s fixed now, thank you!'})
-            if not any(r.get('value', '').find('Still not working') >= 0 for r in replies):
-                replies.append({'label': 'Still not working', 'value': 'Still not working. What else can I try?'})
-        elif len(steps) == 1:
-            if not any(r.get('value', '').find('fixed') >= 0 for r in replies):
-                replies.append({'label': 'It\'s fixed', 'value': 'It\'s fixed now, thank you!'})
-            if not any(r.get('value', '').find('Still not working') >= 0 for r in replies):
-                replies.append({'label': 'Still not working', 'value': 'Still not working. What else can I try?'})
+    # Fallback only (AI normally supplies situation-specific quick_replies)
 
     # Always offer these (avoid duplicates)
     for label, value in [

@@ -1,20 +1,16 @@
-<!-- footer.html -->
+<!-- Shared email footer — uses same context as other transactional emails (app_name, frontend_url, support_email). -->
 <table class="row-content stack" style="background-color: #061A40; width: 680px; margin: 0 auto;">
     <tr>
         <td style="padding: 48px; text-align: center;">
-            <h3 style="color: #ffffff; font-size: 24px; margin: 0 0 24px;">Tiidel Incorporated</h3>
+            <h3 style="color: #ffffff; font-size: 24px; margin: 0 0 24px;">{{ app_name|default:"ResolveMeQ" }}</h3>
 
-            <!-- Social Links -->
-            <div style="margin: 24px 0;">
-                <a href="https://www.facebook.com/tiidel" style="margin: 0 8px;"><img src="cid:facebook_icon" alt="Facebook" width="30" height="30"/></a>
-                <a href="https://www.x.com/tiidel/" style="margin: 0 8px;"><img src="cid:twitter_icon" alt="Twitter" width="30" height="30" /></a>
-                <a href="https://www.linkedin.com/company/tiidel" style="margin: 0 8px;"><img src="cid:linkedin_icon" alt="LinkedIn" width="30" height="30" /></a>
-                <a href="https://www.instagram.com/tiidel" style="margin: 0 8px;"><img src="cid:instagram_icon" alt="Instagram" width="30" height="30" /></a>
-            </div>
-
-            <p style="color: #ffffff; font-size: 12px; margin: 24px auto; max-width: 80%;">
-                This is a notification from <a href="http://app.tiidel.com/" style="color: #3acf9b;">tiidel.com</a>.
-                If you need support, please <a href="http://www.tiidel.com/contact-us" style="color: #3acf9b;">contact us</a>.
+            <p style="color: #ffffff; font-size: 12px; margin: 24px auto; max-width: 80%; line-height: 1.6;">
+                This is a notification from
+                <a href="{{ frontend_url|default:'https://app.resolvemeq.net' }}" style="color: #3acf9b;">{{ frontend_url|default:'https://app.resolvemeq.net' }}</a>.
+                {% if support_email %}
+                If you need support, contact us at
+                <a href="mailto:{{ support_email }}" style="color: #3acf9b;">{{ support_email }}</a>.
+                {% endif %}
             </p>
         </td>
     </tr>

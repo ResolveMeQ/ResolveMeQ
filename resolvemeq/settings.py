@@ -162,6 +162,13 @@ CORS_ALLOW_HEADERS = [
     'x-csrftoken',
     'x-requested-with',
 ]
+
+# Django 5 defaults SECURE_CROSS_ORIGIN_OPENER_POLICY to "same-origin", which adds
+# Cross-Origin-Opener-Policy on API responses. The SPA should send
+# Cross-Origin-Opener-Policy: same-origin-allow-popups (see resolvemeqwebapp public/_headers).
+# Disable COOP on JSON API responses unless you set SECURE_CROSS_ORIGIN_OPENER_POLICY explicitly.
+_coop = os.getenv("SECURE_CROSS_ORIGIN_OPENER_POLICY", "").strip()
+SECURE_CROSS_ORIGIN_OPENER_POLICY = _coop if _coop else None
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
 

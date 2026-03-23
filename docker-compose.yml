@@ -68,6 +68,7 @@ services:
       - AGENT_API_KEY=${AGENT_API_KEY}
       - FORCE_SYNC_AGENT_PROCESSING=${FORCE_SYNC_AGENT_PROCESSING:-false}
       - FRONTEND_URL=${FRONTEND_URL:-https://app.resolvemeq.net}
+      # Google Sign-In — set GOOGLE_OAUTH_CLIENT_ID in .env (same value as VITE_GOOGLE_CLIENT_ID on the frontend)
       - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:-}
       - SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
       - SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
@@ -86,6 +87,7 @@ services:
       - EMAIL_USE_CELERY=${EMAIL_USE_CELERY:-true}
       - ENABLE_DIGEST_EMAIL_SCHEDULE=${ENABLE_DIGEST_EMAIL_SCHEDULE:-true}
       - DIGEST_EMAIL_HOUR_UTC=${DIGEST_EMAIL_HOUR_UTC:-8}
+      # Billing (Dodo Payments) — set in server .env next to this compose file
       - BILLING_GATEWAY=${BILLING_GATEWAY:-dodo}
       - DODO_PAYMENTS_API_KEY=${DODO_PAYMENTS_API_KEY}
       - DODO_PAYMENTS_WEBHOOK_KEY=${DODO_PAYMENTS_WEBHOOK_KEY}
