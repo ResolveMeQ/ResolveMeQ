@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 from urllib.parse import quote
 
@@ -19,13 +20,57 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from base.models import Profile
-from base.serializers import RegisterSerializer, LoginSerializer, UserProfileSerializer, VerifyUserSerializer, \
+from base.google_auth import username_from_email, verify_google_id_token
+from base.serializers import RegisterSerializer, LoginSerializer, GoogleAuthSerializer, UserProfileSerializer, VerifyUserSerializer, \
     ChangePasswordSerializer, ResetPasswordSerializer, ForgotPasswordRequestSerializer, ResendVerificationCodeSerializer, UserManagementSerializer, \
     TeamSerializer, UserPreferencesSerializer, InAppNotificationSerializer
 from base.tasks import dispatch_send_email_with_template
 from base.utils import generate_secure_code
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
+
+
+def _send_team_invitation_email(invitation, team, invited_by):
+    """Email the invitee with link to Teams (sign in with invited email to accept)."""
+    frontend = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+    inviter_name = invited_by.get_full_name() or invited_by.email
+    context = {
+        'app_name': getattr(settings, 'APP_NAME', 'ResolveMeQ'),
+        'team_name': team.name,
+        'inviter_name': inviter_name,
+        'inviter_email': invited_by.email,
+        'invitee_email': invitation.email,
+        'teams_url': f'{frontend}/teams',
+        'signup_url': f'{frontend}/signup',
+    }
+    data = {
+        'subject': f'{inviter_name} invited you to join {team.name} on {context["app_name"]}',
+    }
+    try:
+        dispatch_send_email_with_template(data, 'team_invitation.html', context, [invitation.email])
+    except Exception as exc:
+        logger.exception('Team invitation email failed: %s', exc)
+
+
+def _notify_existing_user_team_invitation(invitation, team, invited_by):
+    """Bell notification when the invitee already has an account."""
+    from base.models import InAppNotification
+
+    invitee = User.objects.filter(email__iexact=invitation.email).first()
+    if not invitee:
+        return
+    inviter_name = invited_by.get_full_name() or invited_by.email
+    try:
+        InAppNotification.objects.create(
+            user=invitee,
+            type=InAppNotification.Type.INFO,
+            title=f'Team invitation: {team.name}',
+            message=f'{inviter_name} invited you to join this team. Open Teams to accept or decline.',
+            link='/teams',
+        )
+    except Exception as exc:
+        logger.warning('Team invitation in-app notification failed: %s', exc)
 
 
 class RegisterAPIView(GenericAPIView):
@@ -139,6 +184,115 @@ class LoginAPIView(GenericAPIView):
         }, status=status.HTTP_200_OK)
 
 
+class GoogleAuthAPIView(GenericAPIView):
+    """Exchange a Google ID token (credential JWT) for ResolveMeQ JWTs."""
+
+    permission_classes = [permissions.AllowAny]
+    serializer_class = GoogleAuthSerializer
+
+    @swagger_auto_schema(
+        operation_description="Sign in or register with a Google ID token",
+        responses={
+            200: openapi.Response("JWTs issued"),
+            400: openapi.Response("Invalid token or email"),
+            409: openapi.Response("Email linked to another Google account"),
+            503: openapi.Response("Google OAuth not configured"),
+        },
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        credential = serializer.validated_data["credential"]
+
+        try:
+            idinfo = verify_google_id_token(credential)
+        except RuntimeError:
+            return Response(
+                {"error": "Google sign-in is not configured on the server."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except ValueError:
+            return Response(
+                {"error": "Invalid or expired Google sign-in token."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not idinfo.get("email_verified", False):
+            return Response(
+                {"error": "Google email is not verified."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        email = User.objects.normalize_email((idinfo.get("email") or "").strip())
+        if not email:
+            return Response(
+                {"error": "Google did not return an email address."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        sub = idinfo.get("sub")
+        if not sub:
+            return Response(
+                {"error": "Invalid Google token payload."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        first = (idinfo.get("given_name") or "")[:150]
+        last = (idinfo.get("family_name") or "")[:150]
+
+        with transaction.atomic():
+            user = User.objects.filter(google_sub=sub).first()
+            if user is None:
+                user = User.objects.filter(email__iexact=email).first()
+                if user:
+                    if user.google_sub and user.google_sub != sub:
+                        return Response(
+                            {
+                                "error": "This email is already linked to another Google account.",
+                            },
+                            status=status.HTTP_409_CONFLICT,
+                        )
+                    user.google_sub = sub
+                    user.is_verified = True
+                    user.is_active = True
+                    update_fields = ["google_sub", "is_verified", "is_active"]
+                    if first and not user.first_name:
+                        user.first_name = first
+                        update_fields.append("first_name")
+                    if last and not user.last_name:
+                        user.last_name = last
+                        update_fields.append("last_name")
+                    user.save(update_fields=update_fields)
+                else:
+                    user = User.objects.create_user(
+                        email=email,
+                        password=None,
+                        username=username_from_email(User, email),
+                        first_name=first,
+                        last_name=last,
+                    )
+                    User.objects.filter(pk=user.pk).update(
+                        google_sub=sub,
+                        is_verified=True,
+                        is_active=True,
+                        secure_code=None,
+                        secure_code_expiry=None,
+                    )
+                    user.refresh_from_db()
+
+        token = RefreshToken.for_user(user)
+        access_token = token.access_token
+        return Response(
+            {
+                "message": "Successfully signed in with Google",
+                "email": user.email,
+                "access_token": str(access_token),
+                "refresh_token": str(token),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class ChangePasswordAPIView(GenericAPIView):
     """
     API view for requesting a password reset.
@@ -226,8 +380,18 @@ class ForgotPasswordRequestAPIView(GenericAPIView):
             user.secure_code_expiry = timezone.now() + timedelta(minutes=60)
             user.save(update_fields=['secure_code', 'secure_code_expiry'])
             reset_url = f"{settings.FRONTEND_URL}/reset-password?token={quote(str(user.secure_code))}&email={quote(user.email)}"
-            data = {"subject": "Reset your password"}
-            context = {"user": user, "reset_url": reset_url, "token": user.secure_code}
+            app_name = getattr(settings, 'APP_NAME', 'ResolveMeQ')
+            support = getattr(settings, 'SUPPORT_EMAIL', '') or ''
+            data = {'subject': f'Reset your {app_name} password'}
+            context = {
+                'user': user,
+                'reset_url': reset_url,
+                'token': user.secure_code,
+                'app_name': app_name,
+                'support_email': support,
+                'frontend_url': getattr(settings, 'FRONTEND_URL', '').rstrip('/'),
+                'validity_minutes': 60,
+            }
             dispatch_send_email_with_template(data, 'reset_password.html', context, [user.email])
         except User.DoesNotExist:
             pass  # Don't reveal; return success anyway
@@ -309,7 +473,7 @@ class CurrentUserProfileView(GenericAPIView):
 
     def patch(self, request):
         profile = self.get_object()
-        serializer = self.get_serializer(profile, data=request.data)
+        serializer = self.get_serializer(profile, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
@@ -570,12 +734,70 @@ class TeamInviteView(GenericAPIView):
         if not created:
             if inv.status != TeamInvitation.Status.PENDING:
                 return Response({'error': 'An invitation was already sent and processed.'}, status=status.HTTP_400_BAD_REQUEST)
+        if created:
+            _send_team_invitation_email(inv, team, request.user)
+            _notify_existing_user_team_invitation(inv, team, request.user)
         return Response({
             'id': str(inv.id),
             'team_id': str(team.id),
             'email': inv.email,
             'status': inv.status,
         }, status=status.HTTP_201_CREATED)
+
+
+class TeamSentInvitationsListView(GenericAPIView):
+    """List pending invitations the owner sent for this team."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, team_id):
+        from base.models import Team, TeamInvitation
+        team = get_object_or_404(Team, pk=team_id)
+        if team.owner_id != request.user.id:
+            return Response({'error': 'Only the team owner can view sent invitations.'}, status=status.HTTP_403_FORBIDDEN)
+        qs = TeamInvitation.objects.filter(
+            team=team,
+            status=TeamInvitation.Status.PENDING,
+        ).select_related('invited_by').order_by('-created_at')
+        out = [
+            {
+                'id': str(inv.id),
+                'email': inv.email,
+                'created_at': inv.created_at.isoformat(),
+                'invited_by_email': inv.invited_by.email,
+            }
+            for inv in qs
+        ]
+        return Response(out)
+
+
+class TeamInvitationResendView(GenericAPIView):
+    """Resend invitation email (owner only). Does not duplicate in-app notifications."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, invitation_id):
+        from base.models import TeamInvitation
+        inv = get_object_or_404(TeamInvitation, id=invitation_id)
+        if inv.team.owner_id != request.user.id:
+            return Response({'error': 'Only the team owner can resend invitations.'}, status=status.HTTP_403_FORBIDDEN)
+        if inv.status != TeamInvitation.Status.PENDING:
+            return Response({'error': 'This invitation is no longer pending.'}, status=status.HTTP_400_BAD_REQUEST)
+        _send_team_invitation_email(inv, inv.team, inv.invited_by)
+        return Response({'message': 'Invitation email sent again.'})
+
+
+class TeamInvitationOwnerCancelView(GenericAPIView):
+    """Revoke a pending invitation (owner only)."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, invitation_id):
+        from base.models import TeamInvitation
+        inv = get_object_or_404(TeamInvitation, id=invitation_id)
+        if inv.team.owner_id != request.user.id:
+            return Response({'error': 'Only the team owner can cancel invitations.'}, status=status.HTTP_403_FORBIDDEN)
+        if inv.status != TeamInvitation.Status.PENDING:
+            return Response({'error': 'This invitation is no longer pending.'}, status=status.HTTP_400_BAD_REQUEST)
+        inv.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class TeamInvitationListView(GenericAPIView):

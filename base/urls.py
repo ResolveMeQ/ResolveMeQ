@@ -10,6 +10,7 @@ urlpatterns = [
     path('register/', views.RegisterAPIView.as_view(), name='register'),
     path('login/', views.LoginAPIView.as_view(),
          name='login'),
+    path('google/', views.GoogleAuthAPIView.as_view(), name='google-auth'),
     path('verify-user/', views.VerifyUserAPIView.as_view(), name='verify-user'),
     path('forgot-password/', views.ForgotPasswordRequestAPIView.as_view(), name='forgot-password'),
     path('reset-password/', views.ResetPasswordAPIView.as_view(), name='reset-password'),

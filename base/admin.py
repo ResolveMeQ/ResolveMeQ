@@ -6,7 +6,8 @@ from django import forms
 from base.models import (
     Profile, Team, UserPreferences, Plan, Subscription, Invoice,
     PlanGatewayProduct, BillingWebhookDelivery,
-    InAppNotification, NewsletterSubscription, ContactRequest
+    InAppNotification, NewsletterSubscription, ContactRequest,
+    SupportContactSubmission,
 )
 
 User = get_user_model()
@@ -230,3 +231,13 @@ class ContactRequestAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+
+@admin.register(SupportContactSubmission)
+class SupportContactSubmissionAdmin(admin.ModelAdmin):
+    list_display = ['email', 'subject', 'page_context', 'created_at']
+    list_filter = ['page_context', 'created_at']
+    search_fields = ['email', 'message', 'subject']
+    readonly_fields = ['id', 'created_at', 'ip_address']
+    ordering = ['-created_at']
+    raw_id_fields = ['user']

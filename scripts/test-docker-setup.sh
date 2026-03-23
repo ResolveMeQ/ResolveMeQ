@@ -53,7 +53,7 @@ echo ""
 echo "🔍 Health Checks:"
 
 # Check Django
-if curl -f -s http://localhost:8000/api/tickets/analytics/ > /dev/null; then
+if curl -f -s http://localhost:8000/health/ > /dev/null; then
     echo -e "  ✅ Django Web: ${GREEN}Healthy${NC}"
 else
     echo -e "  ❌ Django Web: ${RED}Failed${NC}"

@@ -137,6 +137,16 @@ class User(AbstractBaseUser, PermissionsMixin):
         help_text=_("The date and time of the user's last login")
     )
 
+    google_sub = models.CharField(
+        _("Google subject"),
+        max_length=255,
+        null=True,
+        blank=True,
+        unique=True,
+        db_index=True,
+        help_text=_("Stable Google account id (sub claim) when the user signs in with Google"),
+    )
+
     objects = UserManager()
 
     USERNAME_FIELD = 'email'
@@ -909,3 +919,32 @@ class ContactRequest(models.Model):
 
     def __str__(self):
         return f"{self.email} ({self.company_size})"
+
+
+class SupportContactSubmission(models.Model):
+    """
+    Logged-in portal user reached out via Contact support (e.g. Billing page).
+    Stored for audit; admins are notified by email.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='support_contact_submissions',
+    )
+    email = models.EmailField(_("submitter email"), max_length=254)
+    subject = models.CharField(_("subject"), max_length=200, blank=True)
+    message = models.TextField(_("message"))
+    page_context = models.CharField(_("page"), max_length=64, default='billing', blank=True)
+    ip_address = models.GenericIPAddressField(_("IP address"), null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = _("Support contact submission")
+        verbose_name_plural = _("Support contact submissions")
+
+    def __str__(self):
+        return f"{self.email} — {self.created_at:%Y-%m-%d %H:%M}"

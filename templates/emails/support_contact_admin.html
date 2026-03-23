@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Support contact — {{ app_name }}</title>
+    <style>
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f1f5f9; color: #0f172a; }
+        .wrap { max-width: 560px; margin: 0 auto; padding: 24px 16px; }
+        .card { background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 4px 24px rgba(15, 23, 42, 0.08); }
+        h1 { font-size: 18px; margin: 0 0 16px; }
+        dl { margin: 0; font-size: 14px; line-height: 1.6; }
+        dt { font-weight: 600; color: #64748b; margin-top: 12px; }
+        dd { margin: 4px 0 0; color: #0f172a; }
+        .msg { white-space: pre-wrap; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-top: 8px; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="card">
+            <h1>New support message (portal)</h1>
+            <dl>
+                <dt>From</dt>
+                <dd><a href="mailto:{{ submitter_email }}">{{ submitter_email }}</a> ({{ submitter_name }})</dd>
+                <dt>User ID</dt>
+                <dd>{{ user_id }}</dd>
+                <dt>Subject</dt>
+                <dd>{{ subject_line }}</dd>
+                <dt>Page</dt>
+                <dd>{{ page_context }}</dd>
+                <dt>Submitted</dt>
+                <dd>{{ created_at }}</dd>
+                <dt>IP</dt>
+                <dd>{{ ip_address }}</dd>
+                <dt>Message</dt>
+                <dd><div class="msg">{{ message }}</div></dd>
+            </dl>
+        </div>
+    </div>
+</body>
+</html>

@@ -9,7 +9,14 @@ from rest_framework.throttling import UserRateThrottle, ScopedRateThrottle
 from celery.result import AsyncResult
 from celery.exceptions import OperationalError
 from .models import Ticket, TicketInteraction, ActionHistory, TicketResolution
+from .scoping import (
+    active_team_id_for_user,
+    tickets_queryset_for_request,
+    user_can_access_ticket,
+    user_can_assign_agent,
+)
 from .tasks import process_ticket_with_agent
+from .user_email_notify import dispatch_ticket_assigned_email, dispatch_ticket_status_emails
 from .serializers import TicketSerializer, TicketInteractionSerializer
 from .cache_decorators import cache_api_response, no_cache
 import logging
@@ -24,25 +31,57 @@ from django.core.files.storage import default_storage
 logger = logging.getLogger(__name__)
 
 
+def _solution_preview_from_agent_response(agent_response, max_len=400):
+    """Short text from agent_response for search hints (no raw JSON dump)."""
+    if not agent_response or not isinstance(agent_response, dict):
+        return None
+    parts = []
+    sol = agent_response.get("solution")
+    if isinstance(sol, dict):
+        for key in ("steps", "immediate_actions"):
+            steps = sol.get(key)
+            if isinstance(steps, list):
+                parts.extend(str(s) for s in steps[:6] if s)
+    elif isinstance(sol, list):
+        parts.extend(str(s) for s in sol[:6] if s)
+    text = " ".join(parts) if parts else ""
+    if not text:
+        reasoning = agent_response.get("reasoning")
+        if isinstance(reasoning, str) and reasoning.strip():
+            text = reasoning.strip()
+    if not text:
+        return None
+    if len(text) > max_len:
+        text = text[: max_len - 1].rsplit(" ", 1)[0] + "…"
+    return text
+
+
+def _ticket_community_search_hint(ticket, description_max=240):
+    """Privacy-safe search hit: no requester identity, not openable as a full ticket."""
+    desc = ticket.description or ""
+    preview = desc[:description_max]
+    if len(desc) > description_max:
+        preview = preview.rsplit(" ", 1)[0] + "…"
+    return {
+        "ticket_id": ticket.ticket_id,
+        "issue_type": ticket.issue_type,
+        "category": ticket.category,
+        "status": ticket.status,
+        "description_preview": preview or None,
+        "solution_preview": _solution_preview_from_agent_response(ticket.agent_response),
+        "updated_at": ticket.updated_at.isoformat() if ticket.updated_at else None,
+        "search_source": "community_resolved",
+    }
+
+
 def _tickets_for_user(request):
-    """Return ticket queryset for listing/analytics: tickets CREATED BY the current user. Staff see all."""
-    if not getattr(request.user, 'is_authenticated', False):
-        return Ticket.objects.none()
-    if request.user.is_staff:
-        return Ticket.objects.all()
-    return Ticket.objects.filter(user=request.user)
+    """Tickets visible in list/search/analytics: own + assigned only."""
+    return tickets_queryset_for_request(request)
 
 
 def _can_access_ticket(request, ticket):
-    """Return True if the user can access this ticket (staff, creator, or assignee)."""
-    if not getattr(request.user, 'is_authenticated', False):
-        return False
-    if request.user.is_staff:
-        return True
-    return (
-        ticket.user_id == request.user.id
-        or (ticket.assigned_to_id and ticket.assigned_to_id == request.user.id)
-    )
+    """Creator or assignee."""
+    return user_can_access_ticket(request.user, ticket)
 
 
 class AgentActionThrottle(UserRateThrottle):
@@ -54,6 +93,11 @@ class RollbackThrottle(UserRateThrottle):
     """Custom throttle for rollback actions"""
     scope = 'rollback'
 
+
+class TicketSearchThrottle(UserRateThrottle):
+    """Limit ticket search (includes community resolved scan)."""
+    rate = "60/minute"
+
 # Create your views here.
 
 @api_view(["GET"])
@@ -61,8 +105,9 @@ class RollbackThrottle(UserRateThrottle):
 def ticket_analytics(request):
     """
     Get ticket analytics data: tickets per week, average resolution time, open/closed ticket count.
+    Scoped to tickets the user created or is assigned to.
     """
-    base_qs = Ticket.objects.all()
+    base_qs = _tickets_for_user(request)
     now = timezone.now()
     weeks_ago = now - timezone.timedelta(weeks=8)
     tickets_per_week = (
@@ -91,6 +136,7 @@ def ticket_analytics(request):
     })
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticatedOrAgent])
 @throttle_classes([AgentActionThrottle])
 def process_with_agent(request, ticket_id):
     """
@@ -98,7 +144,13 @@ def process_with_agent(request, ticket_id):
     Uses Celery task for background processing, with synchronous fallback.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    
+    if request.user and request.user.is_authenticated:
+        if not user_can_access_ticket(request.user, ticket):
+            return Response(
+                {"error": "You do not have permission to process this ticket."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
     # Check if force re-processing is requested
     force = request.data.get('force', False) or request.data.get('reset', False)
     
@@ -225,12 +277,19 @@ def task_status(request, task_id):
     return Response(response)
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticatedOrAgent])
 def ticket_agent_status(request, ticket_id):
     """
     Get the agent processing status and history for a ticket.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    
+    if request.user and request.user.is_authenticated:
+        if not user_can_access_ticket(request.user, ticket):
+            return Response(
+                {"error": "You do not have permission to access this ticket."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
     # Get the latest task for this ticket from Celery
     ticket_tasks = []
     
@@ -277,13 +336,15 @@ def ticket_agent_status(request, ticket_id):
     })
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticatedOrAgent])
 def create_ticket(request):
     """
-    Create a new ticket. If authenticated, use request.user; else body must include user (UUID).
+    Create a new ticket. JWT users are always the reporter; agent integrations may supply user (UUID).
+    Team is set from the reporter's active_team when they are a member/owner of that team.
     """
-    data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
-    if getattr(request, 'user', None) and request.user.is_authenticated:
-        data['user'] = str(request.user.pk)
+    data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+    if getattr(request, "user", None) and request.user.is_authenticated:
+        data["user"] = str(request.user.pk)
     serializer = TicketSerializer(data=data)
     if serializer.is_valid():
         user_id = data.get("user")
@@ -293,8 +354,14 @@ def create_ticket(request):
             user = User.objects.get(pk=user_id)
         except User.DoesNotExist:
             return Response({"user": ["User not found."]}, status=status.HTTP_400_BAD_REQUEST)
-        ticket = serializer.save(user=user, status=data.get("status", "new"))
-        # Usage/billing: attribute to request.user.preferences.active_team when needed
+        team_obj = None
+        if request.user and request.user.is_authenticated:
+            tid = active_team_id_for_user(request.user)
+            if tid:
+                from base.models import Team
+
+                team_obj = Team.objects.filter(pk=tid).first()
+        ticket = serializer.save(user=user, status=data.get("status", "new"), team=team_obj)
         TicketInteraction.objects.create(
             ticket=ticket,
             user=user,
@@ -318,11 +385,17 @@ def create_ticket(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def clarify_ticket(request, ticket_id):
     """
     Add clarification to a ticket (web portal).
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"error": "You do not have permission to modify this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     description = request.data.get("description")
     issue_type = request.data.get("issue_type")
     if not description or not issue_type:
@@ -332,7 +405,7 @@ def clarify_ticket(request, ticket_id):
     ticket.save()
     TicketInteraction.objects.create(
         ticket=ticket,
-        user=ticket.user,
+        user=request.user,
         interaction_type="clarification",
         content=f"User clarified: Description='{description}', Issue Type='{issue_type}'"
     )
@@ -341,37 +414,65 @@ def clarify_ticket(request, ticket_id):
     return Response(TicketSerializer(ticket).data)
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def feedback_ticket(request, ticket_id):
     """
     Add feedback to a ticket (web portal).
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"error": "You do not have permission to modify this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     feedback = request.data.get("feedback")
     if not feedback:
         return Response({"error": "Feedback is required."}, status=400)
     TicketInteraction.objects.create(
         ticket=ticket,
-        user=ticket.user,
+        user=request.user,
         interaction_type="feedback",
         content=f"User feedback: {feedback}"
     )
     return Response({"message": "Feedback received."})
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def ticket_history(request, ticket_id):
     """
     Get ticket history (recent interactions).
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"error": "You do not have permission to access this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     interactions = TicketInteraction.objects.filter(ticket=ticket).order_by("-created_at")[:10]
     serializer = TicketInteractionSerializer(interactions, many=True)
     return Response(serializer.data)
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
+def ticket_categories(request):
+    """
+    Allowed ticket category values — from Ticket.CATEGORY_CHOICES (not a separate DB table).
+    """
+    return Response(
+        {
+            "categories": [
+                {"value": value, "label": label} for value, label in Ticket.CATEGORY_CHOICES
+            ]
+        }
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def list_tickets(request):
     """
-    List tickets for the current user (staff see all). Query params: status, limit, offset.
+    List tickets visible to the current user (active team queue and/or personal legacy).
+    Query params: status, limit, offset.
     """
     status_param = request.GET.get("status")
     limit = request.GET.get("limit")
@@ -402,6 +503,11 @@ def get_ticket(request, ticket_id):
     Includes comments (user_message interactions) for the ticket panel.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not _can_access_ticket(request, ticket):
+        return Response(
+            {"error": "You do not have permission to access this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     serializer = TicketSerializer(ticket)
     data = dict(serializer.data)
     # Include comments so the ticket panel can display them
@@ -438,6 +544,11 @@ def update_ticket(request, ticket_id):
     Example body: {"status": "resolved"}
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not _can_access_ticket(request, ticket):
+        return Response(
+            {"error": "You do not have permission to modify this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     serializer = TicketSerializer(ticket, data=request.data, partial=True)
     if serializer.is_valid():
         serializer.save()
@@ -452,35 +563,74 @@ def delete_ticket(request, ticket_id):
     Delete a ticket.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not _can_access_ticket(request, ticket):
+        return Response(
+            {"error": "You do not have permission to delete this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     ticket.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
+@throttle_classes([TicketSearchThrottle])
 def search_tickets(request):
     """
-    Search and filter tickets (scoped to current user; staff see all).
-    Query params: q (keyword), status, category, created_after, created_before
+    Search tickets: yours (full records) plus anonymized resolved matches from others.
+
+    - my_tickets: tickets you created or are assigned to (same filters as before).
+    - community_resolved: other users' resolved tickets matching q (min 2 chars),
+      safe previews only — you cannot open these ticket IDs in the API.
+
+    Query params: q, status, category, created_after, created_before
     """
-    queryset = _tickets_for_user(request)
-    q = request.GET.get("q")
-    if q:
-        queryset = queryset.filter(description__icontains=q)
+    mine_qs = _tickets_for_user(request)
+    q_raw = request.GET.get("q") or ""
+    q_strip = q_raw.strip()
+    if q_strip:
+        mine_qs = mine_qs.filter(
+            Q(description__icontains=q_strip) | Q(issue_type__icontains=q_strip)
+        )
     status_param = request.GET.get("status")
     if status_param:
-        queryset = queryset.filter(status=status_param)
+        mine_qs = mine_qs.filter(status=status_param)
     category = request.GET.get("category")
     if category:
-        queryset = queryset.filter(category=category)
+        mine_qs = mine_qs.filter(category=category)
     created_after = request.GET.get("created_after")
     if created_after:
-        queryset = queryset.filter(created_at__gte=created_after)
+        mine_qs = mine_qs.filter(created_at__gte=created_after)
     created_before = request.GET.get("created_before")
     if created_before:
-        queryset = queryset.filter(created_at__lte=created_before)
-    serializer = TicketSerializer(queryset.order_by("-created_at"), many=True)
-    return Response(serializer.data)
+        mine_qs = mine_qs.filter(created_at__lte=created_before)
+
+    mine_data = TicketSerializer(mine_qs.order_by("-created_at"), many=True).data
+
+    community_hints = []
+    if len(q_strip) >= 2 and (not status_param or status_param == "resolved"):
+        visible_ids = list(_tickets_for_user(request).values_list("ticket_id", flat=True))
+        team_tid = active_team_id_for_user(request.user)
+        cq = Ticket.objects.filter(status="resolved").exclude(ticket_id__in=visible_ids).filter(
+            Q(description__icontains=q_strip) | Q(issue_type__icontains=q_strip)
+        )
+        if team_tid:
+            cq = cq.filter(team_id=team_tid)
+        if category:
+            cq = cq.filter(category=category)
+        if created_after:
+            cq = cq.filter(created_at__gte=created_after)
+        if created_before:
+            cq = cq.filter(created_at__lte=created_before)
+        cq = cq.order_by("-updated_at")[:20]
+        community_hints = [_ticket_community_search_hint(t) for t in cq]
+
+    return Response(
+        {
+            "my_tickets": mine_data,
+            "community_resolved": community_hints,
+        }
+    )
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
@@ -490,6 +640,11 @@ def upload_attachment(request, ticket_id):
     Upload an attachment (file) to a ticket. Use multipart/form-data.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not _can_access_ticket(request, ticket):
+        return Response(
+            {"error": "You do not have permission to modify this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     file = request.FILES.get("file")
     if not file:
         return Response({"error": "No file uploaded."}, status=400)
@@ -511,7 +666,7 @@ def add_comment(request, ticket_id):
     Body: {"comment": "..."}
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    if ticket.user != request.user and not request.user.is_staff:
+    if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You don't have permission to comment on this ticket."},
             status=status.HTTP_403_FORBIDDEN
@@ -535,7 +690,7 @@ def escalate_ticket(request, ticket_id):
     Body (optional): {"conversation_summary": "..."} - brief context for human agents.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    if ticket.user != request.user and not request.user.is_staff:
+    if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You don't have permission to escalate this ticket."},
             status=status.HTTP_403_FORBIDDEN
@@ -571,26 +726,38 @@ def escalate_ticket(request, ticket_id):
     })
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def assign_ticket(request, ticket_id):
     """
-    Assign or reassign a ticket to an agent.
-    Body: {"agent_id": "..."}
+    Assign or reassign a ticket. Assignee must belong to the ticket's team when set.
+    Body: {"agent_id": "<user UUID>"}
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not _can_access_ticket(request, ticket):
+        return Response(
+            {"error": "You do not have permission to assign this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     agent_id = request.data.get("agent_id")
     if not agent_id:
         return Response({"error": "agent_id is required."}, status=400)
-    from base.models import User
-    agent = get_object_or_404(User, user_id=agent_id)
+    agent = get_object_or_404(User, pk=agent_id)
+    if not user_can_assign_agent(ticket, agent):
+        return Response(
+            {"error": "Assignee must be a member or owner of this ticket's team."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     ticket.assigned_to = agent
     ticket.save()
     TicketInteraction.objects.create(
         ticket=ticket,
-        user=agent,
+        user=request.user,
         interaction_type="user_message",
-        content="Ticket assigned to agent."
+        content=f"Ticket assigned to {agent.get_full_name() or agent.email}.",
     )
-    return Response({"message": f"Ticket assigned to {agent.name}."})
+    dispatch_ticket_assigned_email(ticket, agent, request.user)
+    assignee_name = agent.get_full_name() or agent.email or agent.username
+    return Response({"message": f"Ticket assigned to {assignee_name}."})
 
 def _notify_ticket_status_change(ticket, new_status):
     """Create in-app notification for ticket owner and trigger Slack if applicable."""
@@ -670,6 +837,7 @@ def update_ticket_status(request, ticket_id):
     )
     if previous_status != canonical:
         _notify_ticket_status_change(ticket, canonical)
+        dispatch_ticket_status_emails(ticket, previous_status, canonical)
     return Response({
         "message": f"Ticket status updated to {canonical}.",
         "ticket": TicketSerializer(ticket).data,
@@ -679,16 +847,14 @@ def update_ticket_status(request, ticket_id):
 @permission_classes([IsAuthenticated])
 def escalation_queue(request):
     """
-    List escalated tickets for support staff.
-    Staff only (is_staff=True). Returns tickets needing human attention.
+    List escalated tickets visible to the current user (created by or assigned to them).
     Query params: limit (default 50), offset (default 0).
     """
-    if not getattr(request.user, "is_staff", False):
-        return Response({"error": "Staff access required."}, status=status.HTTP_403_FORBIDDEN)
     limit = min(int(request.GET.get("limit", 50)), 100)
     offset = int(request.GET.get("offset", 0))
     queryset = (
-        Ticket.objects.filter(status="escalated")
+        _tickets_for_user(request)
+        .filter(status="escalated")
         .select_related("user")
         .order_by("-created_at")
     )
@@ -707,13 +873,17 @@ def escalation_queue(request):
 @permission_classes([IsAuthenticated])
 def agent_dashboard(request):
     """
-    Agent/admin dashboard: summary of open/closed tickets, response times, performance, etc.
+    Dashboard summary for the current user: open/closed tickets and response times (scoped).
     """
-    open_tickets = Ticket.objects.filter(
+    scope = _tickets_for_user(request)
+    open_tickets = scope.filter(
         status__in=["new", "open", "in_progress", "in-progress", "escalated"]
     ).count()
-    closed_tickets = Ticket.objects.filter(status="resolved").count()
-    avg_response = TicketInteraction.objects.filter(interaction_type="agent_response").aggregate(avg=Avg("created_at"))
+    closed_tickets = scope.filter(status="resolved").count()
+    avg_response = TicketInteraction.objects.filter(
+        interaction_type="agent_response",
+        ticket__in=scope,
+    ).aggregate(avg=Avg("created_at"))
     return Response({
         "open_tickets": open_tickets,
         "closed_tickets": closed_tickets,
@@ -731,8 +901,15 @@ def bulk_update_tickets(request):
     status_val = request.data.get("status")
     if not ids or not status_val:
         return Response({"error": "ticket_ids and status are required."}, status=400)
-    Ticket.objects.filter(ticket_id__in=ids).update(status=status_val)
-    return Response({"message": f"Updated {len(ids)} tickets to {status_val}."})
+    allowed = set(_tickets_for_user(request).values_list("ticket_id", flat=True))
+    try:
+        filtered = [int(i) for i in ids if int(i) in allowed]
+    except (TypeError, ValueError):
+        return Response({"error": "ticket_ids must be integers."}, status=400)
+    if not filtered:
+        return Response({"message": "No tickets updated.", "updated": 0})
+    Ticket.objects.filter(ticket_id__in=filtered).update(status=status_val)
+    return Response({"message": f"Updated {len(filtered)} tickets to {status_val}.", "updated": len(filtered)})
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -741,6 +918,11 @@ def suggest_kb_articles(request, ticket_id):
     Suggest relevant knowledge base articles for a ticket.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not _can_access_ticket(request, ticket):
+        return Response(
+            {"error": "You do not have permission to access this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     from knowledge_base.models import KnowledgeBaseArticle
     articles = KnowledgeBaseArticle.objects.filter(category=ticket.category)[:5]
     return Response({"suggestions": [a.title for a in articles]})
@@ -753,6 +935,11 @@ def add_internal_note(request, ticket_id):
     Body: {"note": "..."}
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not _can_access_ticket(request, ticket):
+        return Response(
+            {"error": "You do not have permission to access this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     note = request.data.get("note")
     if not note:
         return Response({"error": "Note is required."}, status=400)
@@ -772,6 +959,11 @@ def audit_log(request, ticket_id):
     Get audit log (all interactions) for a ticket.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not _can_access_ticket(request, ticket):
+        return Response(
+            {"error": "You do not have permission to access this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     interactions = TicketInteraction.objects.filter(ticket=ticket).order_by("created_at")
     serializer = TicketInteractionSerializer(interactions, many=True)
     return Response(serializer.data)
@@ -783,8 +975,16 @@ def ai_suggestions(request, ticket_id):
     Get AI-suggested solutions or similar tickets for a ticket.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    # Similar tickets can be from other users (suggestions) - return last 3 resolved in same category
-    similar = Ticket.objects.filter(category=ticket.category, status="resolved").exclude(ticket_id=ticket_id)[:3]
+    if not _can_access_ticket(request, ticket):
+        return Response(
+            {"error": "You do not have permission to access this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    similar = (
+        _tickets_for_user(request)
+        .filter(category=ticket.category, status="resolved")
+        .exclude(ticket_id=ticket_id)[:3]
+    )
     return Response({"similar_tickets": TicketSerializer(similar, many=True).data})
 
 @api_view(["GET"])
@@ -793,20 +993,21 @@ def ai_suggestions(request, ticket_id):
 def agent_analytics(request):
     """
     Get comprehensive AI agent analytics and performance metrics.
-    Scoped to current user's tickets (staff see all).
+    Scoped to tickets the user created or is assigned to.
     """
     try:
+        scope = _tickets_for_user(request)
         # Get total tickets processed by agent
-        total_processed = Ticket.objects.filter(agent_processed=True).count()
-        total_tickets = Ticket.objects.count()
+        total_processed = scope.filter(agent_processed=True).count()
+        total_tickets = scope.count()
         processing_rate = (total_processed / total_tickets * 100) if total_tickets > 0 else 0
         
         # Get resolution success rate (tickets with agent_response that were resolved)
-        agent_resolved = Ticket.objects.filter(agent_processed=True, status='resolved').count()
+        agent_resolved = scope.filter(agent_processed=True, status='resolved').count()
         resolution_success_rate = (agent_resolved / total_processed * 100) if total_processed > 0 else 0
         
         # Get average confidence scores from agent responses
-        tickets_with_confidence = Ticket.objects.filter(
+        tickets_with_confidence = scope.filter(
             agent_processed=True, 
             agent_response__isnull=False
         ).exclude(agent_response={})
@@ -854,11 +1055,13 @@ def agent_analytics(request):
                 'medium': medium_confidence_count,
                 'low': low_confidence_count
             },
-            'knowledge_base': {
-                'total_articles': kb_articles_count,
-                'recent_articles': recent_kb_articles
+            'platform': {
+                'knowledge_base': {
+                    'total_articles': kb_articles_count,
+                    'recent_articles_30d': recent_kb_articles,
+                },
+                'high_confidence_autonomous_solutions': auto_solutions_count,
             },
-            'autonomous_solutions': auto_solutions_count,
             'agent_status': 'active',
             'last_updated': timezone.now().isoformat()
         })
@@ -935,15 +1138,18 @@ def enhanced_kb_search(request):
         )
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def agent_recommendations(request):
     """
     Get proactive AI recommendations for current ticket backlog and patterns.
+    Scoped to the current user's visible tickets.
     """
     try:
         recommendations = []
+        scope = _tickets_for_user(request)
         
         # Identify tickets that need attention
-        pending_tickets = Ticket.objects.filter(
+        pending_tickets = scope.filter(
             status__in=['new', 'open', 'pending']
         ).order_by('-created_at')[:10]
         
@@ -978,8 +1184,8 @@ def agent_recommendations(request):
                         'confidence': confidence
                     })
             
-            # Check for similar resolved tickets
-            similar = Ticket.objects.filter(
+            # Check for similar resolved tickets (same visibility scope)
+            similar = scope.filter(
                 category=ticket.category,
                 status='resolved'
             ).exclude(ticket_id=ticket.ticket_id)[:1]
@@ -1014,8 +1220,7 @@ def agent_recommendations(request):
 @throttle_classes([RollbackThrottle])
 def rollback_action(request, action_history_id):
     """
-    Rollback an autonomous action (admin/manager only).
-    Enables recovery from incorrect agent decisions.
+    Rollback an autonomous action on a ticket the user owns or is assigned to.
     
     Request body:
     {
@@ -1024,16 +1229,14 @@ def rollback_action(request, action_history_id):
     """
     from .rollback import RollbackManager
     
-    # Check permissions - only staff and managers can rollback
-    if not request.user.is_staff and not hasattr(request.user, 'role'):
-        return Response(
-            {'error': 'Only admins and managers can rollback actions'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-    
     try:
-        action_history = ActionHistory.objects.get(id=action_history_id)
-        
+        action_history = ActionHistory.objects.select_related("ticket").get(id=action_history_id)
+        if not user_can_access_ticket(request.user, action_history.ticket):
+            return Response(
+                {"error": "You do not have permission to rollback this action."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         # Check if already rolled back
         if action_history.rolled_back:
             return Response(
@@ -1182,10 +1385,11 @@ def submit_resolution_feedback(request, ticket_id):
 def resolution_analytics(request):
     """
     Get analytics on resolution feedback and success rates.
-    Helps validate autonomous agent performance.
+    Scoped to tickets the user created or is assigned to.
     """
     try:
-        resolution_qs = TicketResolution.objects.all()
+        visible_ids = _tickets_for_user(request).values_list("ticket_id", flat=True)
+        resolution_qs = TicketResolution.objects.filter(ticket_id__in=visible_ids)
         total_resolutions = resolution_qs.count()
         confirmed_resolutions = resolution_qs.filter(resolution_confirmed=True).count()
         failed_resolutions = resolution_qs.filter(resolution_confirmed=False).count()
@@ -1238,7 +1442,7 @@ API Endpoints for Ticket Management (Web Portal)
 9. POST   /api/tickets/<ticket_id>/process/   - Manually trigger agent processing
 10. GET   /api/tickets/tasks/<task_id>/status/ - Get Celery task status
 11. GET   /api/tickets/<ticket_id>/agent-status/ - Get agent processing status and history
-12. GET   /api/tickets/search/                 - Search and filter tickets
+12. GET   /api/tickets/search/                 - Search (my_tickets + community_resolved hints)
 13. POST  /api/tickets/<ticket_id>/upload/    - Upload an attachment to a ticket
 14. POST  /api/tickets/<ticket_id>/comment/   - Add a comment to a ticket
 15. POST  /api/tickets/<ticket_id>/escalate/  - Escalate a ticket

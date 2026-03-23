@@ -34,6 +34,10 @@ class RegisterSerializer(serializers.ModelSerializer):
         return data
 
 
+class GoogleAuthSerializer(serializers.Serializer):
+    credential = serializers.CharField(write_only=True, required=True)
+
+
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
@@ -232,13 +236,24 @@ class UserProfileSerializer(serializers.ModelSerializer):
     profile_image_url = serializers.SerializerMethodField()
     user_email = serializers.CharField(source='user.email', read_only=True)
     user_full_name = serializers.CharField(source='user.full_name', read_only=True)
+    user_id = serializers.UUIDField(source='user.id', read_only=True)
+    # Stored on User; write_only so ModelSerializer does not read from Profile.
+    first_name = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, max_length=150
+    )
+    last_name = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, max_length=150
+    )
 
     class Meta:
         model = Profile
         fields = [
             'id',
+            'user_id',
             'user_email',
             'user_full_name',
+            'first_name',
+            'last_name',
             'profile_image',
             'profile_image_url',
             'thumbnail_url',
@@ -271,10 +286,27 @@ class UserProfileSerializer(serializers.ModelSerializer):
             ImageProcessor.validate_image(value)
         return value
 
-
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        ret['first_name'] = instance.user.first_name or ''
+        ret['last_name'] = instance.user.last_name or ''
+        return ret
 
     def update(self, instance, validated_data):
-        """Handle image updates properly."""
+        """Handle image updates and User first/last name."""
+        first_name = validated_data.pop('first_name', serializers.empty)
+        last_name = validated_data.pop('last_name', serializers.empty)
+        user = instance.user
+        user_update_fields = []
+        if first_name is not serializers.empty:
+            user.first_name = first_name
+            user_update_fields.append('first_name')
+        if last_name is not serializers.empty:
+            user.last_name = last_name
+            user_update_fields.append('last_name')
+        if user_update_fields:
+            user.save(update_fields=user_update_fields)
+
         profile_image = validated_data.get('profile_image')
 
         if profile_image:
@@ -622,3 +654,10 @@ class ContactRequestSerializer(serializers.Serializer):
             company_size=validated_data['company_size'],
             ip_address=validated_data.get('ip_address')
         )
+
+
+class PortalSupportContactSerializer(serializers.Serializer):
+    """Authenticated portal user contacting support (e.g. from Billing)."""
+    message = serializers.CharField(min_length=10, max_length=8000, trim_whitespace=True)
+    subject = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
+    page_context = serializers.CharField(max_length=64, required=False, default='billing')

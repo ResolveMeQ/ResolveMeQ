@@ -2,6 +2,7 @@
 Billing and subscription API views.
 """
 import logging
+import os
 
 from django.conf import settings as django_settings
 from rest_framework import permissions, status
@@ -11,14 +12,16 @@ from rest_framework.response import Response
 from base.billing.exceptions import BillingConfigurationError
 from base.billing.gateways.factory import get_billing_gateway
 from base.billing.payment_sync import sync_invoices_from_dodo
-from base.models import Plan, Subscription, Invoice, Team, PlanGatewayProduct
+from base.models import Plan, Subscription, Invoice, Team, PlanGatewayProduct, SupportContactSubmission
 from base.serializers import (
     PlanSerializer,
     SubscriptionSerializer,
     InvoiceSerializer,
     BillingCheckoutSessionSerializer,
     BillingChangePlanSerializer,
+    PortalSupportContactSerializer,
 )
+from base.tasks import dispatch_send_email_with_template
 
 logger = logging.getLogger(__name__)
 
@@ -391,3 +394,89 @@ class BillingCustomerPortalView(GenericAPIView):
                 body = getattr(exc, 'body', None) or {}
                 detail = body.get('message') or body.get('detail') or detail
             return Response({'detail': detail or 'Failed to open billing portal.'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def _support_contact_client_ip(request):
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        return x_forwarded_for.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR')
+
+
+def _support_contact_notify_recipients():
+    raw = os.getenv('SUPPORT_CONTACT_NOTIFY_EMAILS', '').strip()
+    if raw:
+        return [e.strip() for e in raw.split(',') if e.strip()]
+    single = (getattr(django_settings, 'SUPPORT_EMAIL', None) or '').strip()
+    return [single] if single else []
+
+
+def _email_admins_support_submission(submission):
+    recipients = _support_contact_notify_recipients()
+    if not recipients:
+        logger.warning(
+            'Support contact submission %s saved but no notify emails configured '
+            '(set SUPPORT_CONTACT_NOTIFY_EMAILS or SUPPORT_EMAIL).',
+            submission.id,
+        )
+        return
+    app_name = getattr(django_settings, 'APP_NAME', 'ResolveMeQ')
+    subj = (submission.subject or '').strip() or 'Billing / account help'
+    data = {
+        'subject': f'[{app_name}] Support: {subj} — {submission.email}',
+    }
+    uname = ''
+    if submission.user_id and submission.user:
+        uname = (submission.user.get_full_name() or '').strip() or submission.user.email
+    context = {
+        'app_name': app_name,
+        'submitter_email': submission.email,
+        'submitter_name': uname or submission.email,
+        'user_id': str(submission.user_id) if submission.user_id else '—',
+        'subject_line': subj,
+        'message': submission.message,
+        'page_context': submission.page_context or 'billing',
+        'created_at': submission.created_at.isoformat() if submission.created_at else '',
+        'ip_address': submission.ip_address or '—',
+    }
+    try:
+        dispatch_send_email_with_template(
+            data,
+            'support_contact_admin.html',
+            context,
+            recipients,
+        )
+    except Exception as exc:
+        logger.exception('Failed to send support contact admin email: %s', exc)
+
+
+class BillingSupportContactView(GenericAPIView):
+    """
+    Logged-in user submits a support message from the portal (Billing page).
+    Persists SupportContactSubmission and emails configured admin addresses.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        ser = PortalSupportContactSerializer(data=request.data)
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+        subj = (ser.validated_data.get('subject') or '').strip()
+        page = (ser.validated_data.get('page_context') or 'billing').strip()[:64] or 'billing'
+        submission = SupportContactSubmission.objects.create(
+            user=request.user,
+            email=(request.user.email or '').strip() or 'unknown@invalid',
+            subject=subj[:200],
+            message=ser.validated_data['message'],
+            page_context=page,
+            ip_address=_support_contact_client_ip(request),
+        )
+        _email_admins_support_submission(submission)
+        return Response(
+            {
+                'ok': True,
+                'message': 'Thanks — we received your message and will get back to you soon.',
+                'id': str(submission.id),
+            },
+            status=status.HTTP_201_CREATED,
+        )

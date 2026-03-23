@@ -13,6 +13,7 @@ from django.db.models import Count, Q, Avg
 from datetime import timedelta
 
 from .models import Ticket, ActionHistory
+from .scoping import tickets_queryset_for_request, user_can_access_ticket
 from .serializers import ActionHistorySerializer
 from .cache_decorators import cache_api_response, no_cache
 from knowledge_base.models import KnowledgeBaseArticle
@@ -44,6 +45,11 @@ def paginated_action_history(request, ticket_id):
     Example: GET /api/tickets/42/action-history-paginated/?page=1&limit=20&sort=desc
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"detail": "You do not have permission to access this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
     # Get sort parameter
     sort_order = request.query_params.get('sort', 'desc')
@@ -82,7 +88,7 @@ def dashboard_summary(request):
     Example: GET /api/tickets/agent/dashboard-summary/
     """
     try:
-        base_qs = Ticket.objects.all()
+        base_qs = tickets_queryset_for_request(request)
         # Basic metrics
         total_tickets = base_qs.count()
         processed_by_agent = base_qs.filter(agent_processed=True).count()
@@ -232,8 +238,8 @@ def filtered_recommendations(request):
     Example: GET /api/tickets/agent/recommendations/?confidence_min=0.8&action_type=AUTO_RESOLVE&sort_by=confidence_desc
     """
     try:
-        # Base queryset - tickets processed by agent (not yet resolved)
-        queryset = Ticket.objects.filter(
+        # Base queryset - tickets processed by agent (not yet resolved), visibility-scoped
+        queryset = tickets_queryset_for_request(request).filter(
             agent_processed=True,
             agent_response__isnull=False
         ).exclude(agent_response={})

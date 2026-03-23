@@ -10,19 +10,42 @@ from base.models import User, InAppNotification
 logger = logging.getLogger(__name__)
 
 
-def _send_escalation_email(staff_user, ticket, params):
-    """Send escalation email to a staff member. Runs in Celery for async delivery."""
-    email = getattr(staff_user, "email", None)
-    if not email or not email.strip():
+def _escalation_recipient_emails():
+    """
+    Email addresses to notify on escalation (operators — not tied to is_staff / is_superuser).
+    Set Django ADMINS and/or SUPPORT_ESCALATION_EMAILS in settings.
+    """
+    emails = []
+    for _, email in getattr(settings, "ADMINS", []) or []:
+        if email and str(email).strip():
+            emails.append(str(email).strip())
+    extra = getattr(settings, "SUPPORT_ESCALATION_EMAILS", None)
+    if isinstance(extra, str) and extra.strip():
+        emails.append(extra.strip())
+    elif isinstance(extra, (list, tuple)):
+        for e in extra:
+            if e and str(e).strip():
+                emails.append(str(e).strip())
+    seen = set()
+    out = []
+    for e in emails:
+        key = e.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(e)
+    return out
+
+
+def _send_escalation_email(to_email, ticket, params):
+    """Queue escalation email to an address. Runs in Celery for async delivery."""
+    email = str(to_email).strip()
+    if not email:
         return
     frontend_url = getattr(settings, "FRONTEND_URL", "https://app.resolvemeq.net")
     view_url = f"{frontend_url}/tickets?highlight={ticket.ticket_id}"
     requester = getattr(ticket.user, "email", None) or getattr(ticket.user, "username", None) or "User"
-    staff_name = getattr(staff_user, "first_name", None) or getattr(staff_user, "username", None) or "Support"
-    if hasattr(staff_user, "get_full_name") and staff_user.get_full_name():
-        staff_name = staff_user.get_full_name()
     context = {
-        "staff_name": staff_name,
+        "staff_name": "Support",
         "ticket_id": ticket.ticket_id,
         "requester_email": requester,
         "issue_type": ticket.issue_type or "Support needed",
@@ -42,26 +65,32 @@ def _send_escalation_email(staff_user, ticket, params):
 
 def notify_support_escalation(ticket, params):
     """
-    Notify support staff when a ticket is escalated.
-    Creates in-app notifications, sends emails, and optionally posts to Slack.
+    Notify configured operators when a ticket is escalated (see ADMINS / SUPPORT_ESCALATION_EMAILS).
+    In-app notifications only for User accounts whose email matches those addresses.
     """
     try:
-        for user in User.objects.filter(is_staff=True):
-            if user.id == ticket.user_id:
-                continue
-            InAppNotification.objects.create(
-                user=user,
-                type=InAppNotification.Type.WARNING,
-                title="Ticket escalated",
-                message=(
-                    f"Ticket #{ticket.ticket_id} from "
-                    f"{getattr(ticket.user, 'email', ticket.user.username or 'User')}: "
-                    f"{ticket.issue_type or 'Support needed'}"
-                ),
-                link=f"/tickets?highlight={ticket.ticket_id}",
+        emails = _escalation_recipient_emails()
+        if not emails:
+            logger.info(
+                "Escalation ticket #%s: configure ADMINS or SUPPORT_ESCALATION_EMAILS for operator alerts.",
+                ticket.ticket_id,
             )
+        else:
             if getattr(settings, "EMAIL_HOST_USER", None):
-                _send_escalation_email(user, ticket, params)
+                for email in emails:
+                    _send_escalation_email(email, ticket, params)
+            for user in User.objects.filter(email__in=emails, is_active=True).exclude(id=ticket.user_id):
+                InAppNotification.objects.create(
+                    user=user,
+                    type=InAppNotification.Type.WARNING,
+                    title="Ticket escalated",
+                    message=(
+                        f"Ticket #{ticket.ticket_id} from "
+                        f"{getattr(ticket.user, 'email', ticket.user.username or 'User')}: "
+                        f"{ticket.issue_type or 'Support needed'}"
+                    ),
+                    link=f"/tickets?highlight={ticket.ticket_id}",
+                )
         try:
             from integrations.views import notify_support_escalation_slack
             notify_support_escalation_slack(ticket, params)

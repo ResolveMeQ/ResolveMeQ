@@ -12,6 +12,7 @@ import requests
 import logging
 
 from .models import Ticket, TicketResolution
+from .scoping import user_can_access_ticket
 from .chat_models import Conversation, ChatMessage, QuickReply
 from .chat_serializers import (
     ConversationSerializer, ChatMessageSerializer, QuickReplySerializer
@@ -30,7 +31,12 @@ def start_or_get_conversation(request, ticket_id):
     POST: Creates new conversation or returns existing
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"error": "You don't have permission to access this ticket"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     # Get or create active conversation
     conversation, created = Conversation.objects.get_or_create(
         ticket=ticket,
@@ -75,7 +81,12 @@ def send_chat_message(request, ticket_id):
     }
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"error": "You don't have permission to access this ticket"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     message_text = request.data.get('message', '').strip()
     if not message_text:
         return Response(
@@ -170,13 +181,12 @@ def get_conversation_history(request, ticket_id):
     Returns all messages in the active conversation.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    
-    if ticket.user != request.user and not request.user.is_staff:
+    if not user_can_access_ticket(request.user, ticket):
         return Response(
             {"error": "You don't have permission to access this ticket"},
-            status=status.HTTP_403_FORBIDDEN
+            status=status.HTTP_403_FORBIDDEN,
         )
-    
+
     # Get active conversation
     try:
         conversation = Conversation.objects.get(
@@ -206,6 +216,11 @@ def submit_message_feedback(request, ticket_id, message_id):
     }
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"error": "You don't have permission to access this ticket"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     message = get_object_or_404(ChatMessage, id=message_id)
     
     # Permission check
@@ -244,7 +259,12 @@ def get_suggested_questions(request, ticket_id):
     Returns context-aware suggestions based on ticket category and status.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"error": "You don't have permission to access this ticket"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     # Get quick replies for this category
     quick_replies = QuickReply.objects.filter(
         category=ticket.category,
@@ -418,10 +438,17 @@ def _get_ai_chat_response(ticket, message, conversation, user):
         }
             
     except Exception as e:
-        logger.error(f"Error calling AI agent for chat: {e}")
+        # Log full details so we can debug "not hitting the AI" issues
+        import traceback
+        logger.error(
+            "AI agent call failed (chat falling back to placeholder). "
+            "Check AI_AGENT_URL=%s and that the agent service is running. Error: %s",
+            agent_url, str(e)
+        )
+        logger.error("Traceback: %s", traceback.format_exc())
         
-        # Fallback to simple response based on ticket data
-        return _generate_fallback_response(message, ticket, agent_data)
+        # Fallback - make it clear this is a service issue, not the AI being unhelpful
+        return _generate_fallback_response(message, ticket, agent_data, agent_error=str(e))
 
 
 def _extract_actions_from_response(data, ticket, resolution_state=None):
@@ -523,30 +550,22 @@ def _generate_quick_replies(data, ticket, resolution_state=None):
     return replies[:8]
 
 
-def _generate_fallback_response(message, ticket, agent_data):
-    """Generate a helpful fallback response when AI is unavailable."""
-    text = "I understand you're asking about "
-    
-    if ticket.category:
-        text += f"{ticket.category} issues. "
-    
-    if agent_data and isinstance(agent_data, dict):
-        confidence = agent_data.get('confidence', 0)
-        if confidence >= 0.7:
-            text += "Based on our AI analysis, we've identified some potential solutions. Would you like me to share them?"
-        else:
-            text += "This seems like a complex issue. I recommend getting help from our support team."
-    else:
-        text += "Let me analyze your ticket to provide better assistance."
-    
+def _generate_fallback_response(message, ticket, agent_data, agent_error=None):
+    """Generate fallback when AI agent service is unreachable (connection/timeout/error)."""
+    # Be explicit: this is a service connectivity issue, not the AI choosing not to help
+    text = (
+        "The AI assistant is temporarily unavailable (our support bot couldn't connect). "
+        "Please try again in a moment, or use **Talk to a human** below to reach support directly."
+    )
     return {
         'text': text,
-        'confidence': 0.5,
+        'confidence': 0,
         'message_type': 'text',
         'metadata': {
+            'agent_unavailable': True,
             'quick_replies': [
-                {'label': 'Yes, show solutions', 'value': 'Show me the solutions'},
-                {'label': 'No, escalate to human', 'value': 'Connect me with support'},
+                {'label': 'Try again', 'value': 'Please try again'},
+                {'label': 'Talk to a human', 'value': 'I need to speak with support staff'},
             ]
         }
     }

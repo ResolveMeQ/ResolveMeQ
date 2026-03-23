@@ -28,6 +28,14 @@ class Ticket(models.Model):
         ("other", "Other"),
     ]
     ticket_id = models.AutoField(primary_key=True)
+    team = models.ForeignKey(
+        "base.Team",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tickets",
+        help_text="Workspace/team; set from creator's active team when applicable.",
+    )
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     issue_type = models.CharField(max_length=100)
     status = models.CharField(max_length=50)

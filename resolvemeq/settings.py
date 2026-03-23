@@ -2,6 +2,8 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from celery.schedules import crontab
+
 import dj_database_url
 from dotenv import load_dotenv
 import sentry_sdk
@@ -209,6 +211,9 @@ SLACK_REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI")
 # Optional: Slack channel ID (e.g. C01234ABCD) to post escalated tickets for support visibility
 SLACK_ESCALATION_CHANNEL = os.getenv("SLACK_ESCALATION_CHANNEL", "").strip()
 
+# Google Sign-In (Web client ID; must match VITE_GOOGLE_CLIENT_ID in the frontend)
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+
 # Plan limits (used for team creation; can be overridden by Subscription later)
 PLAN_MAX_TEAMS = int(os.getenv('PLAN_MAX_TEAMS', '20'))
 
@@ -248,6 +253,18 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BROKER_HEARTBEAT = 60
 CELERY_BROKER_CONNECTION_TIMEOUT = 30
 
+# Celery Beat — periodic emails (run `celery -A resolvemeq beat` in production)
+DIGEST_EMAIL_HOUR_UTC = int(os.getenv("DIGEST_EMAIL_HOUR_UTC", "8"))
+ENABLE_DIGEST_EMAIL_SCHEDULE = os.getenv(
+    "ENABLE_DIGEST_EMAIL_SCHEDULE", "true"
+).strip().lower() in ("1", "true", "yes", "")
+CELERY_BEAT_SCHEDULE = {}
+if ENABLE_DIGEST_EMAIL_SCHEDULE:
+    CELERY_BEAT_SCHEDULE["daily-user-digest"] = {
+        "task": "base.tasks.send_daily_digest_emails",
+        "schedule": crontab(hour=DIGEST_EMAIL_HOUR_UTC, minute=0),
+    }
+
 # Email Settings
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
@@ -255,7 +272,12 @@ EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True').lower() in ['true', '1', 'yes']
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL')
+# Use a From address on a domain you control; SPF/DKIM/DMARC must authorize this domain or mail lands in spam.
+_default_from = os.getenv('DEFAULT_FROM_EMAIL', '').strip()
+DEFAULT_FROM_EMAIL = _default_from or EMAIL_HOST_USER or 'webmaster@localhost'
+APP_NAME = os.getenv('APP_NAME', 'ResolveMeQ')
+# Optional Reply-To for transactional mail (support inbox).
+SUPPORT_EMAIL = os.getenv('SUPPORT_EMAIL', '').strip()
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
