@@ -75,6 +75,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -138,22 +139,26 @@ CSRF_TRUSTED_ORIGINS = [
     "https://api.resolvemeq.net",
     "https://agent.resolvemeq.net",
     "https://resolvemeq.net",
+    "https://www.resolvemeq.net",
     "http://localhost:5173",
     "http://localhost:5174",
     "http://localhost:3000",
 ]
 
-# CORS Settings for React Frontend (override with comma-separated CORS_ALLOWED_ORIGINS in env)
-CORS_ALLOWED_ORIGINS = [
+# CORS: merge env with defaults so CORS_ALLOWED_ORIGINS in .env *adds* prod domains without
+# stripping localhost (otherwise marketing site on :3000 gets OPTIONS 200 with no ACAO header).
+_CORS_DEFAULT_ORIGINS = [
     "https://app.resolvemeq.net",
     "https://resolvemeq.net",
+    "https://www.resolvemeq.net",
     "http://localhost:5173",
     "http://localhost:5174",
     "http://localhost:3000",
+    "http://127.0.0.1:3000",
 ]
 _cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
-if _cors_origins_env:
-    CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+_cors_extra = [o.strip() for o in _cors_origins_env.split(",") if o.strip()] if _cors_origins_env else []
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys(_CORS_DEFAULT_ORIGINS + _cors_extra))
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -210,6 +215,10 @@ STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 # Optionally, if you have extra static directories:
 # STATICFILES_DIRS = [os.path.join(BASE_DIR, "static")]
+
+# Serve admin / Jazzmin / DRF static assets in production (Gunicorn has no built-in static handler).
+WHITENOISE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
+WHITENOISE_SKIP_COMPRESS_EXTENSIONS = ("jpg", "jpeg", "png", "webp", "zip", "gz", "tgz", "bz2", "tbz", "xz", "br")
 
 
 # Default primary key field type

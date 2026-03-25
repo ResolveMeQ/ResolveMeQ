@@ -21,8 +21,11 @@ COPY . .
 # Install Python dependencies system-wide
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Collect static files
-RUN python manage.py collectstatic --noinput --clear || true
+# Collect static files (dummy DB env — settings load; collectstatic does not connect)
+ENV DJANGO_SETTINGS_MODULE=resolvemeq.settings
+RUN DB_NAME=build DB_USER=build DB_PASSWORD=build DB_HOST=127.0.0.1 DB_PORT=5432 \
+    SECRET_KEY=collectstatic-build-not-secret \
+    python manage.py collectstatic --noinput --clear
 
 # Create non-root user
 RUN useradd -m -u 1000 django && \

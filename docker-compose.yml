@@ -44,7 +44,8 @@ services:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-web:${IMAGE_TAG:-latest}
     restart: unless-stopped
     volumes:
-      - static_files:/app/staticfiles
+      # Do not mount a named volume over /app/staticfiles — an empty volume hides
+      # files from `collectstatic` baked into the image (breaks admin/Jazzmin CSS).
       - media_files:/app/media
     ports:
       - "${WEB_PORT:-8000}:8000"
@@ -215,7 +216,5 @@ volumes:
     name: resolvemeq_postgres_data
   redis_data:
     name: resolvemeq_redis_data
-  static_files:
-    name: resolvemeq_static_files
   media_files:
     name: resolvemeq_media_files
