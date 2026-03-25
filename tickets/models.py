@@ -54,6 +54,16 @@ class Ticket(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     agent_response = models.JSONField(null=True, blank=True, help_text="Response from the AI agent analyzing this ticket")
     agent_processed = models.BooleanField(default=False, help_text="Whether the AI agent has processed this ticket")
+    first_ai_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the ticket first received AI output (analyze task or first AI chat message).",
+    )
+    escalated_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the ticket first moved to escalated status.",
+    )
 
     def __str__(self):
         return f"{self.issue_type} ({self.status})"
@@ -176,6 +186,37 @@ class Ticket(models.Model):
                         "confidence_score": confidence,
                     }
                 )
+
+
+class AgentConfidenceLog(models.Model):
+    """
+    Snapshot of LLM-reported confidence for calibration and analytics (analyze vs chat).
+    """
+
+    SOURCE_ANALYZE = "analyze"
+    SOURCE_CHAT = "chat"
+    SOURCE_CHOICES = [
+        (SOURCE_ANALYZE, "Analyze"),
+        (SOURCE_CHAT, "Chat"),
+    ]
+
+    id = models.AutoField(primary_key=True)
+    ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="confidence_logs")
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, db_index=True)
+    confidence = models.FloatField(null=True, blank=True)
+    recommended_action = models.CharField(max_length=120, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["ticket", "created_at"]),
+            models.Index(fields=["source", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.source} conf={self.confidence} ticket={self.ticket_id}"
+
 
 class TicketInteraction(models.Model):
     """

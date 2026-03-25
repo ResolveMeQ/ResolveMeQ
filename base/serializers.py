@@ -551,6 +551,7 @@ class PlanSerializer(serializers.ModelSerializer):
         model = Plan
         fields = [
             'id', 'name', 'slug', 'is_trial', 'max_teams', 'max_members',
+            'max_agent_operations_per_month',
             'price_monthly', 'price_yearly', 'is_active',
         ]
 

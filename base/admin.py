@@ -1,16 +1,44 @@
+import csv
+
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django import forms
+from django.http import HttpResponse
+from django.utils import timezone
 
 from base.models import (
     Profile, Team, UserPreferences, Plan, Subscription, Invoice,
     PlanGatewayProduct, BillingWebhookDelivery,
     InAppNotification, NewsletterSubscription, ContactRequest,
-    SupportContactSubmission,
+    SupportContactSubmission, AgentUsageMonthly,
 )
 
 User = get_user_model()
+
+
+@admin.action(description='Export selected rows to CSV')
+def export_agent_usage_csv(modeladmin, request, queryset):
+    """Export selected AgentUsageMonthly rows for finance / support."""
+    response = HttpResponse(content_type='text/csv')
+    fname = f'agent_usage_{timezone.now().strftime("%Y%m%d_%H%M")}.csv'
+    response['Content-Disposition'] = f'attachment; filename="{fname}"'
+    writer = csv.writer(response)
+    writer.writerow(
+        ['user_email', 'user_id', 'period_start', 'period_end', 'operations_used', 'updated_at']
+    )
+    for row in queryset.select_related('user').order_by('-period_start', 'user__email'):
+        writer.writerow(
+            [
+                row.user.email,
+                str(row.user_id),
+                row.period_start.isoformat(),
+                row.period_end.isoformat(),
+                row.operations_used,
+                row.updated_at.isoformat() if row.updated_at else '',
+            ]
+        )
+    return response
 
 
 @admin.register(Profile)
@@ -165,9 +193,29 @@ class BillingWebhookDeliveryAdmin(admin.ModelAdmin):
     readonly_fields = ['delivery_id', 'provider', 'event_type', 'created_at']
 
 
+@admin.register(AgentUsageMonthly)
+class AgentUsageMonthlyAdmin(admin.ModelAdmin):
+    list_display = ['user', 'period_start', 'period_end', 'operations_used', 'updated_at']
+    search_fields = ['user__email', 'user__username']
+    date_hierarchy = 'period_start'
+    ordering = ['-period_start', '-operations_used']
+    list_per_page = 50
+    readonly_fields = ['id', 'user', 'period_start', 'period_end', 'operations_used', 'created_at', 'updated_at']
+    actions = [export_agent_usage_csv]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(Plan)
 class PlanAdmin(admin.ModelAdmin):
-    list_display = ['name', 'slug', 'max_teams', 'max_members', 'price_monthly', 'price_yearly', 'is_active']
+    list_display = [
+        'name', 'slug', 'max_teams', 'max_members', 'max_agent_operations_per_month',
+        'price_monthly', 'price_yearly', 'is_active',
+    ]
     list_filter = ['is_active']
     search_fields = ['name', 'slug']
     inlines = [PlanGatewayProductInline]

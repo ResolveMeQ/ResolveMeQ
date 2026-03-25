@@ -11,8 +11,15 @@ from django.conf import settings
 import requests
 import logging
 
-from .models import Ticket, TicketResolution
+from .models import Ticket, TicketInteraction, TicketResolution
+from base.agent_http import get_agent_service_headers
+from base.agent_usage import (
+    get_billing_user_for_ticket,
+    refund_agent_operation,
+    try_consume_agent_operation,
+)
 from .scoping import user_can_access_ticket
+from .outcome_helpers import log_agent_confidence_snapshot, touch_first_ai_at
 from .chat_models import Conversation, ChatMessage, QuickReply
 from .chat_serializers import (
     ConversationSerializer, ChatMessageSerializer, QuickReplySerializer
@@ -80,7 +87,10 @@ def send_chat_message(request, ticket_id):
         }
     }
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.select_related('team', 'team__owner', 'user'),
+        ticket_id=ticket_id,
+    )
     if not user_can_access_ticket(request.user, ticket):
         return Response(
             {"error": "You don't have permission to access this ticket"},
@@ -92,6 +102,19 @@ def send_chat_message(request, ticket_id):
         return Response(
             {"error": "Message text is required"},
             status=status.HTTP_400_BAD_REQUEST
+        )
+
+    billing_user = get_billing_user_for_ticket(ticket)
+    quota = try_consume_agent_operation(billing_user)
+    if not quota.allowed:
+        return Response(
+            {
+                'error': 'agent_quota_exceeded',
+                'detail': 'Your plan monthly AI agent limit has been reached. Upgrade to continue.',
+                'agent_operations_used': quota.used,
+                'agent_operations_limit': quota.limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
         )
     
     conversation_id = request.data.get('conversation_id')
@@ -132,7 +155,8 @@ def send_chat_message(request, ticket_id):
             ticket=ticket,
             message=message_text,
             conversation=conversation,
-            user=request.user
+            user=request.user,
+            billing_user=billing_user,
         )
         
         # Save AI message
@@ -145,17 +169,27 @@ def send_chat_message(request, ticket_id):
             metadata=ai_response.get('metadata', {}),
             agent_response_data=ai_response
         )
+
+        touch_first_ai_at(ticket)
+        log_agent_confidence_snapshot(
+            ticket,
+            "chat",
+            confidence=ai_response.get("confidence"),
+            recommended_action=str(ai_response.get("recommended_action") or ""),
+        )
         
         return Response({
             'conversation_id': str(conversation.id),
             'user_message': ChatMessageSerializer(user_message).data,
             'ai_message': ChatMessageSerializer(ai_message).data,
             'ticket_status': ticket.status,  # may have changed to in_progress on first message
+            'initial_solution_was_helpful': conversation.initial_solution_was_helpful,
         })
         
     except Exception as e:
         logger.error(f"Error getting AI response: {e}")
-        
+        refund_agent_operation(billing_user)
+
         # Create fallback message
         fallback_message = ChatMessage.objects.create(
             conversation=conversation,
@@ -169,6 +203,7 @@ def send_chat_message(request, ticket_id):
             'user_message': ChatMessageSerializer(user_message).data,
             'ai_message': ChatMessageSerializer(fallback_message).data,
             'ticket_status': ticket.status,
+            'initial_solution_was_helpful': conversation.initial_solution_was_helpful,
         }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
@@ -195,11 +230,19 @@ def get_conversation_history(request, ticket_id):
             is_active=True
         )
         serializer = ConversationSerializer(conversation)
-        return Response(serializer.data)
+        data = serializer.data
+        return Response(
+            {
+                "conversation": data,
+                "messages": data.get("messages") or [],
+                "initial_solution_was_helpful": data.get("initial_solution_was_helpful"),
+            }
+        )
     except Conversation.DoesNotExist:
         return Response({
             'conversation': None,
-            'messages': []
+            'messages': [],
+            'initial_solution_was_helpful': None,
         })
 
 
@@ -238,7 +281,9 @@ def submit_message_feedback(request, ticket_id, message_id):
         )
     
     message.was_helpful = (rating == 'helpful')
-    message.feedback_comment = request.data.get('comment', '')
+    # JSON may send "comment": null; .get("comment", "") still returns None when the key exists.
+    raw_comment = request.data.get("comment")
+    message.feedback_comment = "" if raw_comment is None else str(raw_comment).strip()
     from django.utils import timezone
     message.feedback_at = timezone.now()
     message.save()
@@ -248,6 +293,49 @@ def submit_message_feedback(request, ticket_id, message_id):
         'message_id': str(message.id),
         'was_helpful': message.was_helpful
     })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def submit_initial_solution_feedback(request, ticket_id):
+    """
+    Thumbs up/down for the synthetic first-turn message built from ticket.agent_response
+    (no ChatMessage row). Persists on Conversation so the prompt is not shown again.
+    """
+    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"error": "You don't have permission to access this ticket"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    rating = request.data.get("rating")
+    if rating not in ("helpful", "not_helpful"):
+        return Response(
+            {"error": "rating must be 'helpful' or 'not_helpful'"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    conversation, _ = Conversation.objects.get_or_create(
+        ticket=ticket,
+        user=request.user,
+        is_active=True,
+        defaults={"summary": f"Chat about: {ticket.issue_type}"},
+    )
+    conversation.initial_solution_was_helpful = rating == "helpful"
+    conversation.save(update_fields=["initial_solution_was_helpful", "updated_at"])
+
+    TicketInteraction.objects.create(
+        ticket=ticket,
+        user=request.user,
+        interaction_type="feedback",
+        content=f"Initial AI solution marked: {rating}",
+    )
+
+    return Response(
+        {
+            "initial_solution_was_helpful": conversation.initial_solution_was_helpful,
+            "conversation_id": str(conversation.id),
+        }
+    )
 
 
 @api_view(['GET'])
@@ -335,12 +423,14 @@ def _build_resolution_state(ticket, conversation):
     return state
 
 
-def _get_ai_chat_response(ticket, message, conversation, user):
+def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None):
     """
     Internal function to get AI response for a chat message.
     Sends full conversation history and resolution state so the agent responds
     to the user's latest message in context and suggests contextual actions.
     """
+    if billing_user is None:
+        billing_user = get_billing_user_for_ticket(ticket)
     # Full conversation history for continuity (last 15 messages; model responds to latest)
     previous_messages = conversation.messages.order_by('created_at')[:15]
     conversation_history = []
@@ -375,7 +465,7 @@ def _get_ai_chat_response(ticket, message, conversation, user):
         response = requests.post(
             agent_url,  # Use the standard /analyze/ endpoint
             json=payload,
-            headers={'Content-Type': 'application/json'},
+            headers=get_agent_service_headers(),
             timeout=25  # Chat may include RAG + long context; allow a bit more time
         )
         response.raise_for_status()
@@ -437,6 +527,7 @@ def _get_ai_chat_response(ticket, message, conversation, user):
         return {
             'text': chat_text,
             'confidence': data.get('confidence', 0.5),
+            'recommended_action': data.get('recommended_action'),
             'message_type': message_type,
             'metadata': metadata,
         }
@@ -450,7 +541,9 @@ def _get_ai_chat_response(ticket, message, conversation, user):
             agent_url, str(e)
         )
         logger.error("Traceback: %s", traceback.format_exc())
-        
+
+        refund_agent_operation(billing_user)
+
         # Fallback - make it clear this is a service issue, not the AI being unhelpful
         return _generate_fallback_response(message, ticket, agent_data, agent_error=str(e))
 

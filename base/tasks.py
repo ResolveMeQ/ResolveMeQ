@@ -32,6 +32,11 @@ def _email_dispatch_uses_celery() -> bool:
     return "runserver" not in sys.argv
 
 
+def email_dispatch_uses_celery() -> bool:
+    """Public alias for health checks and ops tooling."""
+    return _email_dispatch_uses_celery()
+
+
 def _transactional_from_email() -> Optional[str]:
     """From header: prefer DEFAULT_FROM_EMAIL (must match SPF/DKIM for your domain)."""
     return getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None)
@@ -55,6 +60,17 @@ def dispatch_send_email_with_template(
     else:
         logger.info("Sending email synchronously (no Celery queue for this process)")
         send_email_with_template(data, template_name, context, recipient)
+
+
+@shared_task(name="base.health_ping")
+def health_ping() -> dict:
+    """
+    Lightweight task for monitoring: verifies a worker can dequeue and run a task.
+    Used by GET /api/monitoring/health/services/ (admin) and /health/complete/ (token).
+    """
+    from django.utils import timezone
+
+    return {"ok": True, "worker_timestamp": timezone.now().isoformat()}
 
 
 @shared_task

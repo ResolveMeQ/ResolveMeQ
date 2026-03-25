@@ -24,7 +24,14 @@ class Conversation(models.Model):
     summary = models.TextField(blank=True, help_text="AI-generated summary of conversation")
     resolved = models.BooleanField(default=False)
     resolution_applied = models.BooleanField(default=False, help_text="Did user apply suggested solution?")
-    
+    # When the UI shows the ticket's analyze/agent_response as a synthetic first message (no ChatMessage row),
+    # we store thumbs feedback here so the user is not asked again on reload.
+    initial_solution_was_helpful = models.BooleanField(
+        null=True,
+        blank=True,
+        help_text="True=helpful, False=not helpful, None=not yet rated (injected analyze block).",
+    )
+
     class Meta:
         ordering = ['-updated_at']
         indexes = [

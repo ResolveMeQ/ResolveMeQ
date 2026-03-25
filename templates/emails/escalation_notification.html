@@ -41,6 +41,10 @@
             <p><strong>Conversation context:</strong></p>
             <div class="description">{{conversation_summary}}</div>
             {% endif %}
+            {% if handoff_text %}
+            <p><strong>Handoff packet:</strong></p>
+            <div class="description" style="white-space: pre-wrap;">{{handoff_text}}</div>
+            {% endif %}
             <a href="{{view_url}}" class="cta">View Ticket</a>
         </div>
         <div class="footer">

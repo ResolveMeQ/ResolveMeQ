@@ -1,5 +1,5 @@
 from celery import shared_task
-from celery.exceptions import MaxRetriesExceededError
+from celery.exceptions import MaxRetriesExceededError, Retry
 from django.conf import settings
 import requests
 from .models import Ticket, ActionHistory, TicketResolution
@@ -8,30 +8,55 @@ from resolvemeq.celery import app
 from integrations.views import notify_user_agent_response  # Restored import for Slack feedback
 from solutions.models import Solution
 from .autonomous_agent import AutonomousAgent, AgentAction
+from .confidence_settings import agent_confidence_high
+from .handoff import build_handoff_packet
+from .outcome_helpers import apply_escalated_timestamp, log_agent_confidence_snapshot, touch_first_ai_at
 from monitoring.metrics import AgentMetrics
 from django.utils import timezone
+
+from base.agent_http import get_agent_service_headers
+from base.agent_usage import (
+    get_billing_user_for_ticket,
+    refund_agent_operation,
+    try_consume_agent_operation,
+)
 
 logger = logging.getLogger(__name__)
 
 @app.task(bind=True, max_retries=3)
-def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False):
+def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False, billing_precharged=False):
     """
     Celery task to process a ticket with the AI agent.
     Now includes autonomous decision-making and actions.
-    
+
     Args:
         ticket_id: ID of the ticket to process
         thread_ts: Slack thread timestamp (optional)
         force: If True, re-process even if already processed
+        billing_precharged: If True, monthly quota was already charged (e.g. manual API trigger)
     """
-    logger.info(f"Celery task started for ticket_id={ticket_id} (force={force})")
+    logger.info(
+        f"Celery task started for ticket_id={ticket_id} (force={force}, billing_precharged={billing_precharged})"
+    )
+    billing_user = None
+    agent_saved = False
     try:
-        ticket = Ticket.objects.get(ticket_id=ticket_id)
-        
-        # Skip if already processed (unless force=True)
+        ticket = Ticket.objects.select_related("team", "team__owner", "user").get(ticket_id=ticket_id)
+        billing_user = get_billing_user_for_ticket(ticket)
+
         if ticket.agent_processed and not force:
             logger.info(f"Ticket {ticket_id} already processed by agent (use force=True to re-process)")
+            if billing_precharged:
+                refund_agent_operation(billing_user)
             return False
+
+        if not billing_precharged:
+            quota = try_consume_agent_operation(billing_user)
+            if not quota.allowed:
+                logger.warning(
+                    "Agent quota exceeded for user %s (ticket %s)", getattr(billing_user, "pk", billing_user), ticket_id
+                )
+                return False
 
         # Prepare the payload as expected by FastAPI
         payload = {
@@ -49,7 +74,7 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False):
 
         # Send to agent
         agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.com/api/analyze')
-        headers = {"Content-Type": "application/json"}
+        headers = get_agent_service_headers()
         logger.info(f"Sending POST to FastAPI: {agent_url} with payload: {payload}")
         response = requests.post(agent_url, json=payload, headers=headers, timeout=30)
         logger.info(f"Received response from FastAPI: {response.status_code} {response.text}")
@@ -59,16 +84,26 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False):
         ticket.agent_response = response.json()
         ticket.agent_processed = True
         ticket.save()
+        agent_saved = True
+
+        touch_first_ai_at(ticket)
+        if isinstance(ticket.agent_response, dict):
+            log_agent_confidence_snapshot(
+                ticket,
+                "analyze",
+                confidence=ticket.agent_response.get("confidence"),
+                recommended_action=str(ticket.agent_response.get("recommended_action") or ""),
+            )
 
         # --- NEW: Autonomous Agent Decision Making ---
         autonomous_agent = AutonomousAgent(ticket)
         action, params = autonomous_agent.decide_autonomous_action()
-        
+
         logger.info(f"Autonomous agent decided: {action.value} for ticket {ticket_id}")
-        
+
         # Execute the autonomous action
-        action_result = execute_autonomous_action.delay(ticket_id, action.value, params)
-        
+        execute_autonomous_action.delay(ticket_id, action.value, params)
+
         # --- Create Solution if agent provided steps or resolution ---
         agent_data = ticket.agent_response
         steps = None
@@ -82,7 +117,7 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False):
             elif isinstance(steps, str):
                 pass  # Already a string
         # Mark as solution if confidence is high
-        if steps and confidence >= AutonomousAgent.HIGH_CONFIDENCE_THRESHOLD:
+        if steps and confidence >= agent_confidence_high():
             Solution.objects.get_or_create(
                 ticket=ticket,
                 defaults={
@@ -108,16 +143,20 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False):
             ticket.sync_to_knowledge_base()
 
         logger.info(f"Successfully processed ticket {ticket_id} with autonomous agent")
-        
+
         return True
+
+    except Retry:
+        raise
 
     except requests.RequestException as exc:
         logger.error(f"Error processing ticket {ticket_id} with agent: {str(exc)}")
         try:
-            # Retry with exponential backoff
             self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
         except MaxRetriesExceededError:
             logger.error(f"Max retries exceeded for ticket {ticket_id}")
+            if billing_user:
+                refund_agent_operation(billing_user)
             return False
 
     except Ticket.DoesNotExist:
@@ -126,6 +165,8 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False):
 
     except Exception as e:
         logger.error(f"Unexpected error processing ticket {ticket_id}: {str(e)}")
+        if billing_user and not agent_saved:
+            refund_agent_operation(billing_user)
         return False
 
 @app.task
@@ -239,11 +280,14 @@ def handle_escalate(ticket, params):
     """Escalate the ticket to human support with action history."""
     from integrations.views import notify_escalation
     from tickets.models import TicketInteraction
+
+    params = dict(params or {})
     
     # Capture state before
     before_state = {'status': ticket.status}
     
     ticket.status = "escalated"
+    apply_escalated_timestamp(ticket)
     ticket.save()
     
     # Capture state after
@@ -273,6 +317,12 @@ def handle_escalate(ticket, params):
         content=f"⚠️ Escalated: {reasoning}"
     )
     
+    packet = build_handoff_packet(
+        ticket, ticket.user, params.get("conversation_summary", "")
+    )
+    params["handoff_text"] = packet["handoff_text"]
+    params["handoff_summary"] = packet["handoff_summary"]
+
     # Notify user (Slack + in-app)
     notify_escalation(str(ticket.user.id), ticket.ticket_id, params)
     from .views import _notify_ticket_status_change

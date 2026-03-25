@@ -4,6 +4,12 @@ from datetime import datetime, timedelta
 from django.utils import timezone
 import logging
 
+from .confidence_settings import (
+    agent_confidence_high,
+    agent_confidence_medium,
+    agent_success_prob_auto_resolve,
+)
+
 logger = logging.getLogger(__name__)
 
 class AgentAction(Enum):
@@ -17,13 +23,9 @@ class AgentAction(Enum):
 class AutonomousAgent:
     """
     Autonomous agent that makes decisions and takes actions based on AI analysis.
+    Thresholds come from Django settings (AGENT_CONFIDENCE_*).
     """
-    
-    # Confidence thresholds for different actions
-    HIGH_CONFIDENCE_THRESHOLD = 0.8
-    MEDIUM_CONFIDENCE_THRESHOLD = 0.6
-    LOW_CONFIDENCE_THRESHOLD = 0.3
-    
+
     def __init__(self, ticket):
         self.ticket = ticket
         self.agent_response = ticket.agent_response or {}
@@ -49,13 +51,16 @@ class AutonomousAgent:
         confidence = self.get_confidence()
         recommended_action = self.get_recommended_action()
         success_prob = self.get_success_probability()
-        
+        high = agent_confidence_high()
+        medium = agent_confidence_medium()
+        min_success = agent_success_prob_auto_resolve()
+
         logger.info(f"Agent decision for ticket {self.ticket.ticket_id}: "
                    f"confidence={confidence}, recommended={recommended_action}, success_prob={success_prob}")
         
         # High confidence - take autonomous action
-        if confidence >= self.HIGH_CONFIDENCE_THRESHOLD:
-            if recommended_action == "auto_resolve" and success_prob >= 0.8:
+        if confidence >= high:
+            if recommended_action == "auto_resolve" and success_prob >= min_success:
                 return AgentAction.AUTO_RESOLVE, self._prepare_auto_resolve_params()
             elif recommended_action == "escalate":
                 return AgentAction.ESCALATE, self._prepare_escalate_params()
@@ -68,7 +73,7 @@ class AutonomousAgent:
                 return AgentAction.SCHEDULE_FOLLOWUP, self._prepare_followup_params()
         
         # Medium confidence - take cautious action with user notification
-        elif confidence >= self.MEDIUM_CONFIDENCE_THRESHOLD:
+        elif confidence >= medium:
             if recommended_action == "auto_resolve":
                 return AgentAction.SCHEDULE_FOLLOWUP, self._prepare_followup_params()
             else:

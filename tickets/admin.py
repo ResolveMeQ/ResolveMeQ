@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Ticket, ResolutionTemplate
+from .models import AgentConfidenceLog, Ticket, ResolutionTemplate
 from integrations.models import SlackToken
 from integrations.views import notify_user_ticket_resolved
 import requests
@@ -48,6 +48,15 @@ def export_tickets_csv(modeladmin, request, queryset):
             ticket.updated_at,
         ])
     return response
+
+@admin.register(AgentConfidenceLog)
+class AgentConfidenceLogAdmin(admin.ModelAdmin):
+    list_display = ("id", "ticket", "source", "confidence", "recommended_action", "created_at")
+    list_filter = ("source",)
+    search_fields = ("ticket__ticket_id", "recommended_action")
+    readonly_fields = ("id", "created_at")
+    ordering = ("-created_at",)
+
 
 @admin.register(Ticket)
 class TicketAdmin(admin.ModelAdmin):

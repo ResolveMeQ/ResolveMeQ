@@ -36,17 +36,20 @@ if SENTRY_DSN:
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-xoeau&915nx&jsisbu$@p4h3^iva-4s4bxov6nj5l@y2l48d%r"
+SECRET_KEY = os.getenv(
+    "SECRET_KEY",
+    "django-insecure-xoeau&915nx&jsisbu$@p4h3^iva-4s4bxov6nj5l@y2l48d%r",
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
 
 raw_hosts = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1")
 if raw_hosts == "*":
     ALLOWED_HOSTS = ["*"]
 else:
     ALLOWED_HOSTS = [h.strip() for h in raw_hosts.split(",")]
-FRONTEND_URL = "https://app.resolvemeq.net"
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://app.resolvemeq.net").rstrip("/")
 # Application definition
 
 INSTALLED_APPS = [
@@ -140,7 +143,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
 ]
 
-# CORS Settings for React Frontend
+# CORS Settings for React Frontend (override with comma-separated CORS_ALLOWED_ORIGINS in env)
 CORS_ALLOWED_ORIGINS = [
     "https://app.resolvemeq.net",
     "https://resolvemeq.net",
@@ -148,6 +151,9 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5174",
     "http://localhost:3000",
 ]
+_cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+if _cors_origins_env:
+    CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -224,6 +230,11 @@ GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
 # Plan limits (used for team creation; can be overridden by Subscription later)
 PLAN_MAX_TEAMS = int(os.getenv('PLAN_MAX_TEAMS', '20'))
 
+# AI agent quotas (Plan.max_agent_operations_per_month overrides when set; null plan = use default)
+# Treat empty env as unset (os.getenv returns '' when the variable is set but blank).
+DEFAULT_AGENT_OPERATIONS_PER_MONTH = int((os.getenv('DEFAULT_AGENT_OPERATIONS_PER_MONTH', '500') or '500').strip())
+AGENT_OPS_TRIAL_EXPIRED = int((os.getenv('AGENT_OPS_TRIAL_EXPIRED', '0') or '0').strip())
+
 # Billing / payment gateway (see base.billing.gateways.factory)
 BILLING_GATEWAY = os.getenv('BILLING_GATEWAY', 'dodo').strip().lower()
 DODO_PAYMENTS_API_KEY = os.getenv('DODO_PAYMENTS_API_KEY', '').strip()
@@ -239,7 +250,16 @@ BILLING_CHECKOUT_RETURN_URL = os.getenv('BILLING_CHECKOUT_RETURN_URL', '').strip
 
 # AI Agent Settings
 AI_AGENT_URL = 'https://agent.resolvemeq.net/tickets/analyze/'
+# Shared secret: Django sends X-API-Key; FastAPI agent rejects requests without it when set.
+AI_AGENT_SERVICE_KEY = (os.getenv('AI_AGENT_SERVICE_KEY') or '').strip()
 AGENT_API_KEY = os.getenv('AGENT_API_KEY', 'resolvemeq-agent-secret-key-2026')
+# LLM confidence thresholds (used by AutonomousAgent and Solution creation in tasks)
+AGENT_CONFIDENCE_HIGH = float((os.getenv("AGENT_CONFIDENCE_HIGH", "0.8") or "0.8").strip())
+AGENT_CONFIDENCE_MEDIUM = float((os.getenv("AGENT_CONFIDENCE_MEDIUM", "0.6") or "0.6").strip())
+AGENT_CONFIDENCE_LOW = float((os.getenv("AGENT_CONFIDENCE_LOW", "0.3") or "0.3").strip())
+AGENT_SUCCESS_PROB_AUTO_RESOLVE = float(
+    (os.getenv("AGENT_SUCCESS_PROB_AUTO_RESOLVE", "0.8") or "0.8").strip()
+)
 
 # Agent Rate Limiting
 MAX_AUTONOMOUS_ACTIONS_PER_DAY = int(os.getenv('MAX_AUTONOMOUS_ACTIONS_PER_DAY', '500'))
@@ -271,6 +291,9 @@ if ENABLE_DIGEST_EMAIL_SCHEDULE:
         "task": "base.tasks.send_daily_digest_emails",
         "schedule": crontab(hour=DIGEST_EMAIL_HOUR_UTC, minute=0),
     }
+
+# Optional: token for GET /api/monitoring/health/complete/ (uptime checks without admin JWT)
+MONITORING_HEALTH_SECRET = os.getenv("MONITORING_HEALTH_SECRET", "").strip()
 
 # Email Settings
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
@@ -334,6 +357,7 @@ JAZZMIN_SETTINGS = {
         'base.user': 'fas fa-user',
         'base.team': 'fas fa-people-group',
         'base.plan': 'fas fa-box-open',
+        'base.agentusagemonthly': 'fas fa-robot',
         'base.subscription': 'fas fa-receipt',
         'base.invoice': 'fas fa-file-invoice-dollar',
         'base.plangatewayproduct': 'fas fa-plug',

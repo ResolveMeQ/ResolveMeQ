@@ -49,8 +49,9 @@ services:
     ports:
       - "${WEB_PORT:-8000}:8000"
     environment:
-      - DEBUG=False
+      - DEBUG=${DEBUG:-False}
       - ALLOWED_HOSTS=${ALLOWED_HOSTS}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST:-db}:${DB_PORT:-5432}/${DB_NAME}
       - DB_HOST=${DB_HOST:-db}
       - DB_PORT=${DB_PORT:-5432}
@@ -60,15 +61,17 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://:${REDIS_PASSWORD}@redis:6379/0}
-      - AI_AGENT_URL=${AI_AGENT_URL}  # Set in .env: http://agent-web:8001 or https://domain.com/agent
+      - AI_AGENT_URL=${AI_AGENT_URL}
       - SECRET_KEY=${SECRET_KEY}
       - SENTRY_DSN=${SENTRY_DSN}
       - ENVIRONMENT=${ENVIRONMENT:-production}
       - APP_VERSION=${APP_VERSION:-2.0.0}
+      - MONITORING_HEALTH_SECRET=${MONITORING_HEALTH_SECRET:-}
       - AGENT_API_KEY=${AGENT_API_KEY}
+      - AI_AGENT_SERVICE_KEY=${AI_AGENT_SERVICE_KEY:-}
       - FORCE_SYNC_AGENT_PROCESSING=${FORCE_SYNC_AGENT_PROCESSING:-false}
       - FRONTEND_URL=${FRONTEND_URL:-https://app.resolvemeq.net}
-      # Google Sign-In — set GOOGLE_OAUTH_CLIENT_ID in .env (same value as VITE_GOOGLE_CLIENT_ID on the frontend)
+      # Google Sign-In — same as frontend VITE_GOOGLE_CLIENT_ID
       - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:-}
       - SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
       - SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
@@ -87,7 +90,7 @@ services:
       - EMAIL_USE_CELERY=${EMAIL_USE_CELERY:-true}
       - ENABLE_DIGEST_EMAIL_SCHEDULE=${ENABLE_DIGEST_EMAIL_SCHEDULE:-true}
       - DIGEST_EMAIL_HOUR_UTC=${DIGEST_EMAIL_HOUR_UTC:-8}
-      # Billing (Dodo Payments) — set in server .env next to this compose file
+      # Billing (Dodo Payments)
       - BILLING_GATEWAY=${BILLING_GATEWAY:-dodo}
       - DODO_PAYMENTS_API_KEY=${DODO_PAYMENTS_API_KEY}
       - DODO_PAYMENTS_WEBHOOK_KEY=${DODO_PAYMENTS_WEBHOOK_KEY}
@@ -96,8 +99,11 @@ services:
       - BILLING_TAX_CATEGORY=${BILLING_TAX_CATEGORY:-saas}
       - BILLING_CHECKOUT_RETURN_URL=${BILLING_CHECKOUT_RETURN_URL:-}
       - PLAN_MAX_TEAMS=${PLAN_MAX_TEAMS:-20}
+      - DEFAULT_AGENT_OPERATIONS_PER_MONTH=${DEFAULT_AGENT_OPERATIONS_PER_MONTH:-500}
+      - AGENT_OPS_TRIAL_EXPIRED=${AGENT_OPS_TRIAL_EXPIRED:-0}
       - MAX_AUTONOMOUS_ACTIONS_PER_DAY=${MAX_AUTONOMOUS_ACTIONS_PER_DAY:-500}
       - MAX_AUTONOMOUS_ACTIONS_PER_HOUR=${MAX_AUTONOMOUS_ACTIONS_PER_HOUR:-100}
+      - SECURE_CROSS_ORIGIN_OPENER_POLICY=${SECURE_CROSS_ORIGIN_OPENER_POLICY:-}
     depends_on:
       redis:
         condition: service_healthy
@@ -120,7 +126,7 @@ services:
     volumes:
       - media_files:/app/media
     environment:
-      - DEBUG=False
+      - DEBUG=${DEBUG:-False}
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST:-db}:${DB_PORT:-5432}/${DB_NAME}
       - DB_HOST=${DB_HOST:-db}
       - DB_PORT=${DB_PORT:-5432}
@@ -136,6 +142,7 @@ services:
       - ENVIRONMENT=${ENVIRONMENT:-production}
       - APP_VERSION=${APP_VERSION:-2.0.0}
       - AGENT_API_KEY=${AGENT_API_KEY}
+      - AI_AGENT_SERVICE_KEY=${AI_AGENT_SERVICE_KEY:-}
       - FORCE_SYNC_AGENT_PROCESSING=${FORCE_SYNC_AGENT_PROCESSING:-false}
       - FRONTEND_URL=${FRONTEND_URL:-https://app.resolvemeq.net}
       - APP_NAME=${APP_NAME:-ResolveMeQ}
@@ -167,7 +174,7 @@ services:
     restart: unless-stopped
     command: ["/app/venv/bin/celery", "-A", "resolvemeq", "beat", "-l", "info"]
     environment:
-      - DEBUG=False
+      - DEBUG=${DEBUG:-False}
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST:-db}:${DB_PORT:-5432}/${DB_NAME}
       - DB_HOST=${DB_HOST:-db}
       - DB_PORT=${DB_PORT:-5432}

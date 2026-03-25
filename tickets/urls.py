@@ -1,6 +1,7 @@
 from django.urls import path, include
 from .views import (
     ticket_analytics,
+    outcome_metrics,
     process_with_agent,
     task_status,
     ticket_agent_status,
@@ -12,6 +13,7 @@ from .views import (
     ticket_categories,
     escalation_queue,
     get_ticket,
+    ticket_feedback_prompts,
     update_ticket,
     delete_ticket,
     search_tickets,
@@ -65,6 +67,7 @@ from .ai_insights_views import (
 urlpatterns = [
     # Add ticket-related endpoints here
     path("analytics/", ticket_analytics, name="ticket-analytics"),
+    path("outcome-metrics/", outcome_metrics, name="outcome-metrics"),
     path("<int:ticket_id>/process/", process_with_agent, name="process-with-agent"),
     path("tasks/<str:task_id>/status/", task_status, name="task-status"),
     path("<int:ticket_id>/agent-status/", ticket_agent_status, name="ticket-agent-status"),
@@ -72,6 +75,7 @@ urlpatterns = [
     path("list/", list_tickets, name="list-tickets"),
     path("categories/", ticket_categories, name="ticket-categories"),
     path("escalated/", escalation_queue, name="escalation-queue"),
+    path("<int:ticket_id>/feedback-prompts/", ticket_feedback_prompts, name="ticket-feedback-prompts"),
     path("<int:ticket_id>/", get_ticket, name="get-ticket"),
     path("<int:ticket_id>/update/", update_ticket, name="update-ticket"),
     path("<int:ticket_id>/delete/", delete_ticket, name="delete-ticket"),

@@ -1113,6 +1113,15 @@ def notify_support_escalation_slack(ticket, params):
                 "text": f"*Conversation context:*\n{summary[:400]}{'...' if len(summary) > 400 else ''}"
             }
         })
+    handoff = (params.get("handoff_summary") or params.get("handoff_text") or "").strip()
+    if handoff:
+        h = handoff[:500]
+        if len(handoff) > 500:
+            h += "..."
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*Handoff:*\n{h}"},
+        })
     blocks.append({
         "type": "actions",
         "elements": [

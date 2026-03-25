@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from base.billing.exceptions import BillingConfigurationError
 from base.billing.gateways.factory import get_billing_gateway
 from base.billing.payment_sync import sync_invoices_from_dodo
+from base.agent_usage import get_agent_usage_snapshot
 from base.models import Plan, Subscription, Invoice, Team, PlanGatewayProduct, SupportContactSubmission
 from base.serializers import (
     PlanSerializer,
@@ -128,11 +129,13 @@ class BillingUsageView(GenericAPIView):
     def get(self, request):
         teams_count = Team.objects.filter(owner=request.user).count()
         max_teams = get_max_teams_for_user(request.user)
-        return Response({
+        payload = {
             'teams_used': teams_count,
             'teams_limit': max_teams,
             'can_create_team': teams_count < max_teams,
-        })
+        }
+        payload.update(get_agent_usage_snapshot(request.user))
+        return Response(payload)
 
 
 class InvoiceListView(ListAPIView):

@@ -10,7 +10,12 @@ from base.billing.exceptions import BillingConfigurationError
 from base.billing.gateways.factory import get_billing_gateway
 from base.billing.money import decimal_to_minor_units
 from base.billing.subscription_sync import apply_dodo_subscription_payload
-from base.models import Plan, PlanGatewayProduct, Subscription
+from base.agent_usage import (
+    get_effective_agent_ops_limit,
+    refund_agent_operation,
+    try_consume_agent_operation,
+)
+from base.models import AgentUsageMonthly, Plan, PlanGatewayProduct, Subscription
 
 User = get_user_model()
 
@@ -113,3 +118,53 @@ class BillingGatewayFactoryTests(TestCase):
     def test_unknown_gateway_raises(self):
         with self.assertRaises(BillingConfigurationError):
             get_billing_gateway()
+
+
+@override_settings(DEFAULT_AGENT_OPERATIONS_PER_MONTH=10)
+class AgentUsageQuotaTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='quota@test.com',
+            username='quotatest',
+            password='test-pass-123',
+        )
+        self.plan = Plan.objects.create(
+            name='Quota Test Plan',
+            slug='quota-test-plan',
+            max_teams=5,
+            max_members=10,
+            max_agent_operations_per_month=3,
+            price_monthly=Decimal('10.00'),
+            price_yearly=Decimal('100.00'),
+        )
+        Subscription.objects.create(
+            user=self.user,
+            plan=self.plan,
+            status=Subscription.Status.ACTIVE,
+        )
+
+    def test_effective_limit_from_plan(self):
+        self.assertEqual(get_effective_agent_ops_limit(self.user), 3)
+
+    def test_consume_and_block_at_limit(self):
+        self.assertTrue(try_consume_agent_operation(self.user).allowed)
+        self.assertTrue(try_consume_agent_operation(self.user).allowed)
+        self.assertTrue(try_consume_agent_operation(self.user).allowed)
+        fourth = try_consume_agent_operation(self.user)
+        self.assertFalse(fourth.allowed)
+        self.assertEqual(fourth.used, 3)
+
+    def test_refund_allows_another_operation(self):
+        try_consume_agent_operation(self.user)
+        try_consume_agent_operation(self.user)
+        try_consume_agent_operation(self.user)
+        self.assertFalse(try_consume_agent_operation(self.user).allowed)
+        refund_agent_operation(self.user)
+        self.assertTrue(try_consume_agent_operation(self.user).allowed)
+
+    def test_unlimited_plan_skips_counter_rows(self):
+        self.plan.max_agent_operations_per_month = None
+        self.plan.save(update_fields=['max_agent_operations_per_month'])
+        self.assertIsNone(get_effective_agent_ops_limit(self.user))
+        self.assertTrue(try_consume_agent_operation(self.user).allowed)
+        self.assertEqual(AgentUsageMonthly.objects.filter(user=self.user).count(), 0)

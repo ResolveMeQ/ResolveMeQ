@@ -18,10 +18,18 @@ from .scoping import (
 from .tasks import process_ticket_with_agent
 from .user_email_notify import dispatch_ticket_assigned_email, dispatch_ticket_status_emails
 from .serializers import TicketSerializer, TicketInteractionSerializer
+from .outcome_helpers import apply_escalated_timestamp
+from .feedback_prompts import build_feedback_prompts
 from .cache_decorators import cache_api_response, no_cache
 import logging
 import os
 from django.conf import settings
+from base.agent_http import get_agent_service_headers
+from base.agent_usage import (
+    get_billing_user_for_ticket,
+    refund_agent_operation,
+    try_consume_agent_operation,
+)
 from base.models import User, InAppNotification
 from base.permissions import IsAuthenticatedOrAgent
 from rest_framework import status
@@ -135,6 +143,19 @@ def ticket_analytics(request):
         "closed_tickets": closed_count,
     })
 
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def outcome_metrics(request):
+    """
+    Outcome metrics for visible tickets: time to first AI, deflection-style rates, per-team breakdown.
+    """
+    from .outcome_metrics import compute_outcome_metrics
+
+    base_qs = _tickets_for_user(request)
+    return Response(compute_outcome_metrics(base_qs))
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticatedOrAgent])
 @throttle_classes([AgentActionThrottle])
@@ -143,7 +164,10 @@ def process_with_agent(request, ticket_id):
     Manually trigger AI agent processing for a ticket.
     Uses Celery task for background processing, with synchronous fallback.
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.select_related('team', 'team__owner', 'user'),
+        ticket_id=ticket_id,
+    )
     if request.user and request.user.is_authenticated:
         if not user_can_access_ticket(request.user, ticket):
             return Response(
@@ -151,36 +175,58 @@ def process_with_agent(request, ticket_id):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-    # Check if force re-processing is requested
     force = request.data.get('force', False) or request.data.get('reset', False)
-    
-    # Reset agent processing status if requested
+
     if request.data.get('reset', False):
         ticket.agent_processed = False
         ticket.agent_response = None
         ticket.save()
-    
-    # Check if we should force synchronous processing (for local dev without Celery workers)
+
+    if ticket.agent_processed and not force:
+        return Response({
+            'task_id': None,
+            'ticket_id': ticket.ticket_id,
+            'status': 'skipped',
+            'message': 'Already processed by the agent. Use force to re-run.',
+            'agent_processed': True,
+        }, status=status.HTTP_200_OK)
+
+    billing_user = get_billing_user_for_ticket(ticket)
+    quota = try_consume_agent_operation(billing_user)
+    if not quota.allowed:
+        return Response(
+            {
+                'error': 'agent_quota_exceeded',
+                'detail': 'Your plan monthly AI agent limit has been reached. Upgrade to continue.',
+                'agent_operations_used': quota.used,
+                'agent_operations_limit': quota.limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
     force_sync = os.getenv('FORCE_SYNC_AGENT_PROCESSING', 'false').lower() == 'true'
-    
-    # Queue the task
+    task_id = None
+    status_msg = 'queued'
+
     try:
         if force_sync:
             raise OperationalError("Forced synchronous processing enabled")
-        
-        task = process_ticket_with_agent.delay(ticket.ticket_id, force=force)
+
+        task = process_ticket_with_agent.delay(
+            ticket.ticket_id,
+            force=force,
+            billing_precharged=True,
+        )
         logger.info(f"Queued Celery task: {task.id} for ticket {ticket.ticket_id} (force={force})")
         task_id = task.id
         status_msg = 'queued'
+
     except OperationalError as e:
         logger.warning(f"Celery unavailable, processing synchronously: {e}")
-        
-        # Fallback: Process synchronously
+
         try:
             import requests
-            from tickets.autonomous_agent import AutonomousAgent
-            
-            # Build payload
+
             payload = {
                 "ticket_id": ticket.ticket_id,
                 "issue_type": ticket.issue_type or "",
@@ -193,19 +239,18 @@ def process_with_agent(request, ticket_id):
                     "department": getattr(ticket.user, "department", "")
                 }
             }
-            
-            # Try to send to agent
+
             agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
-            headers_req = {"Content-Type": "application/json"}
-            
+            headers_req = get_agent_service_headers()
+
             try:
                 logger.info(f"Sending POST to AI agent (sync): {agent_url}")
                 response = requests.post(agent_url, json=payload, headers=headers_req, timeout=10)
                 response.raise_for_status()
                 agent_response = response.json()
             except Exception as agent_error:
-                # If agent is unavailable, create a mock response
                 logger.warning(f"AI Agent unavailable, using mock response: {agent_error}")
+                refund_agent_operation(billing_user)
                 agent_response = {
                     "confidence": 0.75,
                     "recommended_action": "request_clarification",
@@ -226,28 +271,49 @@ def process_with_agent(request, ticket_id):
                     },
                     "reasoning": "AI agent service is currently unavailable. This is a placeholder response."
                 }
-            
-            # Update ticket with agent response
+
             ticket.agent_response = agent_response
             ticket.agent_processed = True
             ticket.save()
-            
+
+            from .outcome_helpers import log_agent_confidence_snapshot, touch_first_ai_at
+
+            touch_first_ai_at(ticket)
+            if isinstance(ticket.agent_response, dict):
+                log_agent_confidence_snapshot(
+                    ticket,
+                    "analyze",
+                    confidence=ticket.agent_response.get("confidence"),
+                    recommended_action=str(ticket.agent_response.get("recommended_action") or ""),
+                )
+
             logger.info(f"Ticket {ticket.ticket_id} processed synchronously")
             task_id = None
             status_msg = 'completed'
-            
+
         except Exception as sync_error:
             logger.error(f"Synchronous processing failed: {sync_error}")
-            task_id = None
-            status_msg = 'error'
+            refund_agent_operation(billing_user)
             return Response({
-                'task_id': task_id,
+                'task_id': None,
                 'ticket_id': ticket.ticket_id,
-                'status': status_msg,
+                'status': 'error',
                 'error': str(sync_error),
                 'agent_processed': ticket.agent_processed
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
+
+    except Exception as e:
+        logger.exception("Failed to queue agent processing: %s", e)
+        refund_agent_operation(billing_user)
+        return Response(
+            {
+                'error': 'queue_failed',
+                'detail': str(e),
+                'ticket_id': ticket.ticket_id,
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
     return Response({
         'task_id': task_id,
         'ticket_id': ticket.ticket_id,
@@ -534,7 +600,21 @@ def get_ticket(request, ticket_id):
         data["resolution_feedback_submitted"] = resolution.response_received_at is not None
     except TicketResolution.DoesNotExist:
         data["resolution_feedback_submitted"] = False
+    data["feedback_prompts"] = build_feedback_prompts(ticket, request.user)
     return Response(data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def ticket_feedback_prompts(request, ticket_id):
+    """Situational follow-up prompts (resolution survey, escalation hint, etc.)."""
+    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not _can_access_ticket(request, ticket):
+        return Response(
+            {"error": "You do not have permission to access this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return Response({"prompts": build_feedback_prompts(ticket, request.user)})
 
 @api_view(["PATCH"])
 @permission_classes([IsAuthenticated])
@@ -695,7 +775,10 @@ def escalate_ticket(request, ticket_id):
             {"error": "You don't have permission to escalate this ticket."},
             status=status.HTTP_403_FORBIDDEN
         )
+    from .handoff import build_handoff_packet
+
     ticket.status = "escalated"
+    apply_escalated_timestamp(ticket)
     ticket.save()
 
     content = "Ticket escalated by user."
@@ -713,6 +796,9 @@ def escalate_ticket(request, ticket_id):
     params = {"reason": "Escalated by user"}
     if conversation_summary:
         params["conversation_summary"] = conversation_summary[:500]
+    packet = build_handoff_packet(ticket, request.user, conversation_summary)
+    params["handoff_text"] = packet["handoff_text"]
+    params["handoff_summary"] = packet["handoff_summary"]
     try:
         from integrations.views import notify_escalation
         notify_escalation(str(ticket.user.id), ticket.ticket_id, params)
@@ -723,6 +809,7 @@ def escalate_ticket(request, ticket_id):
     return Response({
         "message": "Ticket escalated.",
         "ticket": TicketSerializer(ticket).data,
+        "handoff": packet,
     })
 
 @api_view(["POST"])
@@ -824,6 +911,8 @@ def update_ticket_status(request, ticket_id):
         return Response({"error": err}, status=400)
     previous_status = getattr(ticket, "status", None)
     ticket.status = canonical
+    if canonical == "escalated":
+        apply_escalated_timestamp(ticket)
     ticket.save()
 
     # Determine who made the change
@@ -1078,21 +1167,36 @@ def enhanced_kb_search(request):
     Enhanced knowledge base search using FastAPI agent's multi-source search.
     Searches both Django KB and vector store, returns best results.
     """
+    kb_charged = False
     try:
         import requests
-        
+
         query = request.data.get('query', '')
         limit = request.data.get('limit', 5)
         category = request.data.get('category')
         min_helpfulness = request.data.get('min_helpfulness')
-        
+
         if not query:
             return Response({'error': 'Query is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
+        if request.user.is_authenticated:
+            kb_quota = try_consume_agent_operation(request.user)
+            if not kb_quota.allowed:
+                return Response(
+                    {
+                        'error': 'agent_quota_exceeded',
+                        'detail': 'Your plan monthly AI agent limit has been reached. Upgrade to continue.',
+                        'agent_operations_used': kb_quota.used,
+                        'agent_operations_limit': kb_quota.limit,
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+            kb_charged = True
+
         # Prepare request for FastAPI agent
         agent_url = getattr(settings, 'AI_AGENT_URL', 'http://localhost:8000')
         kb_search_url = f"{agent_url.rstrip('/')}/api/kb/search"
-        
+
         payload = {
             'query': query,
             'limit': limit,
@@ -1101,19 +1205,21 @@ def enhanced_kb_search(request):
             payload['category'] = category
         if min_helpfulness:
             payload['min_helpfulness'] = min_helpfulness
-        
+
         response = requests.post(
             kb_search_url,
             json=payload,
-            headers={'Content-Type': 'application/json'},
+            headers=get_agent_service_headers(),
             timeout=10
         )
         response.raise_for_status()
-        
+
         return Response(response.json())
-        
+
     except requests.RequestException as e:
         logger.error(f"Error calling FastAPI agent KB search: {str(e)}")
+        if kb_charged:
+            refund_agent_operation(request.user)
         # Fallback to local Django KB search
         from knowledge_base.views import KnowledgeBaseArticleViewSet
         from knowledge_base.serializers import KnowledgeBaseArticleSerializer
@@ -1132,6 +1238,8 @@ def enhanced_kb_search(request):
         })
     except Exception as e:
         logger.error(f"Error in enhanced KB search: {str(e)}")
+        if kb_charged:
+            refund_agent_operation(request.user)
         return Response(
             {'error': 'Failed to search knowledge base', 'details': str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -1357,6 +1465,7 @@ def submit_resolution_feedback(request, ticket_id):
             resolution.reopened_reason = request.data.get('feedback_text', 'User reported issue not resolved')
             
             ticket.status = 'escalated'
+            apply_escalated_timestamp(ticket)
             ticket.save()
         
         resolution.save()

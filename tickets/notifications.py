@@ -52,6 +52,8 @@ def _send_escalation_email(to_email, ticket, params):
         "category": ticket.category or "—",
         "description": (ticket.description or "")[:500],
         "conversation_summary": params.get("conversation_summary", "")[:400],
+        "handoff_text": (params.get("handoff_text") or "")[:4000],
+        "handoff_summary": (params.get("handoff_summary") or "")[:600],
         "view_url": view_url,
         "app_name": "ResolveMeQ",
     }

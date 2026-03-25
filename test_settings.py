@@ -37,6 +37,8 @@ if 'test' in sys.argv:
 
 # Test-specific settings
 if 'test' in sys.argv:
+    DEBUG = True
+
     # Disable logging during tests
     LOGGING = {
         'version': 1,

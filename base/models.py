@@ -669,6 +669,14 @@ class Plan(models.Model):
     )
     max_teams = models.PositiveIntegerField(_("max teams"), default=10)
     max_members = models.PositiveIntegerField(_("max members per plan"), default=50, help_text=_("Total seats"))
+    max_agent_operations_per_month = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text=_(
+            "Maximum AI agent operations (analyze, chat turn, etc.) per billing period. "
+            "Null means unlimited (e.g. Enterprise)."
+        ),
+    )
     price_monthly = models.DecimalField(_("price monthly"), max_digits=10, decimal_places=2, default=0)
     price_yearly = models.DecimalField(_("price yearly"), max_digits=10, decimal_places=2, default=0)
     is_active = models.BooleanField(default=True)
@@ -680,6 +688,38 @@ class Plan(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class AgentUsageMonthly(models.Model):
+    """
+    Counts billable AI agent operations per subscription billing period (or calendar month fallback).
+    Scoped to the paying user (team owner / account holder).
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='agent_usage_periods',
+        verbose_name=_("billing account"),
+    )
+    period_start = models.DateTimeField()
+    period_end = models.DateTimeField()
+    operations_used = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Agent usage (period)")
+        verbose_name_plural = _("Agent usage (periods)")
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'period_start'],
+                name='unique_agent_usage_user_period',
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id} {self.period_start.date()} — {self.operations_used} ops"
 
 
 class Subscription(models.Model):
