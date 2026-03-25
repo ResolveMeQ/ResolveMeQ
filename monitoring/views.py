@@ -1,12 +1,35 @@
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny, IsAdminUser
-from rest_framework.response import Response
-from django.conf import settings
-from django.db import connection
-from django.core.cache import cache
+import time
+
 import requests
 from celery import current_app
 from datetime import datetime
+
+from django.conf import settings
+from django.core.cache import cache
+from django.db import connection
+from drf_yasg import openapi
+from drf_yasg.utils import swagger_auto_schema
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAdminUser
+from rest_framework.response import Response
+
+# Shown in Swagger “Try it out” — these are read in code from request.GET / request.headers
+MONITORING_SECRET_PARAMS = [
+    openapi.Parameter(
+        "token",
+        openapi.IN_QUERY,
+        description="Must match MONITORING_HEALTH_SECRET in server env",
+        type=openapi.TYPE_STRING,
+        required=False,
+    ),
+    openapi.Parameter(
+        "X-Monitoring-Token",
+        openapi.IN_HEADER,
+        description="Same secret as an alternative to the token query parameter",
+        type=openapi.TYPE_STRING,
+        required=False,
+    ),
+]
 
 
 def build_service_health_results() -> dict:
@@ -163,6 +186,18 @@ def build_service_health_results() -> dict:
     return results
 
 
+@swagger_auto_schema(
+    method="get",
+    operation_summary="Full service health (admin JWT)",
+    operation_description=(
+        "Requires an authenticated **staff** user. Click **Authorize** and send "
+        "`Bearer <access_token>` from login."
+    ),
+    responses={
+        200: openapi.Response("Health payload (database, redis, celery, agent, email mode)"),
+        403: openapi.Response("Not admin"),
+    },
+)
 @api_view(["GET"])
 @permission_classes([IsAdminUser])
 def service_health_check(request):
@@ -173,6 +208,19 @@ def service_health_check(request):
     return Response(build_service_health_results())
 
 
+@swagger_auto_schema(
+    method="get",
+    operation_summary="Full service health (shared secret)",
+    operation_description=(
+        "Same JSON as /health/services/ without admin JWT. "
+        "Provide **token** or **X-Monitoring-Token** matching MONITORING_HEALTH_SECRET."
+    ),
+    manual_parameters=MONITORING_SECRET_PARAMS,
+    responses={
+        200: openapi.Response("Health payload"),
+        404: openapi.Response("Secret not configured or token mismatch"),
+    },
+)
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def service_health_complete(request):
@@ -194,6 +242,94 @@ def service_health_complete(request):
     return Response(build_service_health_results())
 
 
+@swagger_auto_schema(
+    methods=["get", "post"],
+    operation_summary="Send test email to superusers",
+    operation_description=(
+        "Sends one mail from this process to every active superuser email. "
+        "Requires **token** or **X-Monitoring-Token** matching MONITORING_HEALTH_SECRET."
+    ),
+    manual_parameters=MONITORING_SECRET_PARAMS,
+    responses={
+        200: openapi.Response("ok, message, superuser_count, ms"),
+        400: openapi.Response("No superusers with email"),
+        404: openapi.Response("Secret not configured or token mismatch"),
+        503: openapi.Response("SMTP / from-address error"),
+    },
+)
+@api_view(["GET", "POST"])
+@permission_classes([AllowAny])
+def mail_test_send(request):
+    """
+    Send one test email to all active superusers (synchronous SMTP from this process).
+    No JWT — use MONITORING_HEALTH_SECRET: ?token=... or X-Monitoring-Token.
+    """
+    expected = getattr(settings, "MONITORING_HEALTH_SECRET", "").strip()
+    if not expected:
+        return Response({"detail": "Not found."}, status=404)
+    token = (request.GET.get("token") or request.headers.get("X-Monitoring-Token") or "").strip()
+    if token != expected:
+        return Response({"detail": "Not found."}, status=404)
+
+    from django.contrib.auth import get_user_model
+
+    from base.tasks import _transactional_from_email, send_email_with_template
+
+    User = get_user_model()
+    emails = list(
+        User.objects.filter(is_superuser=True, is_active=True)
+        .exclude(email__isnull=True)
+        .exclude(email="")
+        .values_list("email", flat=True)
+        .distinct()
+    )
+    if not emails:
+        return Response(
+            {"ok": False, "error": "No active superusers with an email address."},
+            status=400,
+        )
+
+    if not _transactional_from_email():
+        return Response(
+            {
+                "ok": False,
+                "error": "No From address: set DEFAULT_FROM_EMAIL or EMAIL_HOST_USER.",
+            },
+            status=503,
+        )
+
+    ts = datetime.utcnow().isoformat() + "Z"
+    app_name = getattr(settings, "APP_NAME", "ResolveMeQ")
+    data = {"subject": f"[{app_name}] Mail test ({ts})"}
+    context = {"app_name": app_name, "timestamp": ts}
+
+    t0 = time.perf_counter()
+    try:
+        send_email_with_template(data, "mail_test.html", context, emails)
+        ms = round((time.perf_counter() - t0) * 1000, 1)
+        return Response(
+            {
+                "ok": True,
+                "message": f"Sent to {len(emails)} superuser inbox(es).",
+                "superuser_count": len(emails),
+                "ms": ms,
+            },
+            status=200,
+        )
+    except Exception as exc:
+        ms = round((time.perf_counter() - t0) * 1000, 1)
+        return Response(
+            {"ok": False, "error": str(exc), "ms": ms},
+            status=503,
+        )
+
+
+@swagger_auto_schema(
+    method="get",
+    operation_summary="Liveness probe",
+    operation_description="Public. No parameters.",
+    responses={200: openapi.Response("status, timestamp")},
+)
 @api_view(["GET"])
 def basic_health_check(request):
     """

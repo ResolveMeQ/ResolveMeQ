@@ -318,7 +318,31 @@ APP_NAME = os.getenv('APP_NAME', 'ResolveMeQ')
 # Optional Reply-To for transactional mail (support inbox).
 SUPPORT_EMAIL = os.getenv('SUPPORT_EMAIL', '').strip()
 
+# Operator inboxes for ticket escalation alerts (comma-separated). Also set DJANGO_ADMINS for Django-style admin tuples.
+_escalation_emails_raw = os.getenv("SUPPORT_ESCALATION_EMAILS", "").strip()
+SUPPORT_ESCALATION_EMAILS = (
+    [e.strip() for e in _escalation_emails_raw.split(",") if e.strip()]
+    if _escalation_emails_raw
+    else []
+)
+# ADMINS: comma-separated "Full Name|ops@company.com" or bare "ops@company.com"
+_admins_raw = os.getenv("DJANGO_ADMINS", "").strip()
+ADMINS = []
+if _admins_raw:
+    for part in _admins_raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "|" in part:
+            name, em = part.split("|", 1)
+            ADMINS.append((name.strip(), em.strip()))
+        elif "@" in part:
+            ADMINS.append(("Admin", part))
+
 REST_FRAMEWORK = {
+    # Do NOT set DEFAULT_SCHEMA_CLASS to drf_yasg.inspectors.SwaggerAutoSchema — it is not a
+    # subclass of rest_framework.schemas.inspectors.ViewInspector and breaks @api_view.
+    # drf-yasg uses SWAGGER_SETTINGS['DEFAULT_AUTO_SCHEMA_CLASS'] for OpenAPI/Swagger generation.
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
         'base.authentication.AgentAPIKeyAuthentication',
@@ -407,19 +431,27 @@ JAZZMIN_UI_TWEAKS = {
     },
 }
 
-# Swagger Settings
+# Swagger Settings (drf-yasg / Swagger UI)
 SWAGGER_SETTINGS = {
+    # Used by drf-yasg OpenAPISchemaGenerator (not REST_FRAMEWORK.DEFAULT_SCHEMA_CLASS)
+    'DEFAULT_AUTO_SCHEMA_CLASS': 'drf_yasg.inspectors.SwaggerAutoSchema',
     'USE_SESSION_AUTH': False,
     'SECURITY_DEFINITIONS': {
-        'Basic': {
-            'type': 'basic'
-        },
         'Bearer': {
             'type': 'apiKey',
             'name': 'Authorization',
-            'in': 'header'
-        }
+            'in': 'header',
+            'description': 'JWT access token. Click Authorize and enter: Bearer <paste_access_token_here>',
+        },
     },
     'DEFAULT_API_URL': 'https://api.resolvemeq.net' if not DEBUG else 'http://localhost:8000',
     'SUPPORTED_SUBMIT_METHODS': ['get', 'post', 'put', 'delete', 'patch'],
+    # Avoid external validator fetch (often blocked / slow in dev)
+    'VALIDATOR_URL': None,
+    # Expand tag groups so operations (and their Parameters) are easier to find
+    'DOC_EXPANSION': 'list',
+    # Pass-through to swagger-ui (persist JWT after refresh)
+    'SWAGGER_UI_SETTINGS': {
+        'persistAuthorization': True,
+    },
 }

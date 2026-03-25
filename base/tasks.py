@@ -56,7 +56,18 @@ def dispatch_send_email_with_template(
     data: dict, template_name: str, context: dict, recipient: list
 ) -> None:
     if _email_dispatch_uses_celery():
-        send_email_with_template.delay(data, template_name, context, recipient)
+        try:
+            send_email_with_template.delay(data, template_name, context, recipient)
+        except Exception as exc:
+            # Broker unreachable or queue failure — still try SMTP from this process
+            logger.warning(
+                "Celery enqueue failed for %s → %s; sending synchronously. Error: %s",
+                template_name,
+                recipient,
+                exc,
+                exc_info=True,
+            )
+            send_email_with_template(data, template_name, context, recipient)
     else:
         logger.info("Sending email synchronously (no Celery queue for this process)")
         send_email_with_template(data, template_name, context, recipient)

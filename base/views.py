@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import timedelta
 from urllib.parse import quote
 
@@ -13,7 +14,7 @@ from django.urls import reverse
 from django.utils import timezone
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
-from rest_framework import status, permissions, generics
+from rest_framework import status, permissions, generics, serializers
 from rest_framework.generics import GenericAPIView
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from rest_framework.response import Response
@@ -29,6 +30,43 @@ from base.utils import generate_secure_code
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
+
+
+def _marketing_contact_notify_recipients():
+    """Same routing as billing support: SUPPORT_CONTACT_NOTIFY_EMAILS or SUPPORT_EMAIL."""
+    raw = os.getenv("SUPPORT_CONTACT_NOTIFY_EMAILS", "").strip()
+    if raw:
+        return [e.strip() for e in raw.split(",") if e.strip()]
+    single = (getattr(settings, "SUPPORT_EMAIL", None) or "").strip()
+    return [single] if single else []
+
+
+def _email_marketing_contact_request(contact):
+    """Email operators when the landing page contact/demo form is submitted."""
+    recipients = _marketing_contact_notify_recipients()
+    if not recipients:
+        logger.warning(
+            "ContactRequest id=%s saved but no notify list (set SUPPORT_CONTACT_NOTIFY_EMAILS or SUPPORT_EMAIL).",
+            getattr(contact, "pk", contact),
+        )
+        return
+    app_name = getattr(settings, "APP_NAME", "ResolveMeQ")
+    data = {"subject": f"[{app_name}] Demo request — {contact.email}"}
+    context = {
+        "app_name": app_name,
+        "email": contact.email,
+        "company_size": contact.company_size,
+        "ip_address": contact.ip_address or "—",
+    }
+    try:
+        dispatch_send_email_with_template(
+            data,
+            "marketing_contact_request.html",
+            context,
+            recipients,
+        )
+    except Exception as exc:
+        logger.exception("Marketing contact request email failed: %s", exc)
 
 
 def _send_team_invitation_email(invitation, team, invited_by):
@@ -546,6 +584,11 @@ class InAppNotificationListView(GenericAPIView):
 class InAppNotificationMarkReadView(GenericAPIView):
     """Mark a single notification as read."""
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import InAppNotification
+        return InAppNotification.objects.none()
 
     def patch(self, request, notification_id):
         from base.models import InAppNotification
@@ -562,6 +605,11 @@ class InAppNotificationMarkReadView(GenericAPIView):
 class InAppNotificationMarkAllReadView(GenericAPIView):
     """Mark all notifications as read for the current user."""
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import InAppNotification
+        return InAppNotification.objects.none()
 
     def post(self, request):
         from base.models import InAppNotification
@@ -628,6 +676,8 @@ class TeamListView(generics.ListAPIView):
 
     def get_queryset(self):
         from base.models import Team
+        if getattr(self, 'swagger_fake_view', False):
+            return Team.objects.none()
         user = self.request.user
         return Team.objects.filter(
             Q(owner=user) | Q(members=user)
@@ -642,6 +692,8 @@ class TeamDetailView(generics.RetrieveAPIView):
 
     def get_queryset(self):
         from base.models import Team
+        if getattr(self, 'swagger_fake_view', False):
+            return Team.objects.none()
         user = self.request.user
         return Team.objects.filter(
             Q(owner=user) | Q(members=user)
@@ -651,6 +703,11 @@ class TeamDetailView(generics.RetrieveAPIView):
 class TeamLimitsView(GenericAPIView):
     """Return team creation limits for the current plan (teams owned by user)."""
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import Team
+        return Team.objects.none()
 
     def get(self, request):
         from base.models import Team
@@ -693,6 +750,8 @@ class TeamUpdateView(generics.UpdateAPIView):
 
     def get_queryset(self):
         from base.models import Team
+        if getattr(self, 'swagger_fake_view', False):
+            return Team.objects.none()
         return Team.objects.filter(owner=self.request.user)
 
 
@@ -703,6 +762,8 @@ class TeamDeleteView(generics.DestroyAPIView):
 
     def get_queryset(self):
         from base.models import Team
+        if getattr(self, 'swagger_fake_view', False):
+            return Team.objects.none()
         return Team.objects.filter(owner=self.request.user)
 
 
@@ -711,6 +772,11 @@ class TeamDeleteView(generics.DestroyAPIView):
 class TeamInviteView(GenericAPIView):
     """Invite a user to the team by email (owner only). Respects plan max_members."""
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import Team
+        return Team.objects.none()
 
     def post(self, request, pk):
         from base.models import Team, TeamInvitation
@@ -754,6 +820,11 @@ class TeamInviteView(GenericAPIView):
 class TeamSentInvitationsListView(GenericAPIView):
     """List pending invitations the owner sent for this team."""
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import Team
+        return Team.objects.none()
 
     def get(self, request, team_id):
         from base.models import Team, TeamInvitation
@@ -779,6 +850,11 @@ class TeamSentInvitationsListView(GenericAPIView):
 class TeamInvitationResendView(GenericAPIView):
     """Resend invitation email (owner only). Does not duplicate in-app notifications."""
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import TeamInvitation
+        return TeamInvitation.objects.none()
 
     def post(self, request, invitation_id):
         from base.models import TeamInvitation
@@ -794,6 +870,11 @@ class TeamInvitationResendView(GenericAPIView):
 class TeamInvitationOwnerCancelView(GenericAPIView):
     """Revoke a pending invitation (owner only)."""
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import TeamInvitation
+        return TeamInvitation.objects.none()
 
     def post(self, request, invitation_id):
         from base.models import TeamInvitation
@@ -809,6 +890,11 @@ class TeamInvitationOwnerCancelView(GenericAPIView):
 class TeamInvitationListView(GenericAPIView):
     """List pending invitations for the current user (where invitee email matches)."""
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import TeamInvitation
+        return TeamInvitation.objects.none()
 
     def get(self, request):
         from base.models import TeamInvitation
@@ -834,6 +920,11 @@ class TeamInvitationListView(GenericAPIView):
 class TeamInvitationAcceptView(GenericAPIView):
     """Accept an invitation (invitee only)."""
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import TeamInvitation
+        return TeamInvitation.objects.none()
 
     def post(self, request, invitation_id):
         from base.models import TeamInvitation
@@ -856,6 +947,11 @@ class TeamInvitationAcceptView(GenericAPIView):
 class TeamInvitationDeclineView(GenericAPIView):
     """Decline an invitation (invitee only)."""
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import TeamInvitation
+        return TeamInvitation.objects.none()
 
     def post(self, request, invitation_id):
         from base.models import TeamInvitation
@@ -872,6 +968,11 @@ class TeamInvitationDeclineView(GenericAPIView):
 class TeamLeaveView(GenericAPIView):
     """Leave a team (member only; owner cannot leave)."""
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import Team
+        return Team.objects.none()
 
     def post(self, request, pk):
         from base.models import Team
@@ -887,6 +988,11 @@ class TeamLeaveView(GenericAPIView):
 class TeamRemoveMemberView(GenericAPIView):
     """Remove a member from the team (owner only)."""
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import Team
+        return Team.objects.none()
 
     def post(self, request, pk):
         from base.models import Team
@@ -1046,8 +1152,9 @@ class ContactRequestView(GenericAPIView):
         # Create contact request
         validated_data = serializer.validated_data.copy()
         validated_data['ip_address'] = self.get_client_ip(request)
-        serializer.create(validated_data)
-        
+        contact = serializer.create(validated_data)
+        _email_marketing_contact_request(contact)
+
         return Response({
             'ok': True,
             'message': 'Request received'

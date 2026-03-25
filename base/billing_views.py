@@ -5,7 +5,7 @@ import logging
 import os
 
 from django.conf import settings as django_settings
-from rest_framework import permissions, status
+from rest_framework import permissions, serializers, status
 from rest_framework.generics import GenericAPIView, ListAPIView
 from rest_framework.response import Response
 
@@ -125,6 +125,10 @@ class CurrentSubscriptionView(GenericAPIView):
 class BillingUsageView(GenericAPIView):
     """Return usage stats for billing (teams owned by current user count)."""
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        return Team.objects.none()
 
     def get(self, request):
         teams_count = Team.objects.filter(owner=request.user).count()
@@ -156,6 +160,8 @@ class InvoiceListView(ListAPIView):
         return Response(serializer.data)
 
     def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return Invoice.objects.none()
         return Invoice.objects.filter(
             subscription__user=self.request.user
         ).select_related('subscription')
@@ -363,6 +369,10 @@ class BillingCustomerPortalView(GenericAPIView):
     Lets users update payment methods, view invoices, etc.
     """
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        return Team.objects.none()
 
     def post(self, request):
         sub = Subscription.objects.filter(user=request.user).first()
@@ -459,6 +469,10 @@ class BillingSupportContactView(GenericAPIView):
     Persists SupportContactSubmission and emails configured admin addresses.
     """
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = PortalSupportContactSerializer
+
+    def get_queryset(self):
+        return SupportContactSubmission.objects.none()
 
     def post(self, request):
         ser = PortalSupportContactSerializer(data=request.data)

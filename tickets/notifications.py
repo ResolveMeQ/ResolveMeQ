@@ -21,7 +21,10 @@ def _escalation_recipient_emails():
             emails.append(str(email).strip())
     extra = getattr(settings, "SUPPORT_ESCALATION_EMAILS", None)
     if isinstance(extra, str) and extra.strip():
-        emails.append(extra.strip())
+        for e in extra.split(","):
+            e = str(e).strip()
+            if e:
+                emails.append(e)
     elif isinstance(extra, (list, tuple)):
         for e in extra:
             if e and str(e).strip():
@@ -78,9 +81,17 @@ def notify_support_escalation(ticket, params):
                 ticket.ticket_id,
             )
         else:
-            if getattr(settings, "EMAIL_HOST_USER", None):
+            from base.tasks import _transactional_from_email
+
+            if _transactional_from_email():
                 for email in emails:
                     _send_escalation_email(email, ticket, params)
+            else:
+                logger.warning(
+                    "Escalation ticket #%s: operator emails configured but DEFAULT_FROM_EMAIL / "
+                    "EMAIL_HOST_USER is not set — cannot send escalation mail.",
+                    ticket.ticket_id,
+                )
             for user in User.objects.filter(email__in=emails, is_active=True).exclude(id=ticket.user_id):
                 InAppNotification.objects.create(
                     user=user,

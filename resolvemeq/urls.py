@@ -1,5 +1,5 @@
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, re_path
 from core.views import health_check
 from rest_framework import permissions
 from drf_yasg.views import get_schema_view
@@ -12,7 +12,10 @@ schema_view = get_schema_view(
    openapi.Info(
       title="ResolveMeQ API",
       default_version='v1',
-      description="API documentation for ResolveMeQ",
+      description=(
+         "ResolveMeQ REST API. Click **Authorize**, enter `Bearer ` plus your access token "
+         "(from `/api/auth/login/` or token refresh), then **Try it out** on each operation."
+      ),
    ),
    public=True,
    permission_classes=(permissions.AllowAny,),
@@ -41,6 +44,11 @@ urlpatterns = [
    path("api/integrations/", include("integrations.urls")),
    path('', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
    path('redoc/', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
+   re_path(
+      r'^swagger(?P<format>\.json|\.yaml)$',
+      schema_view.without_ui(cache_timeout=0),
+      name='schema-json',
+   ),
 ]
 
 # Serve static files during development
