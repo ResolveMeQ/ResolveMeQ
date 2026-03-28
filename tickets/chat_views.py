@@ -7,7 +7,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
+from django.http import Http404
 from django.conf import settings
+from rest_framework.exceptions import APIException
 import json
 import requests
 import logging
@@ -112,29 +114,37 @@ def start_or_get_conversation(request, ticket_id):
 def send_chat_message(request, ticket_id):
     """
     Send a message in the chat conversation and get AI response.
-    
+
     POST /api/tickets/{ticket_id}/chat/
     Body: {
         "message": "User's message text",
         "conversation_id": "uuid" (optional, will create if not provided)
     }
-    
-    Returns: {
-        "conversation_id": "uuid",
-        "user_message": {...},
-        "ai_message": {
-            "id": "uuid",
-            "text": "AI response",
-            "confidence": 0.85,
-            "message_type": "text|steps|solution",
-            "metadata": {
-                "suggested_actions": ["action1", "action2"],
-                "quick_replies": [{label: "...", value: "..."}],
-                "attachments": [...]
-            }
-        }
-    }
     """
+    try:
+        return _send_chat_message_impl(request, ticket_id)
+    except Http404:
+        raise
+    except APIException:
+        raise
+    except Exception as e:
+        logger.exception(
+            "send_chat_message unhandled error ticket_id=%s user_id=%s",
+            ticket_id,
+            getattr(request.user, "pk", None),
+        )
+        payload = {
+            "error": "internal_server_error",
+            "detail": "Request failed. Check API logs: docker compose logs web --tail=100",
+        }
+        if settings.DEBUG:
+            payload["detail"] = str(e)
+            payload["exception_type"] = type(e).__name__
+        return Response(payload, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def _send_chat_message_impl(request, ticket_id):
+    """POST /api/tickets/<ticket_id>/chat/ implementation."""
     ticket = get_object_or_404(
         Ticket.objects.select_related('team', 'team__owner', 'user'),
         ticket_id=ticket_id,
