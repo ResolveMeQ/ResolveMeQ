@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from django.conf import settings
+import json
 import requests
 import logging
 
@@ -26,6 +27,53 @@ from .chat_serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+_ALLOWED_CHAT_MESSAGE_TYPES = frozenset(dict(ChatMessage.MESSAGE_TYPES).keys())
+
+
+def _json_for_db(value):
+    """Ensure JSONField values round-trip through PostgreSQL (strict JSON, no NaN)."""
+    if value is None:
+        return None
+    try:
+        # allow_nan=False rejects NaN/Infinity which Postgres json/jsonb may reject
+        return json.loads(json.dumps(value, default=str, allow_nan=False))
+    except (TypeError, ValueError) as e:
+        logger.warning("Could not normalize JSON for DB, using minimal fallback: %s", e)
+        return {"_serialization_note": "response contained non-JSON-safe values"}
+
+
+def _sanitize_ai_response_for_persistence(ai_response):
+    """Coerce agent output so ChatMessage JSON fields never raise on save."""
+    if not isinstance(ai_response, dict):
+        return {
+            "text": str(ai_response),
+            "message_type": "text",
+            "metadata": {},
+            "confidence": None,
+        }
+    out = dict(ai_response)
+    mt = out.get("message_type") or "text"
+    if mt not in _ALLOWED_CHAT_MESSAGE_TYPES:
+        out["message_type"] = "text"
+    conf = out.get("confidence")
+    if conf is not None:
+        try:
+            c = float(conf)
+            out["confidence"] = c if c == c else None  # drop NaN
+        except (TypeError, ValueError):
+            out["confidence"] = None
+    out["metadata"] = _json_for_db(out.get("metadata")) or {}
+    # Full blob must be Postgres-json-safe (agent may nest arbitrary structures)
+    sanitized = _json_for_db(out)
+    if not isinstance(sanitized, dict):
+        return {
+            "text": str(out.get("text", "")),
+            "message_type": "text",
+            "metadata": out.get("metadata") if isinstance(out.get("metadata"), dict) else {},
+            "confidence": out.get("confidence"),
+        }
+    return sanitized
 
 
 @api_view(['POST'])
@@ -159,7 +207,8 @@ def send_chat_message(request, ticket_id):
             user=request.user,
             billing_user=billing_user,
         )
-        
+        ai_response = _sanitize_ai_response_for_persistence(ai_response)
+
         # Save AI message
         ai_message = ChatMessage.objects.create(
             conversation=conversation,
@@ -188,24 +237,36 @@ def send_chat_message(request, ticket_id):
         })
         
     except Exception as e:
-        logger.error(f"Error getting AI response: {e}")
-        refund_agent_operation(billing_user)
+        logger.exception("Error in ticket chat send_chat_message: %s", e)
+        try:
+            refund_agent_operation(billing_user)
+        except Exception as refund_err:
+            logger.exception("refund_agent_operation failed after chat error: %s", refund_err)
 
         # Create fallback message
-        fallback_message = ChatMessage.objects.create(
-            conversation=conversation,
-            sender_type='system',
-            message_type='text',
-            text="I'm having trouble processing your request right now. Please try again or contact support."
-        )
-        
-        return Response({
-            'conversation_id': str(conversation.id),
-            'user_message': ChatMessageSerializer(user_message).data,
-            'ai_message': ChatMessageSerializer(fallback_message).data,
-            'ticket_status': ticket.status,
-            'initial_solution_was_helpful': conversation.initial_solution_was_helpful,
-        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        try:
+            fallback_message = ChatMessage.objects.create(
+                conversation=conversation,
+                sender_type='system',
+                message_type='text',
+                text="I'm having trouble processing your request right now. Please try again or contact support."
+            )
+            return Response({
+                'conversation_id': str(conversation.id),
+                'user_message': ChatMessageSerializer(user_message).data,
+                'ai_message': ChatMessageSerializer(fallback_message).data,
+                'ticket_status': ticket.status,
+                'initial_solution_was_helpful': conversation.initial_solution_was_helpful,
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as fallback_err:
+            logger.exception("Could not persist fallback chat message: %s", fallback_err)
+            return Response(
+                {
+                    "error": "chat_unavailable",
+                    "detail": "Could not complete chat request. Please try again.",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
 
 @api_view(['GET'])
