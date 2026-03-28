@@ -22,9 +22,14 @@ class AgentQuotaResult:
 
 
 def get_billing_user_for_ticket(ticket) -> Any:
-    """Account owner for quota: team owner when the ticket has a team, else the ticket creator."""
+    """Account owner for quota: team owner when set, else the ticket creator.
+
+    Team.owner is nullable; if the ticket has a team but no owner, bill against ticket.user.
+    """
     if ticket.team_id:
-        return ticket.team.owner
+        owner = ticket.team.owner
+        if owner is not None:
+            return owner
     return ticket.user
 
 
@@ -108,6 +113,9 @@ def try_consume_agent_operation(billing_user) -> AgentQuotaResult:
 
 
 def refund_agent_operation(billing_user) -> None:
+    if billing_user is None:
+        return
+
     limit = get_effective_agent_ops_limit(billing_user)
     if limit is None or limit <= 0:
         return
