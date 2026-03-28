@@ -125,8 +125,18 @@ _db = {
     'HOST': os.getenv('DB_HOST'),
     'PORT': os.getenv('DB_PORT', '5432'),
 }
-if (os.getenv('DB_HOST') or '').endswith('.supabase.co'):
-    _db['OPTIONS'] = {'sslmode': 'require'}
+_db_options = {}
+_db_host = os.getenv('DB_HOST') or ''
+# Direct db.*.supabase.co is IPv6-only; shared pooler *.pooler.supabase.com supports IPv4 (session mode).
+if _db_host.endswith('.supabase.co') or '.pooler.supabase.com' in _db_host:
+    _db_options['sslmode'] = 'require'
+# Connect via IPv4 when the hostname resolves to IPv6 but the host/Docker network cannot reach it
+# ("Network is unreachable"). Set to the A record, e.g. dig +short A db.xxxx.supabase.co
+_hostaddr = (os.getenv('DB_HOSTADDR') or '').strip()
+if _hostaddr:
+    _db_options['hostaddr'] = _hostaddr
+if _db_options:
+    _db['OPTIONS'] = _db_options
 
 DATABASES = {'default': _db}
 
