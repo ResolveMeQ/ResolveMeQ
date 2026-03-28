@@ -1,82 +1,112 @@
-version: '3.8'
-
-# ResolveMeQ Full Stack - Local Development Orchestration
-# This file orchestrates BOTH Django Backend + FastAPI Agent for local development
-# 
-# NOTE: This is OPTIONAL - only use if you want to run both projects together locally
-# Each project can run independently using its own docker-compose.yml
-#
-# Usage:
-#   docker compose -f docker-compose.local-fullstack.yml up -d
-#
-# Prerequisites:
-#   - Clone both repositories to the same parent directory:
-#     /your-workspace/
-#       ├── ResolveMeQ/           (Django project)
-#       └── resolvemeq-agent/     (FastAPI agent)
-#   OR
-#   - Keep agent as subdirectory (current structure)
+# ResolveMeQ Django Backend - Production Deployment
+# Compose loads `.env` from this directory for ${VAR} substitution — put EMAIL_* / DEFAULT_FROM_EMAIL there on the server.
+# After changing SMTP vars: recreate web AND celery_worker (and celery_beat if it sends mail), e.g.
+#   docker compose up -d --force-recreate web celery_worker celery_beat
+# This deploys ONLY the Django application stack (web, celery, db, redis)
+# Deploy the Agent separately from its own repository
+# Use external network to communicate between projects on same VPS
 
 services:
-  # ======================================
-  # Shared Infrastructure
-  # ======================================
   db:
     image: postgres:15-alpine
+    restart: unless-stopped
+    profiles:
+      - local-db  # Only start when --profile local-db is used (for local development)
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
-      POSTGRES_DB: ${DB_NAME:-resolvemeq}
-      POSTGRES_USER: ${DB_USER:-resolvemeq}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-resolvemeq_password}
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-resolvemeq}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - fullstack-network
-    ports:
-      - "5432:5432"  # Exposed for debugging
+      - resolvemeq-backend
+      - resolvemeq-shared  # Shared network for inter-project communication
 
   redis:
     image: redis:7-alpine
-    command: redis-server --appendonly yes
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: [ "CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - fullstack-network
-    ports:
-      - "6379:6379"  # Exposed for debugging
+      - resolvemeq-backend
 
-  # ======================================
-  # Django Backend Services
-  # ======================================
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile.web
-    command: gunicorn resolvemeq.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 120
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
     volumes:
-      - ./staticfiles:/app/staticfiles
-      - ./media:/app/media
+      # Do not mount a named volume over /app/staticfiles — an empty volume hides
+      # files from `collectstatic` baked into the image (breaks admin/Jazzmin CSS).
+      - media_files:/app/media
     ports:
-      - "8000:8000"
-    env_file:
-      - .env
+      - "${WEB_PORT:-8000}:8000"
     environment:
-      - DATABASE_URL=postgresql://${DB_USER:-resolvemeq}:${DB_PASSWORD:-resolvemeq_password}@db:5432/${DB_NAME:-resolvemeq}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - AI_AGENT_URL=http://agent:8000  # Internal Docker network communication
+      - DEBUG=${DEBUG:-False}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST:-db}:${DB_PORT:-5432}/${DB_NAME}
+      - DB_HOST=${DB_HOST:-db}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      - AI_AGENT_URL=${AI_AGENT_URL}
+      - SECRET_KEY=${SECRET_KEY}
+      - SENTRY_DSN=${SENTRY_DSN}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - APP_VERSION=${APP_VERSION:-2.0.0}
+      - MONITORING_HEALTH_SECRET=${MONITORING_HEALTH_SECRET:-}
+      - AGENT_API_KEY=${AGENT_API_KEY}
+      - AI_AGENT_SERVICE_KEY=${AI_AGENT_SERVICE_KEY:-}
+      - FORCE_SYNC_AGENT_PROCESSING=${FORCE_SYNC_AGENT_PROCESSING:-false}
+      - FRONTEND_URL=${FRONTEND_URL:-https://app.resolvemeq.net}
+      # Google Sign-In — same as frontend VITE_GOOGLE_CLIENT_ID
+      - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:-}
+      - SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
+      - SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
+      - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET:-}
+      - SLACK_REDIRECT_URI=${SLACK_REDIRECT_URI:-}
+      - SLACK_ESCALATION_CHANNEL=${SLACK_ESCALATION_CHANNEL:-}
+      - EMAIL_HOST=${EMAIL_HOST:-smtp.gmail.com}
+      - EMAIL_PORT=${EMAIL_PORT:-587}
+      - EMAIL_USE_TLS=${EMAIL_USE_TLS:-True}
+      - EMAIL_HOST_USER=${EMAIL_HOST_USER:-}
+      - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD:-}
+      - DEFAULT_FROM_EMAIL=${DEFAULT_FROM_EMAIL:-}
+      - SUPPORT_EMAIL=${SUPPORT_EMAIL:-}
+      - SUPPORT_CONTACT_NOTIFY_EMAILS=${SUPPORT_CONTACT_NOTIFY_EMAILS:-}
+      - APP_NAME=${APP_NAME:-ResolveMeQ}
+      - EMAIL_USE_CELERY=${EMAIL_USE_CELERY:-true}
+      - ENABLE_DIGEST_EMAIL_SCHEDULE=${ENABLE_DIGEST_EMAIL_SCHEDULE:-true}
+      - DIGEST_EMAIL_HOUR_UTC=${DIGEST_EMAIL_HOUR_UTC:-8}
+      # Billing (Dodo Payments)
+      - BILLING_GATEWAY=${BILLING_GATEWAY:-dodo}
+      - DODO_PAYMENTS_API_KEY=${DODO_PAYMENTS_API_KEY}
+      - DODO_PAYMENTS_WEBHOOK_KEY=${DODO_PAYMENTS_WEBHOOK_KEY}
+      - DODO_PAYMENTS_ENVIRONMENT=${DODO_PAYMENTS_ENVIRONMENT:-live_mode}
+      - BILLING_DEFAULT_CURRENCY=${BILLING_DEFAULT_CURRENCY:-USD}
+      - BILLING_TAX_CATEGORY=${BILLING_TAX_CATEGORY:-saas}
+      - BILLING_CHECKOUT_RETURN_URL=${BILLING_CHECKOUT_RETURN_URL:-}
+      - PLAN_MAX_TEAMS=${PLAN_MAX_TEAMS:-20}
+      - DEFAULT_AGENT_OPERATIONS_PER_MONTH=${DEFAULT_AGENT_OPERATIONS_PER_MONTH:-500}
+      - AGENT_OPS_TRIAL_EXPIRED=${AGENT_OPS_TRIAL_EXPIRED:-0}
+      - MAX_AUTONOMOUS_ACTIONS_PER_DAY=${MAX_AUTONOMOUS_ACTIONS_PER_DAY:-500}
+      - MAX_AUTONOMOUS_ACTIONS_PER_HOUR=${MAX_AUTONOMOUS_ACTIONS_PER_HOUR:-100}
+      - SECURE_CROSS_ORIGIN_OPENER_POLICY=${SECURE_CROSS_ORIGIN_OPENER_POLICY:-}
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -86,86 +116,106 @@ services:
       retries: 3
       start_period: 40s
     networks:
-      - fullstack-network
+      - resolvemeq-backend
+      - resolvemeq-shared  # Can communicate with agent via this network
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
 
   celery_worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: celery -A resolvemeq worker -l info
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-celery:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["/app/venv/bin/celery", "-A", "resolvemeq", "worker", "-l", "info", "--pool=prefork", "--concurrency=4"]
     volumes:
-      - ./media:/app/media
-    env_file:
-      - .env
+      - media_files:/app/media
     environment:
-      - DATABASE_URL=postgresql://${DB_USER:-resolvemeq}:${DB_PASSWORD:-resolvemeq_password}@db:5432/${DB_NAME:-resolvemeq}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - AI_AGENT_URL=http://agent:8000
+      - DEBUG=${DEBUG:-False}
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST:-db}:${DB_PORT:-5432}/${DB_NAME}
+      - DB_HOST=${DB_HOST:-db}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      - AI_AGENT_URL=${AI_AGENT_URL}
+      - SECRET_KEY=${SECRET_KEY}
+      - SENTRY_DSN=${SENTRY_DSN}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - APP_VERSION=${APP_VERSION:-2.0.0}
+      - AGENT_API_KEY=${AGENT_API_KEY}
+      - AI_AGENT_SERVICE_KEY=${AI_AGENT_SERVICE_KEY:-}
+      - FORCE_SYNC_AGENT_PROCESSING=${FORCE_SYNC_AGENT_PROCESSING:-false}
+      - FRONTEND_URL=${FRONTEND_URL:-https://app.resolvemeq.net}
+      - APP_NAME=${APP_NAME:-ResolveMeQ}
+      - EMAIL_HOST=${EMAIL_HOST:-smtp.gmail.com}
+      - EMAIL_PORT=${EMAIL_PORT:-587}
+      - EMAIL_USE_TLS=${EMAIL_USE_TLS:-True}
+      - EMAIL_HOST_USER=${EMAIL_HOST_USER:-}
+      - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD:-}
+      - DEFAULT_FROM_EMAIL=${DEFAULT_FROM_EMAIL:-}
+      - SUPPORT_EMAIL=${SUPPORT_EMAIL:-}
+      - EMAIL_USE_CELERY=${EMAIL_USE_CELERY:-true}
+      - ENABLE_DIGEST_EMAIL_SCHEDULE=${ENABLE_DIGEST_EMAIL_SCHEDULE:-true}
+      - DIGEST_EMAIL_HOUR_UTC=${DIGEST_EMAIL_HOUR_UTC:-8}
+      - MAX_AUTONOMOUS_ACTIONS_PER_DAY=${MAX_AUTONOMOUS_ACTIONS_PER_DAY:-500}
+      - MAX_AUTONOMOUS_ACTIONS_PER_HOUR=${MAX_AUTONOMOUS_ACTIONS_PER_HOUR:-100}
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
       web:
         condition: service_healthy
     networks:
-      - fullstack-network
+      - resolvemeq-backend
+      - resolvemeq-shared
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
 
   celery_beat:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: celery -A resolvemeq beat -l info
-    env_file:
-      - .env
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-celery:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["/app/venv/bin/celery", "-A", "resolvemeq", "beat", "-l", "info"]
     environment:
-      - DATABASE_URL=postgresql://${DB_USER:-resolvemeq}:${DB_PASSWORD:-resolvemeq_password}@db:5432/${DB_NAME:-resolvemeq}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
+      - DEBUG=${DEBUG:-False}
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST:-db}:${DB_PORT:-5432}/${DB_NAME}
+      - DB_HOST=${DB_HOST:-db}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      - SECRET_KEY=${SECRET_KEY}
+      - AGENT_API_KEY=${AGENT_API_KEY}
+      - FRONTEND_URL=${FRONTEND_URL:-https://app.resolvemeq.net}
+      - APP_NAME=${APP_NAME:-ResolveMeQ}
+      - EMAIL_HOST=${EMAIL_HOST:-smtp.gmail.com}
+      - EMAIL_PORT=${EMAIL_PORT:-587}
+      - EMAIL_USE_TLS=${EMAIL_USE_TLS:-True}
+      - EMAIL_HOST_USER=${EMAIL_HOST_USER:-}
+      - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD:-}
+      - DEFAULT_FROM_EMAIL=${DEFAULT_FROM_EMAIL:-}
+      - SUPPORT_EMAIL=${SUPPORT_EMAIL:-}
+      - EMAIL_USE_CELERY=${EMAIL_USE_CELERY:-true}
+      - ENABLE_DIGEST_EMAIL_SCHEDULE=${ENABLE_DIGEST_EMAIL_SCHEDULE:-true}
+      - DIGEST_EMAIL_HOUR_UTC=${DIGEST_EMAIL_HOUR_UTC:-8}
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
-      - fullstack-network
-
-  # ======================================
-  # AI Agent Service
-  # ======================================
-  agent:
-    build:
-      context: ./resolvemeq-agent
-      dockerfile: Dockerfile
-    ports:
-      - "8001:8000"
-    environment:
-      - DJANGO_KB_URL=http://web:8000  # Internal Docker network communication
-      - PORT=8000
-      - LOG_LEVEL=info
-      - ENVIRONMENT=development
-    volumes:
-      - ./resolvemeq-agent/data:/app/data
-      - agent_cache:/app/.cache
-    depends_on:
-      web:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    networks:
-      - fullstack-network
+      - resolvemeq-backend
 
 networks:
-  fullstack-network:
+  resolvemeq-backend:
     driver: bridge
-    name: resolvemeq-fullstack
+  resolvemeq-shared:
+    external: true  # Created externally, shared with agent project
 
 volumes:
   postgres_data:
+    name: resolvemeq_postgres_data
   redis_data:
-  agent_cache:
+    name: resolvemeq_redis_data
+  media_files:
+    name: resolvemeq_media_files
