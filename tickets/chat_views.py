@@ -574,8 +574,52 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
         
         # Format response for chat - convert full analysis to conversational response
         solution = data.get('solution', {})
+        response_style = data.get('response_style') or 'guided_steps'
+        if response_style not in (
+            'guided_steps',
+            'informational',
+            'clarification_only',
+            'escalation_focus',
+        ):
+            response_style = 'guided_steps'
+
+        # Prose modes: no numbered "steps to follow" repair UI, no fix-it time/success metrics
+        prose_styles = frozenset({'informational', 'clarification_only', 'escalation_focus'})
+        if response_style in prose_styles:
+            reasoning_text = (data.get('reasoning') or '').strip()
+            steps_fallback = []
+            if isinstance(solution, dict):
+                steps_fallback = solution.get('steps') or []
+            if reasoning_text:
+                chat_text = reasoning_text
+            elif isinstance(steps_fallback, list) and steps_fallback:
+                chat_text = '\n\n'.join(str(s) for s in steps_fallback)
+            else:
+                chat_text = "Here's what I can share."
+            message_type = 'text'
+            steps_list = []
+            estimated_time = None
+            success_probability = None
+            metadata = {
+                'full_solution': solution if isinstance(solution, dict) else None,
+                'analysis': data.get('analysis', {}),
+                'response_style': response_style,
+                'suggested_actions': _normalize_suggested_actions_metadata(
+                    data.get('suggested_actions'), data, ticket, resolution_state
+                ),
+                'quick_replies': _normalize_quick_replies_metadata(
+                    data.get('quick_replies'), data, ticket, resolution_state
+                ),
+            }
+            return {
+                'text': chat_text,
+                'confidence': data.get('confidence', 0.5),
+                'recommended_action': data.get('recommended_action'),
+                'message_type': message_type,
+                'metadata': metadata,
+            }
         
-        # Extract the solution text
+        # Extract the solution text (guided troubleshooting)
         if isinstance(solution, dict):
             steps = solution.get('steps', [])
             if isinstance(steps, list) and steps:
@@ -611,6 +655,7 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
         metadata = {
             'full_solution': solution if isinstance(solution, dict) else None,
             'analysis': data.get('analysis', {}),
+            'response_style': 'guided_steps',
             'suggested_actions': _normalize_suggested_actions_metadata(
                 data.get('suggested_actions'), data, ticket, resolution_state
             ),
