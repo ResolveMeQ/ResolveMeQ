@@ -104,22 +104,9 @@ def send_chat_message(request, ticket_id):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    billing_user = get_billing_user_for_ticket(ticket)
-    quota = try_consume_agent_operation(billing_user)
-    if not quota.allowed:
-        return Response(
-            {
-                'error': 'agent_quota_exceeded',
-                'detail': 'Your plan monthly AI agent limit has been reached. Upgrade to continue.',
-                'agent_operations_used': quota.used,
-                'agent_operations_limit': quota.limit,
-            },
-            status=status.HTTP_429_TOO_MANY_REQUESTS,
-        )
-    
     conversation_id = request.data.get('conversation_id')
-    
-    # Get or create conversation
+
+    # Get or create conversation before billing
     if conversation_id:
         conversation = get_object_or_404(
             Conversation,
@@ -133,6 +120,20 @@ def send_chat_message(request, ticket_id):
             user=request.user,
             is_active=True,
             defaults={'summary': f'Chat about: {ticket.issue_type}'}
+        )
+
+    billing_user = get_billing_user_for_ticket(ticket)
+
+    quota = try_consume_agent_operation(billing_user)
+    if not quota.allowed:
+        return Response(
+            {
+                'error': 'agent_quota_exceeded',
+                'detail': 'Your plan monthly AI agent limit has been reached. Upgrade to continue.',
+                'agent_operations_used': quota.used,
+                'agent_operations_limit': quota.limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
         )
 
     # First message in conversation = user is actively working on the ticket
@@ -423,6 +424,34 @@ def _build_resolution_state(ticket, conversation):
     return state
 
 
+def _conversation_guidance_for_agent(conversation):
+    """
+    Short anchor for the remote model: the assistant turn immediately before the latest user message.
+    Improves multi-topic threads without keyword rules—pairs with agent-side coherence instructions.
+    """
+    last_user = (
+        conversation.messages.filter(sender_type="user").order_by("-created_at").first()
+    )
+    if not last_user:
+        return None
+    last_ai = (
+        conversation.messages.filter(sender_type="ai", created_at__lt=last_user.created_at)
+        .order_by("-created_at")
+        .first()
+    )
+    if not last_ai or not (last_ai.text or "").strip():
+        return None
+    one_line = " ".join((last_ai.text or "").strip().split())
+    if len(one_line) > 400:
+        one_line = one_line[:397] + "..."
+    return (
+        'The assistant\'s most recent reply before this user message (short follow-ups refer here unless '
+        'the user clearly switches topic): "'
+        + one_line
+        + '"'
+    )
+
+
 def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None):
     """
     Internal function to get AI response for a chat message.
@@ -431,16 +460,15 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
     """
     if billing_user is None:
         billing_user = get_billing_user_for_ticket(ticket)
-    # Full conversation history for continuity (last 15 messages; model responds to latest)
+    # Full conversation history for continuity (last 15 messages; includes latest user message already saved)
     previous_messages = conversation.messages.order_by('created_at')[:15]
     conversation_history = []
     for msg in previous_messages:
         role = 'user' if msg.sender_type == 'user' else 'assistant'
         conversation_history.append({'role': role, 'text': msg.text or ''})
-    # Current message is the one the model must respond to
-    conversation_history.append({'role': 'user', 'text': message})
 
     resolution_state = _build_resolution_state(ticket, conversation)
+    conversation_guidance = _conversation_guidance_for_agent(conversation)
     agent_data = ticket.agent_response if ticket.agent_processed else None
 
     payload = {
@@ -457,6 +485,8 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
         'conversation_history': conversation_history,
         'resolution_state': resolution_state,
     }
+    if conversation_guidance:
+        payload['conversation_guidance'] = conversation_guidance
     
     # Try to get response from AI agent
     agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
@@ -519,6 +549,8 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
         }
         if steps_list:
             metadata['steps'] = steps_list
+            if len(steps_list) > 3:
+                metadata['steps_truncated'] = True
         if estimated_time:
             metadata['estimated_time'] = estimated_time
         if success_probability is not None:

@@ -1,6 +1,7 @@
-version: '3.8'
-
 # ResolveMeQ Django Backend - Production Deployment
+# Compose loads `.env` from this directory for ${VAR} substitution — put EMAIL_* / DEFAULT_FROM_EMAIL there on the server.
+# After changing SMTP vars: recreate web AND celery_worker (and celery_beat if it sends mail), e.g.
+#   docker compose up -d --force-recreate web celery_worker celery_beat
 # This deploys ONLY the Django application stack (web, celery, db, redis)
 # Deploy the Agent separately from its own repository
 # Use external network to communicate between projects on same VPS

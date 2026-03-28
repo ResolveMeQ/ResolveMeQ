@@ -199,3 +199,6 @@ cython_debug/
 # ResolveMeQ Agent Service
 # Separate FastAPI agent service - has its own repository
 resolvemeq-agent/test_endpoints.py
+
+# Local database dumps (may contain secrets)
+backups/

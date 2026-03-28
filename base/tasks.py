@@ -87,32 +87,33 @@ def health_ping() -> dict:
 @shared_task
 def send_email_with_template(data: dict, template_name: str, context: dict, recipient: list):
     template_name = f"emails/{template_name}"
+    html_body = render_to_string(template_name, context)
+    plain_body = _html_to_plain(html_body)
+    from_email = _transactional_from_email()
+    if not from_email:
+        msg = "Set DEFAULT_FROM_EMAIL or EMAIL_HOST_USER in settings / .env"
+        logger.error("Email not sent: %s", msg)
+        raise ValueError(msg)
+
+    headers = {}
+    support = getattr(settings, "SUPPORT_EMAIL", "") or ""
+    if support:
+        headers["Reply-To"] = support
+
+    email = EmailMultiAlternatives(
+        subject=data["subject"],
+        body=plain_body,
+        from_email=from_email,
+        to=recipient,
+        headers=headers,
+    )
+    email.attach_alternative(html_body, "text/html")
     try:
-        html_body = render_to_string(template_name, context)
-        plain_body = _html_to_plain(html_body)
-        from_email = _transactional_from_email()
-        if not from_email:
-            logger.error("Email not sent: set DEFAULT_FROM_EMAIL or EMAIL_HOST_USER in settings / .env")
-            return
-
-        headers = {}
-        support = getattr(settings, "SUPPORT_EMAIL", "") or ""
-        if support:
-            headers["Reply-To"] = support
-
-        email = EmailMultiAlternatives(
-            subject=data["subject"],
-            body=plain_body,
-            from_email=from_email,
-            to=recipient,
-            headers=headers,
-        )
-        email.attach_alternative(html_body, "text/html")
         email.send()
-        logger.info("Email sent")
+        logger.info("Email sent to %s", recipient)
     except Exception as e:
-        logger.error(f"Email sending failed: {str(e)}", exc_info=True)
-        print("❌ EMAIL FAILED:", str(e))
+        logger.error("Email sending failed: %s", str(e), exc_info=True)
+        raise
 
 
 @shared_task

@@ -117,19 +117,18 @@ DATABASES = {
 }
 """
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME'),
-        'USER': os.getenv('DB_USER'),
-        'PASSWORD': os.getenv('DB_PASSWORD'),
-        'HOST': os.getenv('DB_HOST'),
-        'PORT': os.getenv('DB_PORT', '5432'),
-        # 'OPTIONS': {
-        #     'sslmode': 'require',
-        # },
-    }
+_db = {
+    'ENGINE': 'django.db.backends.postgresql',
+    'NAME': os.getenv('DB_NAME'),
+    'USER': os.getenv('DB_USER'),
+    'PASSWORD': os.getenv('DB_PASSWORD'),
+    'HOST': os.getenv('DB_HOST'),
+    'PORT': os.getenv('DB_PORT', '5432'),
 }
+if (os.getenv('DB_HOST') or '').endswith('.supabase.co'):
+    _db['OPTIONS'] = {'sslmode': 'require'}
+
+DATABASES = {'default': _db}
 
 CSRF_TRUSTED_ORIGINS = [
     "https://app.resolvemeq.com",
