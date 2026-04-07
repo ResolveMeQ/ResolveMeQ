@@ -698,11 +698,36 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
         return _generate_fallback_response(message, ticket, agent_data, agent_error=str(e))
 
 
+def _filter_redundant_human_quick_replies(replies, ticket_status):
+    """On escalated tickets, drop AI quick replies that only nag for human support again."""
+    if (ticket_status or "") != "escalated" or not replies:
+        return replies
+    needles = (
+        "speak with support",
+        "support staff",
+        "talk to a human",
+        "get human",
+        "human help",
+        "connect me to",
+        "escalate",
+        "need a person",
+    )
+    out = []
+    for r in replies:
+        val = (r.get("value") or "").lower()
+        lab = (r.get("label") or "").lower()
+        if any(n in val or n in lab for n in needles):
+            continue
+        out.append(r)
+    return out
+
+
 def _normalize_quick_replies_metadata(raw, data, ticket, resolution_state):
     """
     Prefer quick_replies from the AI agent (dynamic, situation-specific).
     If missing or empty after validation, use a small rule-based fallback.
     """
+    ticket_status = getattr(ticket, "status", "") or (resolution_state or {}).get("ticket_status", "")
     if isinstance(raw, list) and raw:
         out = []
         for x in raw[:8]:
@@ -713,7 +738,7 @@ def _normalize_quick_replies_metadata(raw, data, ticket, resolution_state):
             if label and value:
                 out.append({"label": label[:200], "value": value[:2000]})
         if out:
-            return out
+            return _filter_redundant_human_quick_replies(out, ticket_status)
     return _generate_quick_replies(data, ticket, resolution_state)
 
 
@@ -728,11 +753,19 @@ def _suggested_action_struct_from_string(s):
     return {"label": str(s)[:120], "intent": "compose", "message": str(s)[:2000]}
 
 
+def _strip_redundant_escalate_suggested_actions(actions, ticket_status):
+    """When ticket is already escalated, drop escalate-intent buttons — they duplicate UI state and annoy users."""
+    if (ticket_status or "") != "escalated" or not actions:
+        return actions
+    return [a for a in actions if str(a.get("intent") or "").lower() != "escalate"]
+
+
 def _normalize_suggested_actions_metadata(raw, data, ticket, resolution_state):
     """
     Prefer suggested_actions from the AI (list of {label, intent, message}).
     If absent, derive from recommended_action via legacy string extraction.
     """
+    ticket_status = getattr(ticket, "status", "") or (resolution_state or {}).get("ticket_status", "")
     if isinstance(raw, list) and raw:
         out = []
         allowed = frozenset({"auto_resolve", "escalate", "request_clarification", "compose"})
@@ -750,9 +783,10 @@ def _normalize_suggested_actions_metadata(raw, data, ticket, resolution_state):
             elif isinstance(item, str) and item.strip():
                 out.append(_suggested_action_struct_from_string(item.strip()))
         if out:
-            return out
+            return _strip_redundant_escalate_suggested_actions(out, ticket_status)
     strings = _extract_actions_from_response(data, ticket, resolution_state)
-    return [_suggested_action_struct_from_string(s) for s in strings]
+    structs = [_suggested_action_struct_from_string(s) for s in strings]
+    return _strip_redundant_escalate_suggested_actions(structs, ticket_status)
 
 
 def _extract_actions_from_response(data, ticket, resolution_state=None):
@@ -766,15 +800,20 @@ def _extract_actions_from_response(data, ticket, resolution_state=None):
     resolution_confirmed = state.get('resolution_confirmed')
 
     if 'recommended_action' in data:
-        ra = data['recommended_action'].replace('_', ' ').title()
-        # Don't suggest Auto Resolve if ticket was reopened or user said it didn't work
-        if reopened or resolution_confirmed is False:
-            if 'auto' in ra.lower() or 'resolve' in ra.lower():
-                ra = 'Escalate'  # Prefer escalation after failed resolution
-        # Friendlier label for users going step-by-step: "Mark as resolved" encourages good closure
-        if ra.lower() == 'auto resolve':
-            ra = 'Mark as resolved'
-        actions.append(ra)
+        rec = str(data.get('recommended_action') or '')
+        # Already escalated: don't add another "Escalate" chip from model output
+        if ticket_status == 'escalated' and 'escalate' in rec.lower():
+            pass
+        else:
+            ra = rec.replace('_', ' ').title()
+            # Don't suggest Auto Resolve if ticket was reopened or user said it didn't work
+            if reopened or resolution_confirmed is False:
+                if 'auto' in ra.lower() or 'resolve' in ra.lower():
+                    ra = 'Escalate'  # Prefer escalation after failed resolution
+            # Friendlier label for users going step-by-step: "Mark as resolved" encourages good closure
+            if ra.lower() == 'auto resolve':
+                ra = 'Mark as resolved'
+            actions.append(ra)
 
     # Do NOT add immediate_actions - they are instructional steps, not clickable actions.
     # They duplicate the steps already shown and confuse users when rendered as buttons.
@@ -808,16 +847,17 @@ def _generate_quick_replies(data, ticket, resolution_state=None):
                 'value': 'Please apply this solution to my ticket'
             })
 
-    # After failed resolution or reopen, offer alternatives
+    # After failed resolution or reopen, offer alternatives (skip redundant human CTAs if already escalated)
     if reopened or resolution_confirmed is False:
         replies.append({
             'label': 'Try a different approach',
             'value': 'The previous solution did not work, I need a different approach'
         })
-        replies.append({
-            'label': 'Escalate to human',
-            'value': 'I need to speak with support staff'
-        })
+        if ticket_status != 'escalated':
+            replies.append({
+                'label': 'Escalate to human',
+                'value': 'I need to speak with support staff'
+            })
     if last_ai_was_helpful is False and not any(r.get('value', '').find('different') >= 0 for r in replies):
         replies.append({
             'label': 'That didn\'t help',
@@ -826,11 +866,16 @@ def _generate_quick_replies(data, ticket, resolution_state=None):
 
     # Fallback only (AI normally supplies situation-specific quick_replies)
 
-    # Always offer these (avoid duplicates)
-    for label, value in [
+    # Default chips: skip "Talk to a human" when ticket is already escalated (avoids nagging + CTA loops)
+    default_chips = [
         ('Show similar tickets', 'Show me similar resolved tickets'),
         ('Talk to a human', 'I need to speak with support staff'),
-    ]:
+    ]
+    if ticket_status == 'escalated':
+        default_chips = [
+            ('Show similar tickets', 'Show me similar resolved tickets'),
+        ]
+    for label, value in default_chips:
         if not any(r.get('value') == value for r in replies):
             replies.append({'label': label, 'value': value})
 
