@@ -9,6 +9,25 @@ from tickets.models import Ticket, TicketInteraction
 
 logger = logging.getLogger(__name__)
 
+VALID_URGENCY = frozenset({"low", "medium", "high"})
+
+
+def compose_issue_type(subject: str, urgency: str | None = None) -> str:
+    """
+    Single format for `Ticket.issue_type` when urgency is set: "Subject (urgency)".
+    Truncates to the model's max_length. Omit or pass invalid urgency to store subject only.
+    """
+    max_len = Ticket._meta.get_field("issue_type").max_length
+    base = (subject or "").strip()
+    if not base:
+        return ""
+    u = (urgency or "").strip().lower()
+    if u in VALID_URGENCY:
+        out = f"{base} ({u})"
+    else:
+        out = base
+    return out[:max_len] if len(out) > max_len else out
+
 
 def create_ticket_with_reporter(
     user: User,

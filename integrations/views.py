@@ -258,6 +258,7 @@ def notify_user_ticket_created(slack_user_id, ticket_id, slack_team_id=None, ins
     inst = installation or slack_inst.get_installation_for_slack_team(slack_team_id)
     if not inst:
         return
+    web = getattr(settings, "FRONTEND_URL", "https://app.resolvemeq.net").rstrip("/")
     resp = slack_inst.slack_api_post(
         inst,
         "chat.postMessage",
@@ -265,7 +266,8 @@ def notify_user_ticket_created(slack_user_id, ticket_id, slack_team_id=None, ins
             "channel": slack_user_id,
             "text": (
                 f"🎟️ Ticket #{ticket_id} created successfully! We'll get back to you soon.\n"
-                "If you have a screenshot, please upload it here and mention your ticket number."
+                f"To attach a screenshot from your computer, use the web app ({web}/tickets) — the New ticket form supports image upload. "
+                "You can also paste a public image URL in the Slack form next time."
             ),
         },
     )
@@ -355,21 +357,34 @@ def _slack_modal_payload_view_submission(payload):
     if callback_id == "resolvemeq_modal":
         values = payload["view"]["state"]["values"]
         category = values["category_block"]["category"]["selected_option"]["value"]
-        issue_type = values["issue_type_block"]["issue_type"]["selected_option"]["value"]
+        subject = (
+            values.get("subject_block", {}).get("subject", {}).get("value") or ""
+        ).strip()
+        if not subject:
+            return JsonResponse(
+                {
+                    "response_action": "errors",
+                    "errors": {
+                        "subject_block": "Enter a short subject (same as the web app).",
+                    },
+                }
+            )
         urgency = values["urgency_block"]["urgency"]["selected_option"]["value"]
-        description = values["description_block"]["description"]["value"]
+        description = (
+            values.get("description_block", {}).get("description", {}).get("value") or ""
+        )
         screenshot = values.get("screenshot_block", {}).get("screenshot", {}).get("value", "")
         user_id = payload["user"]["id"]
         slack_team_id = _slack_team_id_from_payload(payload)
         inst = slack_inst.get_installation_for_slack_team(slack_team_id)
         user, _ = slack_inst.get_or_create_slack_shadow_user(user_id)
         team = inst.resolvemeq_team if inst else None
-        from tickets.services import create_ticket_with_reporter
+        from tickets.services import compose_issue_type, create_ticket_with_reporter
 
         ticket = create_ticket_with_reporter(
             user,
             team,
-            issue_type=f"{issue_type} ({urgency})",
+            issue_type=compose_issue_type(subject, urgency),
             description=description,
             screenshot=screenshot or None,
             category=category,
@@ -448,10 +463,17 @@ def slack_slash_command(request):
 
         # Only handle /resolvemeq (open modal)
         if command == "/resolvemeq" and not text:
+            from tickets.models import Ticket
+
             token_obj = slack_inst.get_installation_for_slack_team(slack_team_id)
             if not token_obj:
                 return JsonResponse({"text": "Bot not authorized for this workspace."})
-            # Build modal view
+            # Same fields/order semantics as the web create form (see tickets.views.create_ticket).
+            category_options = [
+                {"text": {"type": "plain_text", "text": label}, "value": value}
+                for value, label in Ticket.CATEGORY_CHOICES
+            ]
+            web_base = getattr(settings, "FRONTEND_URL", "https://app.resolvemeq.net").rstrip("/")
             modal_view = {
                 "type": "modal",
                 "callback_id": "resolvemeq_modal",
@@ -460,47 +482,36 @@ def slack_slash_command(request):
                 "close": {"type": "plain_text", "text": "Cancel"},
                 "blocks": [
                     {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": (
+                                f"📎 *Screenshot from your device:* use the <{web_base}/tickets|ResolveMeQ web app> "
+                                f"to upload images (recommended). Or paste a public image URL in the field below."
+                            ),
+                        },
+                    },
+                    {
                         "type": "input",
                         "block_id": "category_block",
                         "element": {
                             "type": "static_select",
                             "action_id": "category",
                             "placeholder": {"type": "plain_text", "text": "Select category"},
-                            "options": [
-                                {"text": {"type": "plain_text", "text": "Wi-Fi"}, "value": "wifi"},
-                                {"text": {"type": "plain_text", "text": "Laptop"}, "value": "laptop"},
-                                {"text": {"type": "plain_text", "text": "VPN"}, "value": "vpn"},
-                                {"text": {"type": "plain_text", "text": "Printer"}, "value": "printer"},
-                                {"text": {"type": "plain_text", "text": "Email"}, "value": "email"},
-                                {"text": {"type": "plain_text", "text": "Software"}, "value": "software"},
-                                {"text": {"type": "plain_text", "text": "Hardware"}, "value": "hardware"},
-                                {"text": {"type": "plain_text", "text": "Network"}, "value": "network"},
-                                {"text": {"type": "plain_text", "text": "Account"}, "value": "account"},
-                                {"text": {"type": "plain_text", "text": "Access"}, "value": "access"},
-                                {"text": {"type": "plain_text", "text": "Phone"}, "value": "phone"},
-                                {"text": {"type": "plain_text", "text": "Server"}, "value": "server"},
-                                {"text": {"type": "plain_text", "text": "Security"}, "value": "security"},
-                                {"text": {"type": "plain_text", "text": "Cloud"}, "value": "cloud"},
-                                {"text": {"type": "plain_text", "text": "Storage"}, "value": "storage"},
-                                {"text": {"type": "plain_text", "text": "Other"}, "value": "other"},
-                            ],
+                            "options": category_options,
                         },
-                        "label": {"type": "plain_text", "text": "Service Category"},
+                        "label": {"type": "plain_text", "text": "Category"},
                     },
                     {
                         "type": "input",
-                        "block_id": "issue_type_block",
+                        "block_id": "subject_block",
                         "element": {
-                            "type": "static_select",
-                            "action_id": "issue_type",
-                            "placeholder": {"type": "plain_text", "text": "Select issue type"},
-                            "options": [
-                                {"text": {"type": "plain_text", "text": "Report"}, "value": "report"},
-                                {"text": {"type": "plain_text", "text": "Status"}, "value": "status"},
-                                {"text": {"type": "plain_text", "text": "Escalate"}, "value": "escalate"},
-                            ],
+                            "type": "plain_text_input",
+                            "action_id": "subject",
+                            "max_length": 100,
+                            "placeholder": {"type": "plain_text", "text": "Brief summary of the issue"},
                         },
-                        "label": {"type": "plain_text", "text": "Issue Type"},
+                        "label": {"type": "plain_text", "text": "Subject"},
                     },
                     {
                         "type": "input",
@@ -520,10 +531,12 @@ def slack_slash_command(request):
                     {
                         "type": "input",
                         "block_id": "description_block",
+                        "optional": True,
                         "element": {
                             "type": "plain_text_input",
                             "action_id": "description",
                             "multiline": True,
+                            "placeholder": {"type": "plain_text", "text": "Additional details (optional)"},
                         },
                         "label": {"type": "plain_text", "text": "Description"},
                     },
@@ -534,9 +547,12 @@ def slack_slash_command(request):
                         "element": {
                             "type": "plain_text_input",
                             "action_id": "screenshot",
-                            "placeholder": {"type": "plain_text", "text": "Paste screenshot URL (optional)"},
+                            "placeholder": {
+                                "type": "plain_text",
+                                "text": "Image link if hosted elsewhere (optional)",
+                            },
                         },
-                        "label": {"type": "plain_text", "text": "Screenshot URL"},
+                        "label": {"type": "plain_text", "text": "Screenshot link (optional)"},
                     },
                 ],
             }
@@ -834,6 +850,13 @@ def _slack_install_and_dm_for_ticket_id(ticket_id):
     return inst, ch
 
 
+def _slack_truncate_mrkdwn(text: str, max_len: int = 2800) -> str:
+    t = (text or "").strip()
+    if len(t) <= max_len:
+        return t
+    return t[: max_len - 1].rsplit(" ", 1)[0] + "…"
+
+
 def notify_user_agent_response(user_id, ticket_id, agent_response, thread_ts=None):
     """
     Sends the agent's analysis and recommendations to the user via Slack DM, with interactive buttons.
@@ -847,6 +870,10 @@ def notify_user_agent_response(user_id, ticket_id, agent_response, thread_ts=Non
 
     inst, slack_channel = _slack_install_and_dm_for_ticket_id(ticket_id)
     if not inst or not slack_channel:
+        logger.warning(
+            "Slack agent summary skipped (ticket_id=%s): no installation or DM channel for reporter",
+            ticket_id,
+        )
         return
     # Format the agent response for Slack
     if isinstance(agent_response, str):
@@ -854,22 +881,75 @@ def notify_user_agent_response(user_id, ticket_id, agent_response, thread_ts=Non
             agent_response = json.loads(agent_response)
         except Exception:
             agent_response = {"analysis": {}, "recommendations": {}}
+    if not isinstance(agent_response, dict):
+        agent_response = {"analysis": {}, "recommendations": {}}
     analysis = agent_response.get("analysis", {})
-    recommendations = agent_response.get("recommendations", {})
+    if not isinstance(analysis, dict):
+        analysis = {}
+    recommendations = agent_response.get("recommendations") or {}
+    solution = agent_response.get("solution") or {}
+    reasoning = agent_response.get("reasoning") or ""
+    confidence = agent_response.get("confidence")
     # Build Slack blocks
-    blocks = [
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"🤖 *Agent Analysis for Ticket #{ticket_id}*"}},
-    ]
+    header = f"🤖 *AI update for ticket #{ticket_id}*"
+    if confidence is not None:
+        try:
+            header += f" _(confidence {float(confidence):.0%})_"
+        except (TypeError, ValueError):
+            pass
+    blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": header}}]
     if analysis:
         for k, v in analysis.items():
-            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{k.replace('_',' ').capitalize()}:* {v}"}})
+            if v is None or v == "":
+                continue
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": _slack_truncate_mrkdwn(f"*{str(k).replace('_', ' ').title()}:* {v}"),
+                    },
+                }
+            )
+    steps = solution.get("steps") if isinstance(solution, dict) else None
+    if isinstance(steps, list) and steps:
+        lines = "\n".join(f"• {s}" for s in (str(x) for x in steps[:15]))
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _slack_truncate_mrkdwn(f"*Steps:*\n{lines}")}})
+    immediate = solution.get("immediate_actions") if isinstance(solution, dict) else None
+    if isinstance(immediate, list) and immediate:
+        lines = "\n".join(f"• {s}" for s in (str(x) for x in immediate[:10]))
+        blocks.append(
+            {"type": "section", "text": {"type": "mrkdwn", "text": _slack_truncate_mrkdwn(f"*Try first:*\n{lines}")}}
+        )
+    if isinstance(reasoning, str) and reasoning.strip():
+        blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": _slack_truncate_mrkdwn(f"*Summary:*\n{reasoning.strip()}")},
+            }
+        )
     if recommendations:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*Recommendations:*"}})
         for k, v in recommendations.items():
             if isinstance(v, list):
-                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{k.replace('_',' ').capitalize()}:*\n- " + "\n- ".join(v)}})
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": _slack_truncate_mrkdwn(
+                                f"*{str(k).replace('_', ' ').title()}:*\n- " + "\n- ".join(str(x) for x in v)
+                            ),
+                        },
+                    }
+                )
             else:
-                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{k.replace('_',' ').capitalize()}:* {v}"}})
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": _slack_truncate_mrkdwn(f"*{str(k).replace('_', ' ').title()}:* {v}")},
+                    }
+                )
     # Add interactive buttons
     blocks.append({
         "type": "actions",

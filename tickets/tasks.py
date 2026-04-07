@@ -69,8 +69,10 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False, bill
                 "id": str(ticket.user.id),
                 "name": ticket.user.username,
                 "department": getattr(ticket.user, "department", "")
-            }
+            },
         }
+        if ticket.screenshot:
+            payload["screenshot"] = ticket.screenshot
 
         # Send to agent
         agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.com/api/analyze')
@@ -94,6 +96,17 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False, bill
                 confidence=ticket.agent_response.get("confidence"),
                 recommended_action=str(ticket.agent_response.get("recommended_action") or ""),
             )
+
+        # Slack DM: agent JSON is saved above, but autonomous handlers only notify for some paths.
+        try:
+            notify_user_agent_response(
+                str(ticket.user_id),
+                ticket.ticket_id,
+                ticket.agent_response,
+                thread_ts=thread_ts,
+            )
+        except Exception as slack_exc:
+            logger.warning("notify_user_agent_response failed for ticket %s: %s", ticket_id, slack_exc)
 
         # --- NEW: Autonomous Agent Decision Making ---
         autonomous_agent = AutonomousAgent(ticket)
@@ -412,10 +425,8 @@ def handle_schedule_followup(ticket, params):
             eta=followup_time
         )
     
-    # Send solution to user but don't auto-resolve
-    from integrations.views import send_solution_with_followup
-    send_solution_with_followup(str(ticket.user.id), ticket.ticket_id, params)
-    
+    # Solution text is already sent via notify_user_agent_response from process_ticket_with_agent.
+    # Keep only the scheduled follow-up check.
     logger.info(f"Scheduled follow-up for ticket {ticket.ticket_id}")
     return True
 

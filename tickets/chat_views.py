@@ -556,6 +556,8 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
         'conversation_history': conversation_history,
         'resolution_state': resolution_state,
     }
+    if ticket.screenshot:
+        payload['screenshot'] = ticket.screenshot
     if conversation_guidance:
         payload['conversation_guidance'] = conversation_guidance
     

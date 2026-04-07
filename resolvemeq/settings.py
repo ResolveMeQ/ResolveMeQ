@@ -256,6 +256,10 @@ STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 # Optionally, if you have extra static directories:
 # STATICFILES_DIRS = [os.path.join(BASE_DIR, "static")]
 
+# User uploads (ticket screenshots, attachments). Docker Compose mounts `media_files` → /app/media.
+MEDIA_URL = (os.getenv("MEDIA_URL") or "/media/").rstrip("/") + "/"
+MEDIA_ROOT = os.path.abspath(os.getenv("MEDIA_ROOT", str(BASE_DIR / "media")))
+
 # Serve admin / Jazzmin / DRF static assets in production (Gunicorn has no built-in static handler).
 WHITENOISE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 WHITENOISE_SKIP_COMPRESS_EXTENSIONS = ("jpg", "jpeg", "png", "webp", "zip", "gz", "tgz", "bz2", "tbz", "xz", "br")

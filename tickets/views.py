@@ -16,7 +16,7 @@ from .scoping import (
     user_can_assign_agent,
 )
 from .tasks import process_ticket_with_agent
-from .services import create_ticket_with_reporter
+from .services import compose_issue_type, create_ticket_with_reporter
 from .user_email_notify import dispatch_ticket_assigned_email, dispatch_ticket_status_emails
 from .serializers import TicketSerializer, TicketInteractionSerializer
 from .outcome_helpers import apply_escalated_timestamp
@@ -34,10 +34,62 @@ from base.agent_usage import (
 from base.models import User, InAppNotification
 from base.permissions import IsAuthenticatedOrAgent
 from rest_framework import status
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from django.core.files.storage import default_storage
+from django.http import QueryDict
+from pathlib import Path
+import uuid
 
 logger = logging.getLogger(__name__)
+
+_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024
+_ALLOWED_IMAGE_CT = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+_ALLOWED_IMAGE_EXT = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp"})
+
+
+def _magic_bytes_valid(head: bytes) -> bool:
+    """True if bytes look like JPEG/PNG/GIF/WebP (content sniffing, not only Content-Type)."""
+    if len(head) < 12:
+        return False
+    if head[:3] == b"\xff\xd8\xff":
+        return True
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        return True
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return True
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return True
+    return False
+
+
+def _screenshot_upload_error(uploaded) -> str | None:
+    if uploaded.size > _SCREENSHOT_MAX_BYTES:
+        return "Screenshot too large (max 5 MB)."
+    ct = (getattr(uploaded, "content_type", None) or "").split(";")[0].strip().lower()
+    if ct and ct not in _ALLOWED_IMAGE_CT:
+        return "Use a JPEG, PNG, GIF, or WebP image."
+    head = uploaded.read(32)
+    uploaded.seek(0)
+    if not _magic_bytes_valid(head):
+        return "File content is not a supported image (JPEG, PNG, GIF, or WebP)."
+    return None
+
+
+def _store_screenshot_upload(request, uploaded_file) -> tuple[str, str]:
+    """
+    Save an image before the Ticket row exists. Returns (relative_storage_path, absolute_url).
+    Uses ticket_pending/ so the agent task (queued on create) always sees a stable screenshot URL.
+    """
+    ext = Path(uploaded_file.name).suffix.lower()
+    if ext not in _ALLOWED_IMAGE_EXT:
+        ext = ".jpg"
+    rel = default_storage.save(
+        f"ticket_pending/{uuid.uuid4().hex}{ext}",
+        uploaded_file,
+    )
+    url = default_storage.url(rel)
+    abs_url = url if url.startswith(("http://", "https://")) else request.build_absolute_uri(url)
+    return rel, abs_url
 
 
 def _solution_preview_from_agent_response(agent_response, max_len=400):
@@ -238,8 +290,10 @@ def process_with_agent(request, ticket_id):
                     "id": str(ticket.user.id),
                     "name": ticket.user.username,
                     "department": getattr(ticket.user, "department", "")
-                }
+                },
             }
+            if ticket.screenshot:
+                payload["screenshot"] = ticket.screenshot
 
             agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
             headers_req = get_agent_service_headers()
@@ -404,12 +458,32 @@ def ticket_agent_status(request, ticket_id):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticatedOrAgent])
+@parser_classes([JSONParser, MultiPartParser, FormParser])
 def create_ticket(request):
     """
     Create a new ticket. JWT users are always the reporter; agent integrations may supply user (UUID).
     Team is set from the reporter's active_team when they are a member/owner of that team.
+
+    JSON body (default) or multipart/form-data with the same field names. For images from the
+    device, send multipart and include a file field named ``screenshot`` (or ``image``).
     """
-    data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+    screenshot_file = request.FILES.get("screenshot") or request.FILES.get("image")
+    if screenshot_file:
+        upload_err = _screenshot_upload_error(screenshot_file)
+        if upload_err:
+            return Response({"error": upload_err}, status=status.HTTP_400_BAD_REQUEST)
+
+    if isinstance(request.data, QueryDict):
+        data = request.data.copy()
+        if screenshot_file:
+            data.pop("screenshot", None)
+            data.pop("image", None)
+    else:
+        data = dict(request.data)
+        if screenshot_file:
+            data.pop("screenshot", None)
+            data.pop("image", None)
+
     if getattr(request, "user", None) and request.user.is_authenticated:
         data["user"] = str(request.user.pk)
     serializer = TicketSerializer(data=data)
@@ -429,17 +503,31 @@ def create_ticket(request):
 
                 team_obj = Team.objects.filter(pk=tid).first()
         v = serializer.validated_data
-        ticket = create_ticket_with_reporter(
-            user,
-            team_obj,
-            issue_type=v["issue_type"],
-            description=v.get("description"),
-            category=v.get("category", "other"),
-            screenshot=v.get("screenshot"),
-            tags=v.get("tags") or [],
-            assigned_to=v.get("assigned_to"),
-            status=data.get("status", "new"),
-        )
+        uploaded_screenshot_url = None
+        pending_rel = None
+        if screenshot_file:
+            pending_rel, uploaded_screenshot_url = _store_screenshot_upload(request, screenshot_file)
+        urgency = (request.data.get("urgency") or "").strip().lower() or None
+        issue_type = compose_issue_type(v["issue_type"], urgency)
+        try:
+            ticket = create_ticket_with_reporter(
+                user,
+                team_obj,
+                issue_type=issue_type,
+                description=v.get("description"),
+                category=v.get("category", "other"),
+                screenshot=uploaded_screenshot_url or v.get("screenshot"),
+                tags=v.get("tags") or [],
+                assigned_to=v.get("assigned_to"),
+                status=data.get("status", "new"),
+            )
+        except Exception:
+            if pending_rel:
+                try:
+                    default_storage.delete(pending_rel)
+                except Exception as del_err:
+                    logger.warning("Orphan screenshot cleanup failed (%s): %s", pending_rel, del_err)
+            raise
         # Agent processing is queued once by tickets.signals.ticket_created (post_save).
         return Response(TicketSerializer(ticket).data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

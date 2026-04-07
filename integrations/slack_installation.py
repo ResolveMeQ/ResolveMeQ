@@ -61,12 +61,16 @@ def get_installation_for_ticket(ticket) -> SlackToken | None:
 
 
 def slack_dm_channel_for_user(user: User | None) -> str | None:
-    """Slack user id to pass as `channel` for DM, or None if this user is not Slack-backed."""
+    """Slack user id to pass as `channel` for chat.postMessage DM, or None if not Slack-backed."""
     if not user:
         return None
     email = (user.email or "").strip().lower()
     if email.endswith("@slack.local"):
         return email.split("@", 1)[0]
+    # Shadow users use username == Slack member ID (U… / W…); email may be missing on legacy rows.
+    un = (getattr(user, "username", None) or "").strip()
+    if len(un) >= 9 and un[0] in ("U", "W") and un[1:].replace("_", "").isalnum():
+        return un
     return None
 
 
@@ -84,6 +88,9 @@ def get_or_create_slack_shadow_user(slack_user_id: str) -> tuple[User, bool]:
     if created:
         user.set_unusable_password()
         user.save(update_fields=["password"])
+    elif not (user.email or "").strip():
+        user.email = email
+        user.save(update_fields=["email"])
     return user, created
 
 
