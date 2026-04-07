@@ -146,6 +146,7 @@ def send_daily_digest_emails() -> None:
         .iterator(chunk_size=100)
     )
 
+    digest_enqueued = 0
     for pref in prefs:
         user = pref.user
         if not user.is_active or not user.email:
@@ -191,5 +192,8 @@ def send_daily_digest_emails() -> None:
             dispatch_send_email_with_template(
                 data, "daily_digest.html", context, [user.email]
             )
+            digest_enqueued += 1
         except Exception as exc:
             logger.warning("Daily digest failed for %s: %s", user.email, exc)
+
+    logger.info("Daily digest finished: enqueued %s digest email(s)", digest_enqueued)

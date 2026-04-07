@@ -444,9 +444,7 @@ def create_ticket(request):
             )
         except Exception as e:
             logger.warning("Failed to create ticket-created notification: %s", e)
-        # Optionally trigger agent processing
-        from .tasks import process_ticket_with_agent
-        process_ticket_with_agent.delay(ticket.ticket_id)
+        # Agent processing is queued once by tickets.signals.ticket_created (post_save).
         return Response(TicketSerializer(ticket).data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
