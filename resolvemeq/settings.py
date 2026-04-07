@@ -58,6 +58,7 @@ LOGGING = {
     "disable_existing_loggers": False,
     "handlers": {
         "console": {"class": "logging.StreamHandler"},
+        "null": {"class": "logging.NullHandler"},
         "mail_admins": {
             "level": "ERROR",
             "class": "django.utils.log.AdminEmailHandler",
@@ -73,7 +74,8 @@ LOGGING = {
         },
         # Do not email admins for invalid Host header noise (bots/scanners).
         "django.security.DisallowedHost": {
-            "handlers": ["console"],
+            # Drop noisy stack traces from scanners probing random Host headers / .env paths.
+            "handlers": ["null"],
             "level": "ERROR",
             "propagate": False,
         },
