@@ -16,6 +16,7 @@ from .scoping import (
     user_can_assign_agent,
 )
 from .tasks import process_ticket_with_agent
+from .services import create_ticket_with_reporter
 from .user_email_notify import dispatch_ticket_assigned_email, dispatch_ticket_status_emails
 from .serializers import TicketSerializer, TicketInteractionSerializer
 from .outcome_helpers import apply_escalated_timestamp
@@ -427,23 +428,18 @@ def create_ticket(request):
                 from base.models import Team
 
                 team_obj = Team.objects.filter(pk=tid).first()
-        ticket = serializer.save(user=user, status=data.get("status", "new"), team=team_obj)
-        TicketInteraction.objects.create(
-            ticket=ticket,
-            user=user,
-            interaction_type="user_message",
-            content=f"Ticket created: {ticket.description}"
+        v = serializer.validated_data
+        ticket = create_ticket_with_reporter(
+            user,
+            team_obj,
+            issue_type=v["issue_type"],
+            description=v.get("description"),
+            category=v.get("category", "other"),
+            screenshot=v.get("screenshot"),
+            tags=v.get("tags") or [],
+            assigned_to=v.get("assigned_to"),
+            status=data.get("status", "new"),
         )
-        try:
-            InAppNotification.objects.create(
-                user=user,
-                type=InAppNotification.Type.INFO,
-                title="Ticket created",
-                message=f"Ticket #{ticket.ticket_id} has been created. We'll get back to you soon.",
-                link=f"/tickets?highlight={ticket.ticket_id}",
-            )
-        except Exception as e:
-            logger.warning("Failed to create ticket-created notification: %s", e)
         # Agent processing is queued once by tickets.signals.ticket_created (post_save).
         return Response(TicketSerializer(ticket).data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -857,8 +853,8 @@ def _notify_ticket_status_change(ticket, new_status):
             )
             try:
                 from integrations.views import notify_user_ticket_resolved
-                # Slack expects channel ID; if user has linked Slack it may be stored elsewhere
-                notify_user_ticket_resolved(str(ticket.user.id), ticket.ticket_id)
+
+                notify_user_ticket_resolved(ticket)
             except Exception:
                 pass
         elif new_status == "escalated":

@@ -1,4 +1,5 @@
 import os
+import logging
 from datetime import timedelta
 from pathlib import Path
 
@@ -50,6 +51,34 @@ if raw_hosts == "*":
 else:
     ALLOWED_HOSTS = [h.strip() for h in raw_hosts.split(",")]
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://app.resolvemeq.net").rstrip("/")
+# Silence repeating DisallowedHost emails (scanner noise) while keeping real error emails.
+# Django will only email when ADMINS is configured and DEBUG=False.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {"class": "logging.StreamHandler"},
+        "mail_admins": {
+            "level": "ERROR",
+            "class": "django.utils.log.AdminEmailHandler",
+            "include_html": True,
+        },
+    },
+    "loggers": {
+        # Keep admin emails for genuine server errors.
+        "django.request": {
+            "handlers": ["mail_admins", "console"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+        # Do not email admins for invalid Host header noise (bots/scanners).
+        "django.security.DisallowedHost": {
+            "handlers": ["console"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+    },
+}
 # Application definition
 
 INSTALLED_APPS = [
@@ -239,8 +268,16 @@ SLACK_CLIENT_ID = os.getenv("SLACK_CLIENT_ID")
 SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET")
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET")
 SLACK_REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI")
+# Bot token scopes for oauth.v2/authorize (comma-separated)
+SLACK_BOT_SCOPES = os.getenv(
+    "SLACK_BOT_SCOPES",
+    "commands,chat:write,im:write,im:history,users:read,app_mentions:read",
+)
 # Optional: Slack channel ID (e.g. C01234ABCD) to post escalated tickets for support visibility
 SLACK_ESCALATION_CHANNEL = os.getenv("SLACK_ESCALATION_CHANNEL", "").strip()
+# Optional: digest / alert target (channel ID); management commands post per active install
+SLACK_DIGEST_CHANNEL = os.getenv("SLACK_DIGEST_CHANNEL", "").strip()
+SLACK_ESCALATION_ALERT_CHANNEL = os.getenv("SLACK_ESCALATION_ALERT_CHANNEL", "").strip()
 
 # Google Sign-In (Web client ID; must match VITE_GOOGLE_CLIENT_ID in the frontend)
 GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()

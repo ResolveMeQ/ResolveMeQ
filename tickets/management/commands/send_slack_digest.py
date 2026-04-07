@@ -1,12 +1,19 @@
 from django.core.management.base import BaseCommand
+from django.conf import settings
 from tickets.models import Ticket
 from integrations.models import SlackToken
-import requests
+from integrations import slack_installation as slack_inst
+
 
 class Command(BaseCommand):
-    help = "Send daily Slack digest of open tickets"
+    help = "Send daily Slack digest of open tickets (uses SLACK_DIGEST_CHANNEL + active Slack installs)"
 
     def handle(self, *args, **kwargs):
+        channel = getattr(settings, "SLACK_DIGEST_CHANNEL", "").strip()
+        if not channel:
+            self.stdout.write("SLACK_DIGEST_CHANNEL not set; skipping.")
+            return
+
         open_tickets = Ticket.objects.filter(
             status__in=["new", "open", "in_progress", "in-progress"]
         )
@@ -15,17 +22,14 @@ class Command(BaseCommand):
 
         digest = "*Daily Open Tickets Digest:*\n"
         for t in open_tickets:
-            digest += f"- #{t.ticket_id}: {t.issue_type} (by {t.user.name if t.user else t.user_id})\n"
+            uname = getattr(t.user, "get_full_name", lambda: "")() or (
+                t.user.username if t.user else "unknown"
+            )
+            digest += f"- #{t.ticket_id}: {t.issue_type} (by {uname})\n"
 
-        token_obj = SlackToken.objects.order_by("-created_at").first()
-        if token_obj:
-            headers = {
-                "Authorization": f"Bearer {token_obj.access_token}",
-                "Content-Type": "application/json",
-            }
-            data = {
-                "channel": "D08V7L2L631",  # Replace with your actual channel ID
-                "text": digest,
-            }
-            resp = requests.post("https://slack.com/api/chat.postMessage", headers=headers, json=data)
-            print("Slack digest response:", resp.text)
+        for inst in SlackToken.objects.filter(is_active=True).select_related("resolvemeq_team"):
+            slack_inst.slack_api_post(
+                inst,
+                "chat.postMessage",
+                {"channel": channel, "text": digest},
+            )

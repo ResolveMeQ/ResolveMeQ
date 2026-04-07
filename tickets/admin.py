@@ -1,8 +1,6 @@
 from django.contrib import admin
 from .models import AgentConfidenceLog, Ticket, ResolutionTemplate
-from integrations.models import SlackToken
 from integrations.views import notify_user_ticket_resolved
-import requests
 import csv
 from django.http import HttpResponse
 
@@ -10,25 +8,29 @@ from django.http import HttpResponse
 def mark_as_resolved(modeladmin, request, queryset):
     for ticket in queryset:
         queryset.filter(pk=ticket.pk).update(status="resolved")
-        if ticket.user and hasattr(ticket.user, "user_id"):
-            notify_user_ticket_resolved(ticket.user.user_id, ticket.ticket_id)
+        if ticket.user:
+            notify_user_ticket_resolved(ticket)
 
 @admin.action(description="Respond via Slack bot")
 def respond_via_bot(modeladmin, request, queryset):
-    token_obj = SlackToken.objects.order_by("-created_at").first()
-    if not token_obj:
-        return
+    from integrations import slack_installation as slack_inst
+
     for ticket in queryset:
-        if ticket.user and hasattr(ticket.user, "user_id"):
-            headers = {
-                "Authorization": f"Bearer {token_obj.access_token}",
-                "Content-Type": "application/json",
-            }
-            reply_data = {
-                "channel": ticket.user.user_id,  # Slack user_id as channel for DM
-                "text": f"IT has responded to your ticket: {ticket.issue_type}\nStatus: {ticket.status}\nDescription: {ticket.description}",
-            }
-            requests.post("https://slack.com/api/chat.postMessage", headers=headers, json=reply_data)
+        inst = slack_inst.get_installation_for_ticket(ticket)
+        ch = slack_inst.slack_dm_channel_for_user(ticket.user)
+        if not inst or not ch:
+            continue
+        slack_inst.slack_api_post(
+            inst,
+            "chat.postMessage",
+            {
+                "channel": ch,
+                "text": (
+                    f"IT has responded to your ticket: {ticket.issue_type}\n"
+                    f"Status: {ticket.status}\nDescription: {ticket.description}"
+                ),
+            },
+        )
 
 @admin.action(description="Export selected tickets as CSV")
 def export_tickets_csv(modeladmin, request, queryset):
