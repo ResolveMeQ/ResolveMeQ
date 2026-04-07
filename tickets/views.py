@@ -2,6 +2,7 @@ from django.shortcuts import render, get_object_or_404
 from django.db.models import Count, Avg, F, ExpressionWrapper, DurationField, Q
 from django.db.models.functions import TruncWeek
 from django.utils import timezone
+from django.utils.text import get_valid_filename
 from rest_framework.decorators import api_view, permission_classes, parser_classes, throttle_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
@@ -794,12 +795,50 @@ def search_tickets(request):
         }
     )
 
+def _save_ticket_upload_file(request, ticket, uploaded_file):
+    """
+    Valid images (size/type/magic bytes) are stored and assigned to ticket.screenshot
+    so the agent can use vision on the next chat turn. Other files are stored generically.
+    Returns dict: relative_path, file_url (absolute), is_ticket_screenshot.
+    """
+    err = _screenshot_upload_error(uploaded_file)
+    tid = ticket.ticket_id
+    if err is None:
+        ext = Path(uploaded_file.name).suffix.lower()
+        if ext not in _ALLOWED_IMAGE_EXT:
+            ext = ".jpg"
+        rel = default_storage.save(
+            f"ticket_{tid}/chat_{uuid.uuid4().hex}{ext}",
+            uploaded_file,
+        )
+        url = default_storage.url(rel)
+        abs_url = (
+            url
+            if url.startswith(("http://", "https://"))
+            else request.build_absolute_uri(url)
+        )
+        ticket.screenshot = abs_url
+        ticket.save(update_fields=["screenshot"])
+        return {"relative_path": rel, "file_url": abs_url, "is_ticket_screenshot": True}
+
+    safe = get_valid_filename(uploaded_file.name or "attachment")
+    rel = default_storage.save(f"ticket_{tid}/{safe}", uploaded_file)
+    url = default_storage.url(rel)
+    abs_url = (
+        url
+        if url.startswith(("http://", "https://"))
+        else request.build_absolute_uri(url)
+    )
+    return {"relative_path": rel, "file_url": abs_url, "is_ticket_screenshot": False}
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
 def upload_attachment(request, ticket_id):
     """
     Upload an attachment (file) to a ticket. Use multipart/form-data.
+    Allowed images update ticket.screenshot for AI vision; other files are stored only.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
     if not _can_access_ticket(request, ticket):
@@ -810,15 +849,20 @@ def upload_attachment(request, ticket_id):
     file = request.FILES.get("file")
     if not file:
         return Response({"error": "No file uploaded."}, status=400)
-    filename = default_storage.save(f"ticket_{ticket_id}/{file.name}", file)
-    # Optionally, store file URL in ticket or as a TicketInteraction
+    info = _save_ticket_upload_file(request, ticket, file)
     TicketInteraction.objects.create(
         ticket=ticket,
         user=ticket.user,
         interaction_type="user_message",
-        content=f"Attachment uploaded: {filename}"
+        content=f"Attachment uploaded: {info['relative_path']}",
     )
-    return Response({"message": "File uploaded.", "file_url": default_storage.url(filename)})
+    return Response(
+        {
+            "message": "File uploaded.",
+            "file_url": info["file_url"],
+            "is_ticket_screenshot": info["is_ticket_screenshot"],
+        }
+    )
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
