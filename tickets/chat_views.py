@@ -578,72 +578,49 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
     agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
     
     try:
-        def _text_contains_any(haystack, needles):
-            h = (haystack or "").lower()
-            return any(n in h for n in needles)
+        def _tokenize_for_overlap(text):
+            low = (text or "").lower()
+            out = []
+            cur = []
+            for ch in low:
+                if ch.isalnum() or ch in ("'", "-"):
+                    cur.append(ch)
+                else:
+                    if cur:
+                        out.append("".join(cur))
+                        cur = []
+            if cur:
+                out.append("".join(cur))
+            stop = {
+                "the", "and", "for", "with", "that", "this", "from", "have", "has", "had",
+                "you", "your", "yours", "are", "was", "were", "will", "would", "should", "could",
+                "can", "cant", "can't", "dont", "don't", "does", "did", "not", "yes", "no",
+                "please", "help", "thanks", "thank", "hi", "hello", "it", "its", "it's",
+                "a", "an", "to", "of", "in", "on", "at", "as", "is", "be", "by", "or",
+            }
+            toks = {t for t in out if len(t) >= 4 and t not in stop}
+            return toks
 
-        def _is_strong_offtopic_boot_template(user_text, agent_json):
-            """
-            Conservative mismatch detector:
-            - If agent response heavily references boot/Safe Mode flows
-            - AND user didn't mention boot/crash/BSOD/startup
-            then auto-retry once with a correction hint.
-            """
-            boot_needles = (
-                "safe mode",
-                "advanced boot",
-                "advanced startup",
-                "startup repair",
-                "recovery environment",
-                "winre",
-                "press f8",
-                "f8 key",
-                "bios",
-                "uefi",
-                "boot menu",
-                "boot options",
-                "boot into",
-                "blue screen",
-                "bsod",
-            )
-            user_boot_needles = (
-                "boot",
-                "startup",
-                "safe mode",
-                "blue screen",
-                "bsod",
-                "won't start",
-                "wont start",
-                "won't turn on",
-                "wont turn on",
-                "stuck",
-                "crash",
-                "crashing",
-                "restart loop",
-            )
-            ut = (user_text or "").strip()
-            if not ut:
-                return False
-            if _text_contains_any(ut, user_boot_needles):
-                return False
+        def _jaccard(a, b):
+            if not a or not b:
+                return 0.0
+            inter = len(a & b)
+            union = len(a | b)
+            return inter / union if union else 0.0
 
-            reasoning = agent_json.get("reasoning") if isinstance(agent_json, dict) else ""
-            solution = agent_json.get("solution") if isinstance(agent_json, dict) else None
-            steps_blob = ""
-            if isinstance(solution, dict):
-                steps = solution.get("steps") or []
+        def _assistant_text_for_validation(agent_json):
+            if not isinstance(agent_json, dict):
+                return ""
+            parts = []
+            r = (agent_json.get("reasoning") or "").strip()
+            if r:
+                parts.append(r[:2000])
+            sol = agent_json.get("solution")
+            if isinstance(sol, dict):
+                steps = sol.get("steps") or []
                 if isinstance(steps, list) and steps:
-                    steps_blob = "\n".join(str(s) for s in steps[:8])
-            combined = "\n".join(
-                x for x in [str(reasoning or ""), str(steps_blob or "")]
-                if x
-            )
-            if not combined.strip():
-                return False
-
-            # "Strong signal" threshold: at least 2 boot needles present
-            hits = sum(1 for n in boot_needles if n in combined.lower())
-            return hits >= 2
+                    parts.append("\n".join(str(s) for s in steps[:8]))
+            return "\n\n".join(parts).strip()
 
         def _call_agent(p, timeout_s):
             resp = requests.post(
@@ -657,25 +634,50 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
 
         data = _call_agent(payload, 25)
 
-        # If the model returns a strong off-topic boot/Safe-Mode template, retry once with a correction hint.
-        if _is_strong_offtopic_boot_template(message, data):
+        # Scalable guardrail:
+        # 1) Cheap overlap heuristic
+        # 2) If suspicious, call agent /tickets/validate/ (LLM self-check)
+        # 3) Retry /analyze/ once with short correction guidance if validator says misaligned
+        user_tokens = _tokenize_for_overlap(message)
+        assistant_text = _assistant_text_for_validation(data)
+        assistant_tokens = _tokenize_for_overlap(assistant_text)
+        overlap = _jaccard(user_tokens, assistant_tokens)
+
+        if len(user_tokens) >= 4 and len(assistant_tokens) >= 8 and overlap < 0.05:
             try:
                 existing = payload.get("conversation_guidance") or ""
-                correction = (
-                    "CORRECTION: The user did NOT ask about boot/startup/Safe Mode. "
-                    "Answer the user's latest message directly. If you need details, ask 1–3 focused questions "
-                    "about the user's described problem; do not switch topics to Windows recovery steps unless "
-                    "the user explicitly mentioned boot/startup issues."
+                summarize_url = str(agent_url).replace("/tickets/analyze/", "/tickets/validate/")
+                vresp = requests.post(
+                    summarize_url,
+                    json={
+                        "ticket_id": ticket.ticket_id,
+                        "user_message": message,
+                        "assistant_text": assistant_text[:8000],
+                        "assistant_json": data if isinstance(data, dict) else None,
+                    },
+                    headers=get_agent_service_headers(),
+                    timeout=8,
                 )
-                payload_retry = dict(payload)
-                payload_retry["conversation_guidance"] = (
-                    (existing + "\n\n" if existing else "") + correction
-                )
-                data = _call_agent(payload_retry, 25)
-                logger.warning(
-                    "AI chat off-topic template detected; retried once. ticket=%s",
-                    getattr(ticket, "ticket_id", None),
-                )
+                vresp.raise_for_status()
+                vdata = vresp.json() or {}
+                if vdata.get("aligned") is False:
+                    correction = (vdata.get("correction_guidance") or "").strip()
+                    if not correction:
+                        correction = (
+                            "Answer the user's latest message directly. If details are missing, ask 1–3 focused "
+                            "clarifying questions. Do not switch to an unrelated troubleshooting template."
+                        )
+                    payload_retry = dict(payload)
+                    payload_retry["conversation_guidance"] = (
+                        (existing + "\n\n" if existing else "") + "RESPONSE ALIGNMENT FIX: " + correction
+                    )
+                    data = _call_agent(payload_retry, 25)
+                    logger.warning(
+                        "AI chat response misaligned (overlap=%.3f); validated+retried once. ticket=%s reason=%s",
+                        overlap,
+                        getattr(ticket, "ticket_id", None),
+                        str(vdata.get("reason") or "")[:200],
+                    )
             except Exception:
                 # Keep the original response if the retry fails for any reason.
                 pass
