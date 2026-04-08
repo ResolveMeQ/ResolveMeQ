@@ -230,6 +230,9 @@ def _send_chat_message_impl(request, ticket_id):
             agent_response_data=ai_response
         )
 
+        # Keep a rolling summary to stabilize long chats (best-effort; throttled).
+        _maybe_update_conversation_summary(ticket, conversation)
+
         touch_first_ai_at(ticket)
         log_agent_confidence_snapshot(
             ticket,
@@ -531,10 +534,20 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
     """
     if billing_user is None:
         billing_user = get_billing_user_for_ticket(ticket)
-    # Full conversation history for continuity (last 15 messages; includes latest user message already saved)
-    previous_messages = conversation.messages.order_by('created_at')[:15]
+    # Conversation context (industry pattern):
+    # - rolling summary + last few messages (to avoid stale context and reduce prompt size)
+    # IMPORTANT: We want the *most recent* messages, not the oldest ones.
+    recent_messages = list(conversation.messages.order_by('-created_at')[:8])
+    recent_messages.reverse()
     conversation_history = []
-    for msg in previous_messages:
+    if (conversation.summary or "").strip():
+        conversation_history.append(
+            {
+                "role": "assistant",
+                "text": f"Conversation summary so far: {(conversation.summary or '').strip()}",
+            }
+        )
+    for msg in recent_messages:
         role = 'user' if msg.sender_type == 'user' else 'assistant'
         conversation_history.append({'role': role, 'text': msg.text or ''})
 
@@ -565,14 +578,107 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
     agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
     
     try:
-        response = requests.post(
-            agent_url,  # Use the standard /analyze/ endpoint
-            json=payload,
-            headers=get_agent_service_headers(),
-            timeout=25  # Chat may include RAG + long context; allow a bit more time
-        )
-        response.raise_for_status()
-        data = response.json()
+        def _text_contains_any(haystack, needles):
+            h = (haystack or "").lower()
+            return any(n in h for n in needles)
+
+        def _is_strong_offtopic_boot_template(user_text, agent_json):
+            """
+            Conservative mismatch detector:
+            - If agent response heavily references boot/Safe Mode flows
+            - AND user didn't mention boot/crash/BSOD/startup
+            then auto-retry once with a correction hint.
+            """
+            boot_needles = (
+                "safe mode",
+                "advanced boot",
+                "advanced startup",
+                "startup repair",
+                "recovery environment",
+                "winre",
+                "press f8",
+                "f8 key",
+                "bios",
+                "uefi",
+                "boot menu",
+                "boot options",
+                "boot into",
+                "blue screen",
+                "bsod",
+            )
+            user_boot_needles = (
+                "boot",
+                "startup",
+                "safe mode",
+                "blue screen",
+                "bsod",
+                "won't start",
+                "wont start",
+                "won't turn on",
+                "wont turn on",
+                "stuck",
+                "crash",
+                "crashing",
+                "restart loop",
+            )
+            ut = (user_text or "").strip()
+            if not ut:
+                return False
+            if _text_contains_any(ut, user_boot_needles):
+                return False
+
+            reasoning = agent_json.get("reasoning") if isinstance(agent_json, dict) else ""
+            solution = agent_json.get("solution") if isinstance(agent_json, dict) else None
+            steps_blob = ""
+            if isinstance(solution, dict):
+                steps = solution.get("steps") or []
+                if isinstance(steps, list) and steps:
+                    steps_blob = "\n".join(str(s) for s in steps[:8])
+            combined = "\n".join(
+                x for x in [str(reasoning or ""), str(steps_blob or "")]
+                if x
+            )
+            if not combined.strip():
+                return False
+
+            # "Strong signal" threshold: at least 2 boot needles present
+            hits = sum(1 for n in boot_needles if n in combined.lower())
+            return hits >= 2
+
+        def _call_agent(p, timeout_s):
+            resp = requests.post(
+                agent_url,  # Use the standard /analyze/ endpoint
+                json=p,
+                headers=get_agent_service_headers(),
+                timeout=timeout_s,  # Chat may include RAG + long context; allow a bit more time
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        data = _call_agent(payload, 25)
+
+        # If the model returns a strong off-topic boot/Safe-Mode template, retry once with a correction hint.
+        if _is_strong_offtopic_boot_template(message, data):
+            try:
+                existing = payload.get("conversation_guidance") or ""
+                correction = (
+                    "CORRECTION: The user did NOT ask about boot/startup/Safe Mode. "
+                    "Answer the user's latest message directly. If you need details, ask 1–3 focused questions "
+                    "about the user's described problem; do not switch topics to Windows recovery steps unless "
+                    "the user explicitly mentioned boot/startup issues."
+                )
+                payload_retry = dict(payload)
+                payload_retry["conversation_guidance"] = (
+                    (existing + "\n\n" if existing else "") + correction
+                )
+                data = _call_agent(payload_retry, 25)
+                logger.warning(
+                    "AI chat off-topic template detected; retried once. ticket=%s",
+                    getattr(ticket, "ticket_id", None),
+                )
+            except Exception:
+                # Keep the original response if the retry fails for any reason.
+                pass
         
         # Format response for chat - convert full analysis to conversational response
         solution = data.get('solution', {})
@@ -696,6 +802,56 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
 
         # Fallback - make it clear this is a service issue, not the AI being unhelpful
         return _generate_fallback_response(message, ticket, agent_data, agent_error=str(e))
+
+
+def _maybe_update_conversation_summary(ticket, conversation):
+    """
+    Best-effort rolling summary update.
+    Called in-band on chat sends but throttled to keep latency low.
+    """
+    try:
+        # Only summarize every 8 persisted messages (user+ai) to bound costs.
+        msg_count = conversation.messages.count()
+        if msg_count < 6:
+            return
+        if msg_count % 8 != 0 and (conversation.summary or "").strip():
+            return
+
+        # Use last ~16 messages to refresh summary.
+        recent = list(conversation.messages.order_by("-created_at")[:16])
+        recent.reverse()
+        history = [
+            {
+                "role": "user" if m.sender_type == "user" else "assistant",
+                "text": (m.text or "")[:2000],
+            }
+            for m in recent
+            if (m.text or "").strip()
+        ]
+        if not history:
+            return
+
+        agent_analyze_url = getattr(settings, "AI_AGENT_URL", "https://agent.resolvemeq.net/tickets/analyze/")
+        summarize_url = str(agent_analyze_url).replace("/tickets/analyze/", "/tickets/summarize/")
+        resp = requests.post(
+            summarize_url,
+            json={
+                "ticket_id": ticket.ticket_id,
+                "existing_summary": (conversation.summary or "").strip(),
+                "conversation_history": history,
+            },
+            headers=get_agent_service_headers(),
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json() or {}
+        summary = (data.get("summary") or "").strip()
+        if summary:
+            conversation.summary = summary[:8000]
+            conversation.save(update_fields=["summary", "updated_at"])
+    except Exception:
+        # Never break chat for summary failures.
+        return
 
 
 def _filter_redundant_human_quick_replies(replies, ticket_status):
