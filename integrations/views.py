@@ -846,8 +846,41 @@ def _slack_install_and_dm_for_ticket_id(ticket_id):
     if not ticket:
         return None, None
     inst = slack_inst.get_installation_for_ticket(ticket)
-    ch = slack_inst.slack_dm_channel_for_user(ticket.user)
-    return inst, ch
+    slack_user_or_channel = slack_inst.slack_dm_channel_for_user(ticket.user)
+    if not inst or not slack_user_or_channel:
+        return inst, slack_user_or_channel
+
+    # Prefer a real DM channel id. Posting directly to a user id can return channel_not_found
+    # depending on workspace/app configuration.
+    if slack_user_or_channel.startswith(("D", "C", "G")):
+        return inst, slack_user_or_channel
+
+    dm_resp = slack_inst.slack_api_post(
+        inst,
+        "conversations.open",
+        {"users": slack_user_or_channel},
+    )
+    if not dm_resp:
+        logger.warning("Slack DM open failed for ticket %s: empty response", ticket_id)
+        return inst, slack_user_or_channel
+
+    try:
+        dm_data = dm_resp.json()
+    except Exception:
+        dm_data = {}
+    if dm_data.get("ok") and isinstance(dm_data.get("channel"), dict):
+        dm_channel_id = (dm_data["channel"].get("id") or "").strip()
+        if dm_channel_id:
+            return inst, dm_channel_id
+
+    logger.warning(
+        "Slack DM open failed for ticket %s user %s: %s",
+        ticket_id,
+        slack_user_or_channel,
+        dm_data.get("error") or getattr(dm_resp, "text", "unknown_error"),
+    )
+    # Fallback to previous behavior; some workspaces allow posting with user id.
+    return inst, slack_user_or_channel
 
 
 def _slack_truncate_mrkdwn(text: str, max_len: int = 2800) -> str:
@@ -1225,7 +1258,19 @@ def request_clarification_from_user(user_id, ticket_id, params):
         "text": f"Need clarification for Ticket #{ticket_id}",
     }
     resp = slack_inst.slack_api_post(inst, "chat.postMessage", payload)
-    logger.info("Sent clarification request: %s", getattr(resp, "text", resp))
+    try:
+        data = resp.json() if resp else {}
+    except Exception:
+        data = {}
+    if data.get("ok"):
+        logger.info("Sent clarification request for ticket %s to channel %s", ticket_id, slack_channel)
+    else:
+        logger.warning(
+            "Clarification request failed for ticket %s (channel=%s): %s",
+            ticket_id,
+            slack_channel,
+            data.get("error") or getattr(resp, "text", resp),
+        )
 
 def send_solution_with_followup(user_id, ticket_id, params):
     """
