@@ -580,10 +580,13 @@ def add_question_answer(request, question_id):
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
     question.answer_count = question.answers.filter(is_published=True).count()
     question.save(update_fields=["answer_count", "updated_at"])
+    owner_allows_answer_alerts = _community_pref_enabled(question.created_by, "community_answers", default=True) or _community_pref_enabled(
+        question.created_by, "community_comments", default=True
+    )
     if (
         question.created_by_id
         and question.created_by_id != request.user.id
-        and _community_pref_enabled(question.created_by, "community_answers", default=True)
+        and owner_allows_answer_alerts
     ):
         actor_name = request.user.get_full_name() or request.user.email or request.user.username or "Someone"
         _create_in_app_notification(
