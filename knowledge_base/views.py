@@ -827,7 +827,8 @@ def public_sitemap_xml(request):
             lines.append(f"<url><loc>{loc}</loc></url>")
 
     for a in article_items:
-        loc = f"{app_base}/knowledge-base?kb={a.kb_id}"
+        article_slug = slugify(a.title)[:120] or "article"
+        loc = f"{app_base}/knowledge-base/article/{article_slug}~{a.kb_id}"
         lastmod = a.updated_at.date().isoformat() if a.updated_at else None
         if lastmod:
             lines.append(f"<url><loc>{loc}</loc><lastmod>{lastmod}</lastmod></url>")

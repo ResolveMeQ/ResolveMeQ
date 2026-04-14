@@ -204,3 +204,12 @@ class KBQuestionSerializer(serializers.ModelSerializer):
         # Handled in views after object creation.
         validated_data.pop("attachment_ids", None)
         return super().create(validated_data)
+
+    def validate_title(self, value):
+        title = (value or "").strip()
+        if len(title) < 15:
+            raise serializers.ValidationError("Use a more descriptive title (at least 15 characters).")
+        word_count = len([w for w in title.split() if w.strip()])
+        if word_count < 4:
+            raise serializers.ValidationError("Use at least 4 words so others can find this question.")
+        return title
