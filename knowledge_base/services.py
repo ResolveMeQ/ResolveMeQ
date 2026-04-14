@@ -1,6 +1,7 @@
-from .models import KnowledgeBaseArticle, LLMResponse
+from .models import KnowledgeBaseArticle, LLMResponse, LLMResponseVote
 from tickets.models import Ticket
 from django.db import transaction
+from django.db.models import Count, Q
 import logging
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ class KnowledgeBaseService:
             raise
 
     @staticmethod
-    def update_response_rating(response_id, is_helpful):
+    def update_response_rating(response_id, is_helpful, user=None):
         """
         Update the helpfulness rating of an LLM response.
         
@@ -73,9 +74,22 @@ class KnowledgeBaseService:
         """
         try:
             response = LLMResponse.objects.get(response_id=response_id)
-            response.total_votes += 1
-            if is_helpful:
-                response.helpful_votes += 1
+            if user and getattr(user, "is_authenticated", False):
+                LLMResponseVote.objects.update_or_create(
+                    response=response,
+                    user=user,
+                    defaults={"is_helpful": is_helpful},
+                )
+                agg = response.user_votes.aggregate(
+                    total=Count("id"),
+                    helpful=Count("id", filter=Q(is_helpful=True)),
+                )
+                response.total_votes = agg["total"] or 0
+                response.helpful_votes = agg["helpful"] or 0
+            else:
+                response.total_votes += 1
+                if is_helpful:
+                    response.helpful_votes += 1
             response.save()
             
             # If response becomes highly rated, consider creating a KB article

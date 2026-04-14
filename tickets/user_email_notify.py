@@ -92,3 +92,27 @@ def dispatch_ticket_assigned_email(ticket, assignee, assigned_by: Optional[objec
         "view_url": _ticket_url(ticket.ticket_id),
     }
     _send_to_users([assignee], subject=subject, template="ticket_assigned.html", context=context)
+
+
+def dispatch_ticket_comment_email(ticket, recipients: Iterable, *, commenter, comment_text: str) -> None:
+    """Email participants when a new support-thread comment is posted."""
+    short = (comment_text or "").strip()
+    if len(short) > 280:
+        short = short[:277].rsplit(" ", 1)[0] + "..."
+    commenter_name = _recipient_name(commenter) if commenter is not None else "A teammate"
+    subject = f"[{_app_name()}] New reply on Ticket #{ticket.ticket_id}"
+    context = {
+        "app_name": _app_name(),
+        "ticket_id": ticket.ticket_id,
+        "issue_type": ticket.issue_type or "Support ticket",
+        "category": ticket.category or "—",
+        "commenter_name": commenter_name,
+        "comment_text": short,
+        "view_url": _ticket_url(ticket.ticket_id),
+    }
+    _send_to_users(
+        recipients,
+        subject=subject,
+        template="ticket_comment_update.html",
+        context=context,
+    )

@@ -9,6 +9,11 @@ User = get_user_model()
 # Create your models here.
 
 class Ticket(models.Model):
+    AWAITING_RESPONSE_CHOICES = [
+        ("", "None"),
+        ("support", "Support"),
+        ("user", "User"),
+    ]
     CATEGORY_CHOICES = [
         ("wifi", "Wi-Fi"),
         ("laptop", "Laptop"),
@@ -63,6 +68,26 @@ class Ticket(models.Model):
         null=True,
         blank=True,
         help_text="When the ticket first moved to escalated status.",
+    )
+    awaiting_response_from = models.CharField(
+        max_length=20,
+        choices=AWAITING_RESPONSE_CHOICES,
+        default="",
+        blank=True,
+        help_text="Conversation owner for next response: support or user.",
+    )
+    last_message_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp of the latest comment/message in the support thread.",
+    )
+    last_message_by = models.ForeignKey(
+        User,
+        related_name="last_ticket_messages",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        help_text="User who sent the latest comment/message.",
     )
 
     def __str__(self):

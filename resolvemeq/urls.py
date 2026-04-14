@@ -7,6 +7,7 @@ from drf_yasg import openapi
 from django.conf import settings
 from django.conf.urls.static import static
 from base.views import NewsletterSubscribeView, ContactRequestView
+from knowledge_base.views import public_sitemap_xml, public_robots_txt
 
 schema_view = get_schema_view(
    openapi.Info(
@@ -42,6 +43,8 @@ urlpatterns = [
    path("api/teams/", include("base.teams_urls")),
    path("api/billing/", include("base.billing_urls")),
    path("api/integrations/", include("integrations.urls")),
+   path("sitemap.xml", public_sitemap_xml, name="public-sitemap-xml"),
+   path("robots.txt", public_robots_txt, name="public-robots-txt"),
    path('', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
    path('redoc/', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
    re_path(

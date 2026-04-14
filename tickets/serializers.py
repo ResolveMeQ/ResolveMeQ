@@ -43,11 +43,11 @@ class TicketSerializer(serializers.ModelSerializer):
         fields = [
             'ticket_id', 'team', 'user', 'issue_type', 'status', 'description', 'screenshot',
             'assigned_to', 'category', 'tags', 'created_at', 'updated_at', 'agent_response', 'agent_processed',
-            'first_ai_at', 'escalated_at',
+            'first_ai_at', 'escalated_at', 'awaiting_response_from', 'last_message_at', 'last_message_by',
         ]
         read_only_fields = [
             'ticket_id', 'team', 'created_at', 'updated_at', 'agent_response', 'agent_processed',
-            'first_ai_at', 'escalated_at',
+            'first_ai_at', 'escalated_at', 'awaiting_response_from', 'last_message_at', 'last_message_by',
         ]
 
 class TicketInteractionSerializer(serializers.ModelSerializer):

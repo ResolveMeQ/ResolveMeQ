@@ -643,7 +643,9 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
         assistant_tokens = _tokenize_for_overlap(assistant_text)
         overlap = _jaccard(user_tokens, assistant_tokens)
 
-        if len(user_tokens) >= 4 and len(assistant_tokens) >= 8 and overlap < 0.05:
+        response_style = str((data or {}).get("response_style") or "").strip().lower()
+        overlap_guard_enabled = response_style in ("", "guided_steps")
+        if overlap_guard_enabled and len(user_tokens) >= 5 and len(assistant_tokens) >= 10 and overlap < 0.03:
             try:
                 existing = payload.get("conversation_guidance") or ""
                 summarize_url = str(agent_url).replace("/tickets/analyze/", "/tickets/validate/")

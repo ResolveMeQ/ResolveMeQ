@@ -598,6 +598,24 @@ class UserPreferences(models.Model):
         help_text=_("Receive daily digest emails")
     )
 
+    community_new_questions = models.BooleanField(
+        _("community new questions"),
+        default=True,
+        help_text=_("Notify when new community questions are posted in your workspace")
+    )
+
+    community_answers = models.BooleanField(
+        _("community answers"),
+        default=True,
+        help_text=_("Notify when your community questions or answers receive new answers/acceptance updates")
+    )
+
+    community_comments = models.BooleanField(
+        _("community comments"),
+        default=True,
+        help_text=_("Notify when your community threads receive new comments")
+    )
+
     # General preferences
     timezone = models.CharField(
         _("timezone"),

@@ -18,7 +18,11 @@ from .scoping import (
 )
 from .tasks import process_ticket_with_agent
 from .services import compose_issue_type, create_ticket_with_reporter
-from .user_email_notify import dispatch_ticket_assigned_email, dispatch_ticket_status_emails
+from .user_email_notify import (
+    dispatch_ticket_assigned_email,
+    dispatch_ticket_status_emails,
+    dispatch_ticket_comment_email,
+)
 from .serializers import TicketSerializer, TicketInteractionSerializer
 from .outcome_helpers import apply_escalated_timestamp
 from .feedback_prompts import build_feedback_prompts
@@ -144,6 +148,44 @@ def _tickets_for_user(request):
 def _can_access_ticket(request, ticket):
     """Creator or assignee."""
     return user_can_access_ticket(request.user, ticket)
+
+
+def _dedupe_users(users):
+    seen = set()
+    out = []
+    for u in users:
+        if not u or not getattr(u, "id", None):
+            continue
+        if u.id in seen:
+            continue
+        seen.add(u.id)
+        out.append(u)
+    return out
+
+
+def _conversation_recipients_for_comment(ticket, actor):
+    """Who should be notified when a comment is posted in a support thread."""
+    if not ticket or not actor:
+        return []
+    if actor.id == ticket.user_id:
+        # Requester replied -> notify assigned operator, then fallback to team owner.
+        recipients = []
+        if ticket.assigned_to_id and ticket.assigned_to_id != actor.id:
+            recipients.append(ticket.assigned_to)
+        elif ticket.team_id and getattr(ticket.team, "owner_id", None) and ticket.team.owner_id != actor.id:
+            recipients.append(ticket.team.owner)
+        return _dedupe_users(recipients)
+    # Operator/teammate replied -> notify requester.
+    if ticket.user_id != actor.id:
+        return [ticket.user]
+    return []
+
+
+def _conversation_state_for_actor(ticket, actor):
+    """Return who should respond next after this comment."""
+    if not ticket or not actor:
+        return ""
+    return "support" if actor.id == ticket.user_id else "user"
 
 
 class AgentActionThrottle(UserRateThrottle):
@@ -667,16 +709,26 @@ def get_ticket(request, ticket_id):
     comments = []
     for i in interactions:
         text = i.content
-        if text.startswith("Comment: "):
-            text = text[9:].strip()
+        if not text.startswith("Comment: "):
+            continue
+        text = text[9:].strip()
         author = (getattr(i.user, "get_full_name", lambda: "")() or getattr(i.user, "username", "") or "User").strip() or "User"
         comments.append({
             "id": i.id,
             "content": text,
             "author": author,
+            "author_role": "requester" if i.user_id == ticket.user_id else "support",
             "created_at": i.created_at,
         })
     data["comments"] = comments
+    data["awaiting_response_from"] = ticket.awaiting_response_from or ""
+    data["conversation_state_label"] = (
+        "Awaiting support reply"
+        if ticket.awaiting_response_from == "support"
+        else "Awaiting user reply"
+        if ticket.awaiting_response_from == "user"
+        else "Conversation open"
+    )
     # Include whether resolution feedback was already submitted (prevent double-submit)
     try:
         resolution = TicketResolution.objects.get(ticket=ticket)
@@ -886,6 +938,27 @@ def add_comment(request, ticket_id):
         interaction_type="user_message",
         content=f"Comment: {comment}"
     )
+    ticket.awaiting_response_from = _conversation_state_for_actor(ticket, request.user)
+    ticket.last_message_at = timezone.now()
+    ticket.last_message_by = request.user
+    ticket.save(update_fields=["awaiting_response_from", "last_message_at", "last_message_by", "updated_at"])
+
+    recipients = _conversation_recipients_for_comment(ticket, request.user)
+    recipients = [u for u in recipients if user_can_access_ticket(u, ticket)]
+    for recipient in recipients:
+        try:
+            InAppNotification.objects.create(
+                user=recipient,
+                type=InAppNotification.Type.INFO,
+                title=f"New reply on Ticket #{ticket.ticket_id}",
+                message=(request.user.get_full_name() or request.user.email or request.user.username or "A teammate")
+                + f" replied: {(comment or '').strip()[:180]}",
+                link=f"/tickets?highlight={ticket.ticket_id}",
+            )
+        except Exception as exc:
+            logger.warning("Failed to create comment notification: %s", exc)
+    if recipients:
+        dispatch_ticket_comment_email(ticket, recipients, commenter=request.user, comment_text=comment)
     return Response({"message": "Comment added."})
 
 @api_view(["POST"])
@@ -904,6 +977,9 @@ def escalate_ticket(request, ticket_id):
     from .handoff import build_handoff_packet
 
     ticket.status = "escalated"
+    ticket.awaiting_response_from = "support"
+    ticket.last_message_at = timezone.now()
+    ticket.last_message_by = request.user
     apply_escalated_timestamp(ticket)
     ticket.save()
 
@@ -961,6 +1037,8 @@ def assign_ticket(request, ticket_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
     ticket.assigned_to = agent
+    if ticket.status == "escalated" and ticket.awaiting_response_from != "user":
+        ticket.awaiting_response_from = "support"
     ticket.save()
     TicketInteraction.objects.create(
         ticket=ticket,
@@ -1037,6 +1115,10 @@ def update_ticket_status(request, ticket_id):
         return Response({"error": err}, status=400)
     previous_status = getattr(ticket, "status", None)
     ticket.status = canonical
+    if canonical in {"resolved"}:
+        ticket.awaiting_response_from = ""
+    elif canonical in {"escalated"} and ticket.awaiting_response_from == "":
+        ticket.awaiting_response_from = "support"
     if canonical == "escalated":
         apply_escalated_timestamp(ticket)
     ticket.save()
@@ -1139,8 +1221,21 @@ def suggest_kb_articles(request, ticket_id):
             status=status.HTTP_403_FORBIDDEN,
         )
     from knowledge_base.models import KnowledgeBaseArticle
-    articles = KnowledgeBaseArticle.objects.filter(category=ticket.category)[:5]
-    return Response({"suggestions": [a.title for a in articles]})
+    query = (ticket.issue_type or "").strip()
+    tokens = [t for t in [ticket.category, *list(ticket.tags or [])] if t]
+    articles = KnowledgeBaseArticle.objects.filter(is_published=True)
+    if query:
+        articles = articles.filter(Q(title__icontains=query) | Q(content__icontains=query))
+    if tokens:
+        lowered = [str(t).lower() for t in tokens]
+        articles = [
+            article for article in articles
+            if any(tok in [str(tag).lower() for tag in (article.tags or [])] for tok in lowered)
+            or any(tok in (article.title or "").lower() for tok in lowered)
+            or any(tok in (article.content or "").lower() for tok in lowered)
+        ]
+    suggestions = articles[:5] if isinstance(articles, list) else list(articles[:5])
+    return Response({"suggestions": [a.title for a in suggestions]})
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
