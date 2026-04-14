@@ -928,10 +928,37 @@ def notify_user_agent_response(user_id, ticket_id, agent_response, thread_ts=Non
     if not isinstance(analysis, dict):
         analysis = {}
     recommendations = agent_response.get("recommendations") or {}
+    if not isinstance(recommendations, dict):
+        recommendations = {}
     solution = agent_response.get("solution") or {}
-    reasoning = agent_response.get("reasoning") or ""
+    if not isinstance(solution, dict):
+        solution = {}
+    reasoning = (agent_response.get("reasoning") or "").strip()
     confidence = agent_response.get("confidence")
-    # Build Slack blocks
+
+    def _clean_scalar(v):
+        if v is None:
+            return None
+        if isinstance(v, str):
+            t = v.strip()
+            if not t or t.lower() in {"none", "n/a", "unknown", "null"}:
+                return None
+            return t
+        return str(v)
+
+    def _clean_list(v, limit=8):
+        if not isinstance(v, list):
+            return []
+        out = []
+        for item in v:
+            text = _clean_scalar(item)
+            if text:
+                out.append(text)
+            if len(out) >= limit:
+                break
+        return out
+
+    # Build Slack blocks with readable sections instead of raw key/value dumps.
     header = f"🤖 *AI update for ticket #{ticket_id}*"
     if confidence is not None:
         try:
@@ -939,58 +966,84 @@ def notify_user_agent_response(user_id, ticket_id, agent_response, thread_ts=Non
         except (TypeError, ValueError):
             pass
     blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": header}}]
-    if analysis:
-        for k, v in analysis.items():
-            if v is None or v == "":
-                continue
-            blocks.append(
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": _slack_truncate_mrkdwn(f"*{str(k).replace('_', ' ').title()}:* {v}"),
-                    },
-                }
-            )
-    steps = solution.get("steps") if isinstance(solution, dict) else None
-    if isinstance(steps, list) and steps:
-        lines = "\n".join(f"• {s}" for s in (str(x) for x in steps[:15]))
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _slack_truncate_mrkdwn(f"*Steps:*\n{lines}")}})
-    immediate = solution.get("immediate_actions") if isinstance(solution, dict) else None
-    if isinstance(immediate, list) and immediate:
-        lines = "\n".join(f"• {s}" for s in (str(x) for x in immediate[:10]))
-        blocks.append(
-            {"type": "section", "text": {"type": "mrkdwn", "text": _slack_truncate_mrkdwn(f"*Try first:*\n{lines}")}}
-        )
-    if isinstance(reasoning, str) and reasoning.strip():
+
+    overview_fields = []
+    for label, key in [
+        ("Category", "category"),
+        ("Severity", "severity"),
+        ("Complexity", "complexity"),
+        ("Priority", "priority"),
+        ("Est. Resolution Time", "estimated_resolution_time"),
+    ]:
+        value = _clean_scalar(analysis.get(key))
+        if value:
+            overview_fields.append({"type": "mrkdwn", "text": f"*{label}*\n{value}"})
+    if overview_fields:
+        blocks.append({"type": "section", "fields": overview_fields[:10]})
+
+    summary_text = _clean_scalar(reasoning) or _clean_scalar(analysis.get("summary"))
+    if summary_text:
         blocks.append(
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": _slack_truncate_mrkdwn(f"*Summary:*\n{reasoning.strip()}")},
+                "text": {"type": "mrkdwn", "text": _slack_truncate_mrkdwn(f"*What I found*\n{summary_text}", max_len=1200)},
             }
         )
-    if recommendations:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*Recommendations:*"}})
-        for k, v in recommendations.items():
-            if isinstance(v, list):
-                blocks.append(
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": _slack_truncate_mrkdwn(
-                                f"*{str(k).replace('_', ' ').title()}:*\n- " + "\n- ".join(str(x) for x in v)
-                            ),
-                        },
-                    }
-                )
-            else:
-                blocks.append(
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": _slack_truncate_mrkdwn(f"*{str(k).replace('_', ' ').title()}:* {v}")},
-                    }
-                )
+
+    required_skills = _clean_list(analysis.get("required_skills"), limit=6)
+    suggested_tags = _clean_list(analysis.get("suggested_tags"), limit=8)
+    if required_skills or suggested_tags:
+        lines = []
+        if required_skills:
+            lines.append(f"*Required skills:* {', '.join(required_skills)}")
+        if suggested_tags:
+            lines.append(f"*Suggested tags:* {', '.join(suggested_tags)}")
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _slack_truncate_mrkdwn('\n'.join(lines), max_len=1000)}})
+
+    immediate_actions = _clean_list(solution.get("immediate_actions"), limit=6) or _clean_list(
+        recommendations.get("immediate_actions"), limit=6
+    )
+    if immediate_actions:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": _slack_truncate_mrkdwn("*Try this first*\n" + "\n".join(f"• {x}" for x in immediate_actions), max_len=1200),
+                },
+            }
+        )
+
+    resolution_steps = _clean_list(solution.get("steps"), limit=7) or _clean_list(recommendations.get("resolution_steps"), limit=7)
+    if resolution_steps:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": _slack_truncate_mrkdwn(
+                        "*Recommended steps*\n" + "\n".join(f"{i+1}. {step}" for i, step in enumerate(resolution_steps)),
+                        max_len=1400,
+                    ),
+                },
+            }
+        )
+
+    preventive = _clean_list(solution.get("preventive_measures"), limit=5) or _clean_list(
+        recommendations.get("preventive_measures"), limit=5
+    )
+    if preventive:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": _slack_truncate_mrkdwn("*Prevention tips*\n" + "\n".join(f"• {x}" for x in preventive), max_len=1000),
+                },
+            }
+        )
+
+    blocks.append({"type": "divider"})
     # Add interactive buttons
     blocks.append({
         "type": "actions",

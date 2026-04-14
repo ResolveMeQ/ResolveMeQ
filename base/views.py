@@ -7,7 +7,8 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.conf import settings as django_settings
-from django.db import transaction
+from django.db import transaction, close_old_connections
+from django.db.utils import OperationalError, InterfaceError
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
@@ -576,9 +577,21 @@ class InAppNotificationListView(GenericAPIView):
 
     def get(self, request):
         from base.models import InAppNotification
-        notifications = InAppNotification.objects.filter(user=request.user).order_by('-created_at')[:50]
-        serializer = InAppNotificationSerializer(notifications, many=True)
-        return Response(serializer.data)
+        try:
+            notifications = InAppNotification.objects.filter(user=request.user).order_by('-created_at')[:50]
+            serializer = InAppNotificationSerializer(notifications, many=True)
+            return Response(serializer.data)
+        except (OperationalError, InterfaceError) as exc:
+            # Transient pooler restarts/connection recycling should not crash the bell API.
+            logger.warning("Notification list DB error (first attempt): %s", exc)
+            close_old_connections()
+            try:
+                notifications = InAppNotification.objects.filter(user=request.user).order_by('-created_at')[:50]
+                serializer = InAppNotificationSerializer(notifications, many=True)
+                return Response(serializer.data)
+            except (OperationalError, InterfaceError) as retry_exc:
+                logger.warning("Notification list DB error (retry failed): %s", retry_exc)
+                return Response([], status=status.HTTP_200_OK)
 
 
 class InAppNotificationMarkReadView(GenericAPIView):
@@ -592,14 +605,22 @@ class InAppNotificationMarkReadView(GenericAPIView):
 
     def patch(self, request, notification_id):
         from base.models import InAppNotification
-        notification = get_object_or_404(
-            InAppNotification,
-            id=notification_id,
-            user=request.user
-        )
-        notification.is_read = True
-        notification.save(update_fields=['is_read'])
-        return Response({'status': 'ok'})
+        try:
+            notification = get_object_or_404(
+                InAppNotification,
+                id=notification_id,
+                user=request.user
+            )
+            notification.is_read = True
+            notification.save(update_fields=['is_read'])
+            return Response({'status': 'ok'})
+        except (OperationalError, InterfaceError) as exc:
+            logger.warning("Notification mark-read DB error: %s", exc)
+            close_old_connections()
+            return Response(
+                {"detail": "Notifications are temporarily unavailable. Please try again."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
 
 class InAppNotificationMarkAllReadView(GenericAPIView):
@@ -613,8 +634,16 @@ class InAppNotificationMarkAllReadView(GenericAPIView):
 
     def post(self, request):
         from base.models import InAppNotification
-        updated = InAppNotification.objects.filter(user=request.user, is_read=False).update(is_read=True)
-        return Response({'marked_read': updated})
+        try:
+            updated = InAppNotification.objects.filter(user=request.user, is_read=False).update(is_read=True)
+            return Response({'marked_read': updated})
+        except (OperationalError, InterfaceError) as exc:
+            logger.warning("Notification mark-all-read DB error: %s", exc)
+            close_old_connections()
+            return Response(
+                {"detail": "Notifications are temporarily unavailable. Please try again."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
 
 # User Management Views
