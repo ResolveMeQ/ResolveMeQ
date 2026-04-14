@@ -1023,7 +1023,19 @@ def notify_user_agent_response(user_id, ticket_id, agent_response, thread_ts=Non
     if thread_ts:
         payload["thread_ts"] = thread_ts
     resp = slack_inst.slack_api_post(inst, "chat.postMessage", payload)
-    logger.info("Sent agent response to Slack: %s", getattr(resp, "text", resp))
+    try:
+        data = resp.json() if resp else {}
+    except Exception:
+        data = {}
+    if data.get("ok"):
+        logger.info("Sent agent response to Slack (ticket=%s, channel=%s)", ticket_id, slack_channel)
+    else:
+        logger.warning(
+            "Failed to send agent response to Slack (ticket=%s, channel=%s): %s",
+            ticket_id,
+            slack_channel,
+            data.get("error") or getattr(resp, "text", resp),
+        )
 
 def notify_user_auto_resolution(user_id, ticket_id, params):
     """

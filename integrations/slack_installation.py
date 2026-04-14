@@ -64,13 +64,20 @@ def slack_dm_channel_for_user(user: User | None) -> str | None:
     """Slack user id to pass as `channel` for chat.postMessage DM, or None if not Slack-backed."""
     if not user:
         return None
-    email = (user.email or "").strip().lower()
-    if email.endswith("@slack.local"):
-        return email.split("@", 1)[0]
-    # Shadow users use username == Slack member ID (U… / W…); email may be missing on legacy rows.
+    # Shadow users usually keep the Slack member ID in username. Prefer it to avoid
+    # accidental lowercasing from email normalization.
     un = (getattr(user, "username", None) or "").strip()
-    if len(un) >= 9 and un[0] in ("U", "W") and un[1:].replace("_", "").isalnum():
-        return un
+    if len(un) >= 9 and un[0].upper() in ("U", "W") and un[1:].replace("_", "").isalnum():
+        return un.upper()
+
+    # Fallback for legacy rows that only have slack-local email.
+    email_raw = (user.email or "").strip()
+    if email_raw.lower().endswith("@slack.local"):
+        local_part = email_raw.split("@", 1)[0].strip()
+        if len(local_part) >= 9 and local_part[0].upper() in ("U", "W") and local_part[1:].replace("_", "").isalnum():
+            return local_part.upper()
+        return local_part
+
     return None
 
 
