@@ -1,4 +1,4 @@
-from django.db.models import Q, Count, Sum, Case, When, IntegerField, F, FloatField
+from django.db.models import Q, Count, Sum, Case, When, IntegerField, F, FloatField, Prefetch, Exists, OuterRef, Subquery
 from django.db.models.functions import Coalesce
 from django.conf import settings
 from django.core.files.storage import default_storage
@@ -143,6 +143,64 @@ def _community_pref_enabled(user, field_name, default=True):
         return default if value is None else bool(value)
     except Exception:
         return default
+
+
+def _annotate_community_question_list_qs(queryset, request):
+    """select_related + vote/has-accepted annotations to avoid N+1 on list responses."""
+    queryset = queryset.select_related("created_by", "duplicate_of")
+    user = getattr(request, "user", None)
+    if user and user.is_authenticated:
+        vote_sq = KBQuestionVote.objects.filter(
+            question_id=OuterRef("pk"),
+            user_id=user.id,
+        ).values("value")[:1]
+        queryset = queryset.annotate(_my_question_vote=Subquery(vote_sq))
+    queryset = queryset.annotate(
+        _has_accepted_answer_flag=Exists(
+            KBAnswer.objects.filter(
+                question_id=OuterRef("pk"),
+                is_accepted=True,
+                is_published=True,
+            )
+        )
+    )
+    return queryset
+
+
+def _prefetch_community_question_detail(queryset, user):
+    """
+    Prefetch answers → comments, attachments, votes and question-level relations
+    for KBQuestionSerializer without per-row EXISTS / vote queries.
+    """
+    queryset = queryset.select_related("created_by", "duplicate_of")
+    q_votes = KBQuestionVote.objects.none()
+    a_votes = KBAnswerVote.objects.none()
+    if user and getattr(user, "is_authenticated", False):
+        q_votes = KBQuestionVote.objects.filter(user_id=user.id)
+        a_votes = KBAnswerVote.objects.filter(user_id=user.id)
+    # Match default related managers (no is_published filter) so list/detail payloads stay as before.
+    answers_qs = (
+        KBAnswer.objects.all()
+        .select_related("created_by")
+        .order_by("-is_accepted", "-score", "created_at")
+        .prefetch_related(
+            Prefetch("votes", queryset=a_votes),
+            Prefetch(
+                "comments",
+                queryset=KBComment.objects.all()
+                .select_related("created_by")
+                .prefetch_related("attachments"),
+            ),
+            "attachments",
+        )
+    )
+    comment_qs = KBComment.objects.all().select_related("created_by").prefetch_related("attachments")
+    return queryset.prefetch_related(
+        Prefetch("answers", queryset=answers_qs),
+        Prefetch("comments", queryset=comment_qs),
+        Prefetch("votes", queryset=q_votes),
+        "attachments",
+    )
 
 
 def _notify_new_question_to_workspace_members(question, actor):
@@ -501,6 +559,13 @@ def community_questions(request):
             except ValueError as e:
                 return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
             _notify_new_question_to_workspace_members(question, request.user)
+            question = (
+                _prefetch_community_question_detail(
+                    KBQuestion.objects.filter(id=question.id),
+                    request.user,
+                ).first()
+                or question
+            )
             return Response(
                 KBQuestionSerializer(question, context={"request": request}).data,
                 status=status.HTTP_201_CREATED,
@@ -513,6 +578,9 @@ def community_questions(request):
     q = (request.query_params.get("q") or "").strip()
     if q:
         queryset = queryset.filter(Q(title__icontains=q) | Q(body__icontains=q))
+    queryset = _annotate_community_question_list_qs(queryset, request)
+    queryset = _prefetch_community_question_detail(queryset, getattr(request, "user", None))
+
     tag = (request.query_params.get("tag") or "").strip().lower()
     filter_by = (request.query_params.get("filter") or "all").strip().lower()
     if tag:
@@ -521,12 +589,12 @@ def community_questions(request):
         if filter_by == "unanswered":
             queryset = [item for item in queryset if item.answer_count == 0]
         elif filter_by in {"accepted", "has_accepted"}:
-            queryset = [item for item in queryset if item.answers.filter(is_accepted=True, is_published=True).exists()]
+            queryset = [item for item in queryset if getattr(item, "_has_accepted_answer_flag", False)]
     else:
         if filter_by == "unanswered":
             queryset = queryset.filter(answer_count=0)
         elif filter_by in {"accepted", "has_accepted"}:
-            queryset = queryset.filter(answers__is_accepted=True, answers__is_published=True).distinct()
+            queryset = queryset.filter(_has_accepted_answer_flag=True)
     sort = (request.query_params.get("sort") or "newest").lower()
     if isinstance(queryset, list):
         if sort == "votes":
@@ -555,11 +623,12 @@ def community_question_detail(request, question_id):
     qs = KBQuestion.objects.all()
     if not request.user.is_authenticated:
         qs = qs.filter(is_published=True)
+    qs = _prefetch_community_question_detail(qs, getattr(request, "user", None))
     question = qs.filter(id=question_id).first()
     if not question:
         return Response({"error": "Question not found."}, status=status.HTTP_404_NOT_FOUND)
     KBQuestion.objects.filter(id=question.id).update(views=F("views") + 1)
-    question.refresh_from_db()
+    question.views = (question.views or 0) + 1
     return Response(KBQuestionSerializer(question, context={"request": request}).data)
 
 
@@ -792,7 +861,12 @@ def upload_community_attachment(request):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def community_question_public(request, question_id, slug=None):
-    question = KBQuestion.objects.filter(id=question_id, is_published=True).first()
+    question = (
+        _prefetch_community_question_detail(
+            KBQuestion.objects.filter(id=question_id, is_published=True),
+            getattr(request, "user", None),
+        ).first()
+    )
     if not question:
         return Response({"error": "Question not found."}, status=status.HTTP_404_NOT_FOUND)
     serializer = KBQuestionSerializer(question, context={"request": request})

@@ -377,7 +377,11 @@ def _slack_modal_payload_view_submission(payload):
         user_id = payload["user"]["id"]
         slack_team_id = _slack_team_id_from_payload(payload)
         inst = slack_inst.get_installation_for_slack_team(slack_team_id)
-        user, _ = slack_inst.get_or_create_slack_shadow_user(user_id)
+        user, _ = slack_inst.get_or_create_slack_shadow_user(
+            user_id,
+            installation=inst,
+            slack_user_payload=payload.get("user"),
+        )
         team = inst.resolvemeq_team if inst else None
         from tickets.services import compose_issue_type, create_ticket_with_reporter
 

@@ -141,8 +141,16 @@ class KBAnswerSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request or not getattr(request, "user", None) or not request.user.is_authenticated:
             return None
-        vote = obj.votes.filter(user=request.user).first()
-        return vote.value if vote else None
+        try:
+            votes = obj._prefetched_objects_cache["votes"]
+        except (AttributeError, KeyError):
+            vote = obj.votes.filter(user=request.user).first()
+            return vote.value if vote else None
+        uid = request.user.id
+        for v in votes:
+            if v.user_id == uid:
+                return v.value
+        return None
 
     def create(self, validated_data):
         # Handled in views after object creation.
@@ -189,16 +197,34 @@ class KBQuestionSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request or not getattr(request, "user", None) or not request.user.is_authenticated:
             return None
-        vote = obj.votes.filter(user=request.user).first()
-        return vote.value if vote else None
+        if hasattr(obj, "_my_question_vote"):
+            v = obj._my_question_vote
+            return v if v is not None else None
+        try:
+            votes = obj._prefetched_objects_cache["votes"]
+        except (AttributeError, KeyError):
+            vote = obj.votes.filter(user=request.user).first()
+            return vote.value if vote else None
+        uid = request.user.id
+        for v in votes:
+            if v.user_id == uid:
+                return v.value
+        return None
 
     def get_has_accepted_answer(self, obj):
-        return obj.answers.filter(is_accepted=True, is_published=True).exists()
+        if hasattr(obj, "_has_accepted_answer_flag"):
+            return bool(obj._has_accepted_answer_flag)
+        try:
+            answers = obj._prefetched_objects_cache["answers"]
+        except (AttributeError, KeyError):
+            return obj.answers.filter(is_accepted=True, is_published=True).exists()
+        return any(a.is_accepted and a.is_published for a in answers)
 
     def get_duplicate_of_title(self, obj):
         if not obj.duplicate_of_id:
             return ""
-        return obj.duplicate_of.title
+        dup = getattr(obj, "duplicate_of", None)
+        return dup.title if dup else ""
 
     def create(self, validated_data):
         # Handled in views after object creation.

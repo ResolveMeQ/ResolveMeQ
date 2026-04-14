@@ -345,7 +345,9 @@ class UserManagementSerializer(serializers.ModelSerializer):
     
     def get_full_name(self, obj):
         """Get user's full name."""
-        return obj.get_full_name() if hasattr(obj, 'get_full_name') else f"{obj.first_name} {obj.last_name}".strip()
+        from integrations.slack_installation import display_name_for_user
+
+        return display_name_for_user(obj)
     
     def update(self, instance, validated_data):
         """Handle updates including nested profile data."""
@@ -417,9 +419,11 @@ class TeamSerializer(serializers.ModelSerializer):
     
     def get_lead_name(self, obj):
         """Get the team lead's full name."""
-        if obj.lead:
-            return obj.lead.get_full_name() if hasattr(obj.lead, 'get_full_name') else f"{obj.lead.first_name} {obj.lead.last_name}".strip()
-        return None
+        if not obj.lead:
+            return None
+        from integrations.slack_installation import display_name_for_user
+
+        return display_name_for_user(obj.lead)
     
     def get_lead_email(self, obj):
         """Get the team lead's email."""
@@ -435,12 +439,14 @@ class TeamSerializer(serializers.ModelSerializer):
     
     def get_members_details(self, obj):
         """Get detailed information about team members."""
+        from integrations.slack_installation import display_name_for_user, is_slack_shadow_user
+
         return [
             {
                 'id': str(member.id),
-                'name': member.get_full_name() if hasattr(member, 'get_full_name') else f"{member.first_name} {member.last_name}".strip(),
-                'email': member.email,
-                'is_active': member.is_active
+                'name': display_name_for_user(member),
+                'email': (None if is_slack_shadow_user(member) else member.email),
+                'is_active': member.is_active,
             }
             for member in obj.members.all()
         ]
