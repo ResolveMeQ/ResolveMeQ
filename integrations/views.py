@@ -850,6 +850,14 @@ def _slack_install_and_dm_for_ticket_id(ticket_id):
     if not inst or not slack_user_or_channel:
         return inst, slack_user_or_channel
 
+    # Hard safety normalization for legacy lowercase Slack IDs.
+    if (
+        len(slack_user_or_channel) >= 9
+        and slack_user_or_channel[0].upper() in ("U", "W")
+        and slack_user_or_channel[1:].replace("_", "").isalnum()
+    ):
+        slack_user_or_channel = slack_user_or_channel.upper()
+
     # Prefer a real DM channel id. Posting directly to a user id can return channel_not_found
     # depending on workspace/app configuration.
     if slack_user_or_channel.startswith(("D", "C", "G")):
