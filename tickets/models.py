@@ -1,3 +1,4 @@
+import logging
 from django.contrib.auth import get_user_model
 from django.db import models
 import requests
@@ -6,6 +7,7 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 import uuid
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 # Create your models here.
 
 class Ticket(models.Model):
@@ -130,53 +132,81 @@ class Ticket(models.Model):
 
     def sync_to_knowledge_base(self):
         """
-        Create or update a KnowledgeBaseArticle from this ticket if it is resolved and has agent_response.
-        This method will:
-        - Create a new KnowledgeBaseArticle if one does not exist for this ticket's issue_type.
-        - Update the article if it already exists, keeping the latest description and agent response.
-        - Use the ticket's category and tags for article tagging.
-        - This enables automatic enrichment of the knowledge base from real ticket resolutions.
+        Create or update a KnowledgeBaseArticle from this ticket when resolved.
+
+        When the ticket has AI chat, **first** asks the FastAPI agent ``POST /tickets/kb-article/``
+        to synthesize **Problem / Solution / Notes** markdown from the **full transcript**
+        (best quality). If that fails or chat is too short, falls back to heuristics
+        (``_kb_pick_final_assistant_text`` and related helpers), then Solution text, then
+        analyze ``agent_response``.
         """
-        if self.status == "resolved" and self.agent_response:
-            from knowledge_base.models import KnowledgeBaseArticle
-            title = f"Resolved: {self.issue_type}"
-            # Extract human-readable content from agent_response (avoid dumping raw JSON)
-            parts = [f"## Description\n{self.description or 'N/A'}"]
-            ar = self.agent_response
-            if isinstance(ar, dict):
-                if ar.get("reasoning"):
-                    parts.append(f"\n## Analysis\n{ar['reasoning']}")
-                sol = ar.get("solution") or {}
-                if isinstance(sol, dict):
-                    steps = sol.get("steps") or sol.get("immediate_actions") or []
-                    if steps:
-                        parts.append("\n## Resolution Steps")
-                        for i, s in enumerate(steps[:10], 1):
-                            parts.append(f"{i}. {s}")
-                    if sol.get("preventive_measures"):
-                        parts.append("\n## Prevention")
-                        for pm in (sol["preventive_measures"] or [])[:5]:
-                            parts.append(f"- {pm}")
-                elif isinstance(sol, list):
-                    parts.append("\n## Resolution Steps")
-                    for i, s in enumerate(sol[:10], 1):
-                        parts.append(f"{i}. {s}")
+        from knowledge_base.models import KnowledgeBaseArticle
+
+        if self.status != "resolved":
+            return
+
+        has_chat = _ticket_has_persisted_ai_chat(self)
+        if not self.agent_response and not has_chat:
+            return
+
+        title = f"Resolved: {self.issue_type}"
+        parts = [f"## Description\n{self.description or 'N/A'}"]
+        ar = self.agent_response if isinstance(self.agent_response, dict) else {}
+
+        if has_chat:
+            synthesized = _kb_fetch_synthesized_kb_markdown(self)
+            if synthesized:
+                parts.append("\n" + synthesized.strip())
             else:
-                parts.append(f"\n## Agent Response\n{str(ar)[:2000]}")
-            content = "\n".join(parts)
-            tags = [self.category] + (self.tags if self.tags else [])
-            # Try to find an existing article for this ticket
-            article, created = KnowledgeBaseArticle.objects.get_or_create(
-                title=title,
-                defaults={
-                    "content": content,
-                    "tags": tags,
-                }
-            )
-            if not created:
-                article.content = content
-                article.tags = tags
-                article.save()
+                from .chat_models import Conversation
+
+                conv = Conversation.objects.filter(ticket=self).order_by("-updated_at").first()
+                summary = (conv.summary or "").strip() if conv else ""
+                if summary:
+                    parts.append(f"\n## Summary\n{summary[:6000]}")
+
+                final_text, final_msg = _kb_pick_final_assistant_text(self)
+                meta_steps = _kb_metadata_steps_block(final_msg) or _kb_metadata_steps_from_recent_ticket(
+                    self, prefer_message=final_msg
+                )
+                if final_text:
+                    parts.append(f"\n## Resolution\n{final_text}")
+                if meta_steps:
+                    parts.append(f"\n## Steps\n{meta_steps}")
+
+                used_chat_resolution = bool(final_text or meta_steps)
+
+                if not used_chat_resolution:
+                    sol_text = _kb_solution_text_for_ticket(self)
+                    if sol_text:
+                        parts.append(f"\n## Resolution\n{sol_text[:12000]}")
+                        used_chat_resolution = True
+
+                if not used_chat_resolution:
+                    _kb_append_agent_analyze_sections(parts, self.agent_response)
+
+            if isinstance(ar, dict):
+                sol = ar.get("solution") or {}
+                if isinstance(sol, dict) and sol.get("preventive_measures"):
+                    parts.append("\n## Prevention")
+                    for pm in (sol["preventive_measures"] or [])[:5]:
+                        parts.append(f"- {pm}")
+        else:
+            _kb_append_agent_analyze_sections(parts, self.agent_response)
+
+        content = "\n".join(parts)
+        tags = [self.category] + (self.tags if self.tags else [])
+        article, created = KnowledgeBaseArticle.objects.get_or_create(
+            title=title,
+            defaults={
+                "content": content,
+                "tags": tags,
+            },
+        )
+        if not created:
+            article.content = content
+            article.tags = tags
+            article.save()
 
     def save(self, *args, **kwargs):
         # If ticket is being marked as resolved and has agent_response, sync to KB and create Solution
@@ -185,8 +215,9 @@ class Ticket(models.Model):
             orig = Ticket.objects.get(pk=self.pk)
             was_resolved = orig.status == "resolved"
         super().save(*args, **kwargs)
-        if self.status == "resolved" and self.agent_response and not was_resolved:
-            self.sync_to_knowledge_base()
+        if self.status == "resolved" and not was_resolved:
+            if self.agent_response or _ticket_has_persisted_ai_chat(self):
+                self.sync_to_knowledge_base()
             # Create or update Solution from agent_response (steps can be in solution.steps, resolution_steps, or steps)
             from solutions.models import Solution
             steps = None
@@ -211,6 +242,258 @@ class Ticket(models.Model):
                         "confidence_score": confidence,
                     }
                 )
+
+
+def _kb_agent_kb_article_url():
+    raw = getattr(
+        settings,
+        "AI_AGENT_URL",
+        "https://agent.resolvemeq.net/tickets/analyze/",
+    )
+    u = str(raw).strip()
+    if "kb-article" in u.lower():
+        return u
+    u2 = (
+        u.replace("/tickets/analyze/", "/tickets/kb-article/")
+        .replace("/tickets/analyze", "/tickets/kb-article")
+    )
+    if u2 != u:
+        return u2
+    u3 = u.replace("/api/analyze/", "/tickets/kb-article/").replace("/api/analyze", "/tickets/kb-article")
+    if u3 != u:
+        return u3
+    base = u.rstrip("/")
+    return f"{base}/tickets/kb-article/"
+
+
+def _kb_conversation_history_payload(ticket):
+    """Chronological transcript for the agent (user / assistant roles)."""
+    from .chat_models import ChatMessage
+
+    msgs = list(
+        ChatMessage.objects.filter(conversation__ticket=ticket).order_by("created_at")[:120]
+    )
+    out = []
+    for m in msgs:
+        if m.sender_type == "user":
+            role = "user"
+        elif m.sender_type in ("ai", "system"):
+            role = "assistant"
+        else:
+            continue
+        t = (m.text or "").strip()
+        if not t:
+            continue
+        if len(t) > 2000:
+            t = t[:1997] + "..."
+        out.append({"role": role, "text": t})
+    return out
+
+
+def _kb_fetch_synthesized_kb_markdown(ticket):
+    """
+    Full-transcript KB body via FastAPI ``/tickets/kb-article/`` (preferred over heuristics).
+    """
+    history = _kb_conversation_history_payload(ticket)
+    if len(history) < 2:
+        return None
+    kb_url = _kb_agent_kb_article_url()
+    if "kb-article" not in kb_url.lower():
+        logger.warning("KB article URL missing kb-article path (AI_AGENT_URL may be misconfigured)")
+        return None
+    try:
+        from base.agent_http import get_agent_service_headers
+
+        resp = requests.post(
+            kb_url,
+            json={
+                "ticket_id": ticket.ticket_id,
+                "issue_type": ticket.issue_type or "",
+                "description": ticket.description or "",
+                "category": ticket.category or "",
+                "conversation_history": history,
+            },
+            headers=get_agent_service_headers(),
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json() or {}
+        md = (data.get("markdown") or "").strip()
+        if len(md) < 40:
+            return None
+        return md[:24000]
+    except Exception as e:
+        logger.warning(
+            "KB synthesis from agent failed ticket_id=%s: %s",
+            getattr(ticket, "ticket_id", None),
+            e,
+        )
+        return None
+
+
+def _ticket_has_persisted_ai_chat(ticket):
+    from .chat_models import ChatMessage
+
+    return ChatMessage.objects.filter(
+        conversation__ticket=ticket,
+        sender_type="ai",
+    ).exists()
+
+
+def _kb_pick_final_assistant_text(ticket):
+    """
+    Pick one assistant ``ChatMessage`` for the KB **Resolution** body.
+
+    The chronologically **last** AI message is often wrong (thanks, errors, short
+    follow-ups). We use explicit product signals first, then a score, then recency
+    as a tie-breaker (newer wins when scores match).
+    """
+    from .chat_models import ChatMessage
+
+    fallback_needle = "having trouble processing"
+    candidates = list(
+        ChatMessage.objects.filter(
+            conversation__ticket=ticket,
+            sender_type="ai",
+        )
+        .exclude(text="")
+        .order_by("-created_at")[:24]
+    )
+    if not candidates:
+        return None, None
+    pool = [m for m in candidates if fallback_needle not in (m.text or "").lower()]
+    if not pool:
+        pool = candidates
+
+    typed = [m for m in pool if m.message_type in ("steps", "solution")]
+    if typed:
+        picked = max(typed, key=lambda m: m.created_at)
+        text = (picked.text or "").strip()
+        return (text[:12000] if text else None), picked
+
+    helpful = [m for m in pool if m.was_helpful is True]
+    if helpful:
+        picked = max(helpful, key=lambda m: m.created_at)
+        text = (picked.text or "").strip()
+        return (text[:12000] if text else None), picked
+
+    picked = max(pool, key=lambda m: (_kb_chat_message_kb_score(m), m.created_at.timestamp()))
+    text = (picked.text or "").strip()
+    return (text[:12000] if text else None), picked
+
+
+def _kb_chat_message_kb_score(message):
+    """
+    Higher = more likely substantive resolution (vs. closing line or soft nudge).
+    """
+    text = (message.text or "").strip()
+    low = text.lower()
+    L = len(text)
+    score = 0.0
+    if _kb_metadata_steps_block(message):
+        score += 120.0
+    if message.message_type in ("steps", "solution"):
+        score += 80.0
+    score += min(L, 3500) * 0.04
+    if message.was_helpful is True:
+        score += 60.0
+    if message.was_helpful is False:
+        score -= 40.0
+    if L < 180:
+        closings = (
+            "you're welcome",
+            "youre welcome",
+            "glad i could",
+            "glad to help",
+            "happy to help",
+            "anytime",
+            "let me know if you need",
+            "let me know if anything",
+            "feel free to reach out",
+        )
+        if any(c in low for c in closings):
+            score -= 200.0
+    if L < 35:
+        score -= 120.0
+    data = message.agent_response_data if isinstance(message.agent_response_data, dict) else {}
+    ra = (data.get("recommended_action") or "").lower()
+    if ra in ("request_clarification", "clarification_only", "clarification") and L < 450:
+        score -= 90.0
+    return score
+
+
+def _kb_metadata_steps_block(message):
+    if not message:
+        return ""
+    md = message.metadata if isinstance(message.metadata, dict) else {}
+    raw = md.get("steps") or md.get("immediate_actions")
+    if not raw:
+        return ""
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()[:4000]
+    if isinstance(raw, list):
+        lines = []
+        for i, s in enumerate(raw[:15], 1):
+            if s:
+                lines.append(f"{i}. {s}")
+        return "\n".join(lines)
+    return ""
+
+
+def _kb_metadata_steps_from_recent_ticket(ticket, prefer_message=None):
+    """
+    Prefer structured steps on the chosen resolution message; otherwise newest AI
+    message that has metadata steps (body text may come from a different turn).
+    """
+    if prefer_message:
+        blk = _kb_metadata_steps_block(prefer_message)
+        if blk:
+            return blk
+    from .chat_models import ChatMessage
+
+    for m in ChatMessage.objects.filter(
+        conversation__ticket=ticket,
+        sender_type="ai",
+    ).order_by("-created_at")[:15]:
+        blk = _kb_metadata_steps_block(m)
+        if blk:
+            return blk
+    return ""
+
+
+def _kb_solution_text_for_ticket(ticket):
+    from solutions.models import Solution
+
+    row = Solution.objects.filter(ticket=ticket).first()
+    if not row:
+        return ""
+    return (row.steps or "").strip()
+
+
+def _kb_append_agent_analyze_sections(parts, agent_response):
+    """Legacy path: article body from initial analyze JSON only."""
+    if not agent_response:
+        return
+    if isinstance(agent_response, dict):
+        if agent_response.get("reasoning"):
+            parts.append(f"\n## Analysis\n{agent_response['reasoning']}")
+        sol = agent_response.get("solution") or {}
+        if isinstance(sol, dict):
+            steps = sol.get("steps") or sol.get("immediate_actions") or []
+            if steps:
+                parts.append("\n## Resolution Steps")
+                for i, s in enumerate(steps[:10], 1):
+                    parts.append(f"{i}. {s}")
+            if sol.get("preventive_measures"):
+                parts.append("\n## Prevention")
+                for pm in (sol["preventive_measures"] or [])[:5]:
+                    parts.append(f"- {pm}")
+        elif isinstance(sol, list):
+            parts.append("\n## Resolution Steps")
+            for i, s in enumerate(sol[:10], 1):
+                parts.append(f"{i}. {s}")
+    else:
+        parts.append(f"\n## Agent Response\n{str(agent_response)[:2000]}")
 
 
 class AgentConfidenceLog(models.Model):
