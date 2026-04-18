@@ -1,6 +1,6 @@
 import logging
 from django.contrib.auth import get_user_model
-from django.db import models
+from django.db import DatabaseError, models
 import requests
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
@@ -270,9 +270,12 @@ def _kb_conversation_history_payload(ticket):
     """Chronological transcript for the agent (user / assistant roles)."""
     from .chat_models import ChatMessage
 
-    msgs = list(
-        ChatMessage.objects.filter(conversation__ticket=ticket).order_by("created_at")[:120]
-    )
+    try:
+        msgs = list(
+            ChatMessage.objects.filter(conversation__ticket=ticket).order_by("created_at")[:120]
+        )
+    except DatabaseError:
+        return []
     out = []
     for m in msgs:
         if m.sender_type == "user":
@@ -332,12 +335,21 @@ def _kb_fetch_synthesized_kb_markdown(ticket):
 
 
 def _ticket_has_persisted_ai_chat(ticket):
+    """
+    True if any persisted AI chat row exists for this ticket.
+
+    Tests (or partial DBs) may not migrate chat tables; treat as "no chat" instead of
+    erroring during Ticket.save() / KB sync.
+    """
     from .chat_models import ChatMessage
 
-    return ChatMessage.objects.filter(
-        conversation__ticket=ticket,
-        sender_type="ai",
-    ).exists()
+    try:
+        return ChatMessage.objects.filter(
+            conversation__ticket=ticket,
+            sender_type="ai",
+        ).exists()
+    except DatabaseError:
+        return False
 
 
 def _kb_pick_final_assistant_text(ticket):
@@ -351,14 +363,17 @@ def _kb_pick_final_assistant_text(ticket):
     from .chat_models import ChatMessage
 
     fallback_needle = "having trouble processing"
-    candidates = list(
-        ChatMessage.objects.filter(
-            conversation__ticket=ticket,
-            sender_type="ai",
+    try:
+        candidates = list(
+            ChatMessage.objects.filter(
+                conversation__ticket=ticket,
+                sender_type="ai",
+            )
+            .exclude(text="")
+            .order_by("-created_at")[:24]
         )
-        .exclude(text="")
-        .order_by("-created_at")[:24]
-    )
+    except DatabaseError:
+        return None, None
     if not candidates:
         return None, None
     pool = [m for m in candidates if fallback_needle not in (m.text or "").lower()]
@@ -451,10 +466,14 @@ def _kb_metadata_steps_from_recent_ticket(ticket, prefer_message=None):
             return blk
     from .chat_models import ChatMessage
 
-    for m in ChatMessage.objects.filter(
-        conversation__ticket=ticket,
-        sender_type="ai",
-    ).order_by("-created_at")[:15]:
+    try:
+        recent = ChatMessage.objects.filter(
+            conversation__ticket=ticket,
+            sender_type="ai",
+        ).order_by("-created_at")[:15]
+    except DatabaseError:
+        return ""
+    for m in recent:
         blk = _kb_metadata_steps_block(m)
         if blk:
             return blk
