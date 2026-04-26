@@ -668,6 +668,50 @@ class TeamMembersListView(generics.ListAPIView):
         ).distinct().order_by('email')
 
 
+class MentionSuggestionsView(GenericAPIView):
+    """
+    Lightweight endpoint for @mention autocomplete.
+    Returns team colleagues (same teams as current user) filtered by `q`.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        return User.objects.none()
+
+    def get(self, request):
+        q = (request.query_params.get("q") or "").strip()
+        from base.models import Team
+        user = request.user
+        my_teams = Team.objects.filter(Q(owner=user) | Q(members=user)).values_list("pk", flat=True)
+        qs = (
+            User.objects.filter(Q(owned_teams__pk__in=my_teams) | Q(teams__pk__in=my_teams))
+            .distinct()
+            .order_by("email")
+        )
+        if q:
+            low = q.lower()
+            qs = qs.filter(
+                Q(username__icontains=low)
+                | Q(email__icontains=low)
+                | Q(first_name__icontains=low)
+                | Q(last_name__icontains=low)
+            )
+        items = list(qs[:20])
+        out = []
+        for u in items:
+            out.append(
+                {
+                    "id": str(u.id),
+                    "username": u.username,
+                    "email": u.email,
+                    "full_name": (u.get_full_name() or "").strip(),
+                }
+            )
+        return Response(out)
+
+
 class UserDetailView(generics.RetrieveAPIView):
     """Get user details"""
     queryset = User.objects.all()
@@ -809,15 +853,14 @@ class TeamInviteView(GenericAPIView):
 
     def post(self, request, pk):
         from base.models import Team, TeamInvitation
-        from base.billing_views import get_plan_for_user
+        from base.billing_views import get_max_members_for_user
         team = get_object_or_404(Team, pk=pk)
         if team.owner_id != request.user.id:
             return Response({'error': 'Only the team owner can invite members.'}, status=status.HTTP_403_FORBIDDEN)
         email = (request.data.get('email') or '').strip().lower()
         if not email:
             return Response({'error': 'email is required.'}, status=status.HTTP_400_BAD_REQUEST)
-        plan = get_plan_for_user(request.user)
-        max_members = plan.max_members if plan else 50
+        max_members = get_max_members_for_user(request.user)
         current = team.members.count()
         pending = TeamInvitation.objects.filter(team=team, status=TeamInvitation.Status.PENDING).count()
         if current + pending >= max_members:
@@ -957,14 +1000,13 @@ class TeamInvitationAcceptView(GenericAPIView):
 
     def post(self, request, invitation_id):
         from base.models import TeamInvitation
-        from base.billing_views import get_plan_for_user
+        from base.billing_views import get_max_members_for_user
         inv = get_object_or_404(TeamInvitation, id=invitation_id)
         if inv.status != TeamInvitation.Status.PENDING:
             return Response({'error': 'This invitation is no longer valid.'}, status=status.HTTP_400_BAD_REQUEST)
         if inv.email.lower() != request.user.email.lower():
             return Response({'error': 'This invitation was sent to another email.'}, status=status.HTTP_403_FORBIDDEN)
-        plan = get_plan_for_user(inv.team.owner)
-        max_members = plan.max_members if plan else 50
+        max_members = get_max_members_for_user(inv.team.owner)
         if inv.team.members.count() >= max_members:
             return Response({'error': 'Team is full.'}, status=status.HTTP_400_BAD_REQUEST)
         inv.team.members.add(request.user)

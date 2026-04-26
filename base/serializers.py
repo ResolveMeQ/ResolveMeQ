@@ -505,6 +505,7 @@ class UserPreferencesSerializer(serializers.ModelSerializer):
             'community_new_questions',
             'community_answers',
             'community_comments',
+            'community_mentions',
             'timezone',
             'language',
             'theme',
@@ -567,6 +568,8 @@ class PlanSerializer(serializers.ModelSerializer):
 
 class SubscriptionSerializer(serializers.ModelSerializer):
     plan_detail = PlanSerializer(source='plan', read_only=True)
+    over_limit = serializers.SerializerMethodField()
+    over_limit_reasons = serializers.SerializerMethodField()
 
     class Meta:
         from base.models import Subscription
@@ -575,12 +578,73 @@ class SubscriptionSerializer(serializers.ModelSerializer):
             'id', 'plan', 'plan_detail', 'status',
             'current_period_start', 'current_period_end', 'trial_ends_at',
             'gateway', 'gateway_customer_id', 'gateway_subscription_id',
+            'over_limit', 'over_limit_reasons',
             'created_at', 'updated_at',
         ]
         read_only_fields = [
             'id', 'created_at', 'updated_at',
             'gateway', 'gateway_customer_id', 'gateway_subscription_id',
         ]
+
+    def get_over_limit(self, obj):
+        reasons = self.get_over_limit_reasons(obj) or []
+        return bool(reasons)
+
+    def get_over_limit_reasons(self, obj):
+        """
+        Soft-lock signal for downgrade scenarios.
+        If user is above current plan caps, we do NOT delete data; we block new growth.
+        """
+        try:
+            from django.db.models import Count, Max
+            from base.models import Team
+            from base.billing.entitlements import get_entitlements_for_subscription, subscription_is_expired
+
+            # If fully expired, we show "expired" elsewhere; over-limit is for active plan downgrade.
+            if subscription_is_expired(obj):
+                return []
+
+            ent = get_entitlements_for_subscription(obj)
+            max_teams = int(ent.max_teams or 0)
+            max_members = int(ent.max_members_per_team or 0)
+
+            user = getattr(obj, "user", None)
+            if not user:
+                return []
+
+            reasons = []
+
+            teams_used = Team.objects.filter(owner=user).count()
+            if max_teams > 0 and teams_used > max_teams:
+                reasons.append(
+                    {
+                        "type": "teams",
+                        "limit": max_teams,
+                        "used": teams_used,
+                        "over_by": teams_used - max_teams,
+                    }
+                )
+
+            # Member limit is per team; report the worst offender for clarity.
+            if max_members > 0:
+                qs = (
+                    Team.objects.filter(owner=user)
+                    .annotate(member_count=Count("members", distinct=True))
+                )
+                max_used = qs.aggregate(mx=Max("member_count")).get("mx") or 0
+                if int(max_used) > max_members:
+                    reasons.append(
+                        {
+                            "type": "members_per_team",
+                            "limit": max_members,
+                            "used": int(max_used),
+                            "over_by": int(max_used) - max_members,
+                        }
+                    )
+
+            return reasons
+        except Exception:
+            return []
 
 
 class BillingCheckoutSessionSerializer(serializers.Serializer):

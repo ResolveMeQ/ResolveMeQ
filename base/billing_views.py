@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from base.billing.exceptions import BillingConfigurationError
 from base.billing.gateways.factory import get_billing_gateway
 from base.billing.payment_sync import sync_invoices_from_dodo
+from base.billing.subscription_sync import apply_dodo_subscription_payload
 from base.agent_usage import get_agent_usage_snapshot
 from base.models import Plan, Subscription, Invoice, Team, PlanGatewayProduct, SupportContactSubmission
 from base.serializers import (
@@ -35,25 +36,38 @@ except ImportError:
 def get_max_teams_for_user(user):
     """Return max teams allowed for this user (from subscription or settings)."""
     try:
-        sub = Subscription.objects.get(user=user)
-        if sub.plan_id:
-            if sub.plan.is_trial and sub.trial_ends_at:
-                from django.utils import timezone
-                if sub.trial_ends_at <= timezone.now():
-                    return 1
-            return sub.plan.max_teams
-        return getattr(django_settings, 'PLAN_MAX_TEAMS', 20)
+        sub = Subscription.objects.select_related('plan').get(user=user)
     except Subscription.DoesNotExist:
-        return getattr(django_settings, 'PLAN_MAX_TEAMS', 20)
+        sub = None
+    from base.billing.entitlements import get_entitlements_for_subscription, reconcile_subscription_status
+    reconcile_subscription_status(sub)
+    ent = get_entitlements_for_subscription(sub)
+    return int(ent.max_teams)
 
 
 def get_plan_for_user(user):
     """Return the plan for this user's subscription, or None."""
     try:
-        sub = Subscription.objects.get(user=user)
-        return sub.plan
+        sub = Subscription.objects.select_related('plan').get(user=user)
     except Subscription.DoesNotExist:
-        return None
+        sub = None
+    from base.billing.entitlements import get_entitlements_for_subscription, reconcile_subscription_status
+    reconcile_subscription_status(sub)
+    ent = get_entitlements_for_subscription(sub)
+    # When expired, treat as no paid plan for feature gating.
+    return sub.plan if (sub and not ent.is_expired) else None
+
+
+def get_max_members_for_user(user) -> int:
+    """Return max team members allowed for this user (from active subscription or expired caps)."""
+    try:
+        sub = Subscription.objects.select_related('plan').get(user=user)
+    except Subscription.DoesNotExist:
+        sub = None
+    from base.billing.entitlements import get_entitlements_for_subscription, reconcile_subscription_status
+    reconcile_subscription_status(sub)
+    ent = get_entitlements_for_subscription(sub)
+    return int(ent.max_members_per_team)
 
 
 class PlanListView(ListAPIView):
@@ -82,6 +96,20 @@ class CurrentSubscriptionView(GenericAPIView):
                 sub.status = Subscription.Status.TRIAL
                 sub.trial_ends_at = timezone.now() + timedelta(days=14)
                 sub.save(update_fields=['plan', 'status', 'trial_ends_at', 'updated_at'])
+        # Best-effort: sync subscription period/status from gateway on read.
+        # This prevents stale `current_period_end` when webhooks are delayed/missed.
+        try:
+            gateway = get_billing_gateway()
+            if getattr(gateway, "code", None) == "dodo" and (sub.gateway_subscription_id or "").strip():
+                client = getattr(gateway, "client", None)
+                if client and hasattr(client, "subscriptions"):
+                    remote = client.subscriptions.retrieve(subscription_id=sub.gateway_subscription_id)
+                    payload = getattr(remote, "data", None) or remote
+                    if payload:
+                        apply_dodo_subscription_payload(payload)
+                        sub = Subscription.objects.filter(user=request.user).first() or sub
+        except Exception as exc:
+            logger.debug("Subscription sync skipped: %s", exc)
         serializer = self.get_serializer(sub)
         return Response(serializer.data)
 

@@ -37,3 +37,13 @@ def user_wants_system_alert_emails(user: User) -> bool:
     if not user_accepts_email(user):
         return False
     return _prefs(user).system_alerts
+
+
+def user_wants_community_mention_emails(user: User) -> bool:
+    """
+    Email for community @mentions.
+    Respects master email switch + community_mentions toggle.
+    """
+    if not user_accepts_email(user):
+        return False
+    return getattr(_prefs(user), "community_mentions", True)

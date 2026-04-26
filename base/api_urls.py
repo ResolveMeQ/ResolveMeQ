@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     UserListView,
     TeamMembersListView,
+    MentionSuggestionsView,
     UserDetailView,
     UserCreateView,
     UserUpdateView,
@@ -11,6 +12,7 @@ from .views import (
 urlpatterns = [
     path('', UserListView.as_view(), name='user-list'),
     path('team-members/', TeamMembersListView.as_view(), name='user-team-members'),
+    path('mention-suggestions/', MentionSuggestionsView.as_view(), name='user-mention-suggestions'),
     path('create/', UserCreateView.as_view(), name='user-create'),
     path('<uuid:pk>/', UserDetailView.as_view(), name='user-detail'),
     path('<uuid:pk>/update/', UserUpdateView.as_view(), name='user-update'),

@@ -294,6 +294,23 @@ Profile model that extends the User model with additional fields.
     city = models.CharField(max_length=300, verbose_name='City', blank=True, default='',
                             help_text="The city where the user resides")
 
+    # Optional Slack identity for users who connect Slack.
+    # Stored on Profile (not User) to avoid polluting auth fields and to support multiple identity providers later.
+    slack_user_id = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text=_("Slack member ID (e.g. U123...) for DM and attribution; optional"),
+    )
+    slack_team_id = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text=_("Slack workspace ID (T123...) this user is linked to; optional"),
+    )
+
     def __str__(self):
         return self.user.username
 
@@ -614,6 +631,12 @@ class UserPreferences(models.Model):
         _("community comments"),
         default=True,
         help_text=_("Notify when your community threads receive new comments")
+    )
+
+    community_mentions = models.BooleanField(
+        _("community mentions"),
+        default=True,
+        help_text=_("Notify when someone @mentions you in community Q&A")
     )
 
     # General preferences

@@ -30,6 +30,9 @@
             <div class="ticket-box">
                 <strong>Ticket #{{ticket_id}}</strong><br>
                 <strong>From:</strong> {{requester_email}}<br>
+                {% if request_phone %}
+                <strong>Phone:</strong> {{request_phone}}<br>
+                {% endif %}
                 <strong>Subject:</strong> {{issue_type}}<br>
                 <strong>Category:</strong> {{category}}
             </div>

@@ -187,6 +187,11 @@ def slack_dm_channel_for_user(user: User | None) -> str | None:
     """Slack user id to pass as `channel` for chat.postMessage DM, or None if not Slack-backed."""
     if not user:
         return None
+    # Prefer explicit linked Slack identity (for users that existed before Slack integration).
+    prof = getattr(user, "profile", None)
+    slack_uid = (getattr(prof, "slack_user_id", "") or "").strip() if prof else ""
+    if looks_like_slack_member_id(slack_uid):
+        return slack_uid.upper()
     # Shadow users keep the Slack member ID in username (avoid lowercasing from email normalization).
     username = (getattr(user, "username", None) or "").strip()
     if looks_like_slack_member_id(username):
@@ -208,7 +213,49 @@ def get_or_create_slack_shadow_user(
     installation: SlackToken | None = None,
     slack_user_payload: dict | None = None,
 ) -> tuple[User, bool]:
-    """Placeholder ResolveMeQ user for a Slack member (email `{slack_user_id}@slack.local`)."""
+    """
+    Resolve to an existing ResolveMeQ user when possible (by Slack profile email),
+    otherwise create a Slack "shadow user" (email `{slack_user_id}@slack.local`).
+    """
+    slack_user_id = (slack_user_id or "").strip()
+    if not slack_user_id:
+        user = User.objects.filter(email__iexact="unknown@slack.local").first()
+        if not user:
+            user = User.objects.create(username="slack_user", email="unknown@slack.local", is_active=True, is_verified=False)
+        return user, False
+
+    # If we can resolve the Slack member email, prefer mapping to an existing user.
+    slack_email = ""
+    if installation:
+        try:
+            resp = slack_api_get(installation, "users.info", {"user": slack_user_id})
+            if resp:
+                data = resp.json() if hasattr(resp, "json") else {}
+                u = (data.get("user") or {}) if isinstance(data, dict) else {}
+                prof = (u.get("profile") or {}) if isinstance(u, dict) else {}
+                slack_email = (prof.get("email") or "").strip().lower()
+        except Exception:
+            slack_email = ""
+
+    if slack_email:
+        existing = User.objects.filter(email__iexact=slack_email).first()
+        if existing:
+            try:
+                from base.models import Profile
+                p, _ = Profile.objects.get_or_create(user=existing)
+                changed = False
+                if looks_like_slack_member_id(slack_user_id) and (p.slack_user_id or "").strip().upper() != slack_user_id.upper():
+                    p.slack_user_id = slack_user_id.upper()
+                    changed = True
+                if installation and (installation.team_id or "").strip() and (p.slack_team_id or "").strip() != installation.team_id:
+                    p.slack_team_id = installation.team_id
+                    changed = True
+                if changed:
+                    p.save(update_fields=["slack_user_id", "slack_team_id"])
+            except Exception:
+                pass
+            return existing, False
+
     email = f"{slack_user_id}@slack.local"
     user, created = User.objects.get_or_create(
         username=slack_user_id,
@@ -230,6 +277,22 @@ def get_or_create_slack_shadow_user(
             sync_slack_shadow_profile_from_api(user, slack_user_id, installation)
     if not (user.first_name or user.last_name or "").strip():
         apply_slack_interaction_user_payload(user, slack_user_payload)
+
+    # Persist Slack linkage on profile too (helps DMs + avoids raw IDs elsewhere).
+    try:
+        from base.models import Profile
+        p, _ = Profile.objects.get_or_create(user=user)
+        changed = False
+        if looks_like_slack_member_id(slack_user_id) and (p.slack_user_id or "").strip().upper() != slack_user_id.upper():
+            p.slack_user_id = slack_user_id.upper()
+            changed = True
+        if installation and (installation.team_id or "").strip() and (p.slack_team_id or "").strip() != installation.team_id:
+            p.slack_team_id = installation.team_id
+            changed = True
+        if changed:
+            p.save(update_fields=["slack_user_id", "slack_team_id"])
+    except Exception:
+        pass
 
     return user, created
 

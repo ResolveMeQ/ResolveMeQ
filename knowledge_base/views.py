@@ -5,8 +5,10 @@ from django.core.files.storage import default_storage
 from django.utils.text import get_valid_filename
 from django.utils.text import slugify
 from django.http import HttpResponse
+from django.contrib.auth import get_user_model
 from pathlib import Path
 import uuid
+import re
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes, parser_classes
 from rest_framework.response import Response
@@ -23,6 +25,7 @@ from .models import (
     KBQuestionVote,
     KBAnswerVote,
     KBAttachment,
+    KBMention,
 )
 from .serializers import (
     KnowledgeBaseArticleSerializer,
@@ -36,6 +39,95 @@ from .services import KnowledgeBaseService
 import logging
 
 logger = logging.getLogger(__name__)
+User = get_user_model()
+
+_MENTION_RE = re.compile(r"(?<![\w@])@([A-Za-z0-9_.+-]{2,150})")
+
+
+def _resolve_mentioned_users(tokens):
+    """
+    Best-effort resolver for @tokens to users.
+    Supports:
+    - @username (preferred)
+    - @full.email (exact email) if someone pastes it
+    - @localpart -> matches email starting with localpart@
+    """
+    out = []
+    for raw in tokens:
+        t = (raw or "").strip()
+        if not t:
+            continue
+        # Prefer username match (case-insensitive)
+        u = User.objects.filter(username__iexact=t, is_active=True).first()
+        if not u and "@" in t:
+            u = User.objects.filter(email__iexact=t, is_active=True).first()
+        if not u:
+            u = User.objects.filter(email__istartswith=f"{t}@", is_active=True).first()
+        if u and u not in out:
+            out.append(u)
+    return out
+
+
+def _extract_mention_tokens(text):
+    if not text:
+        return []
+    return [m.group(1) for m in _MENTION_RE.finditer(str(text))]
+
+
+def _notify_mentions(*, target_type, target_id, body_text, actor, link, context_title=""):
+    """
+    Create KBMention rows + in-app notifications for mentioned users.
+    """
+    if not actor or not getattr(actor, "is_authenticated", False):
+        return
+    tokens = _extract_mention_tokens(body_text)
+    if not tokens:
+        return
+    try:
+        users = _resolve_mentioned_users(tokens)
+        for u in users:
+            if not u or u.id == actor.id:
+                continue
+            try:
+                KBMention.objects.get_or_create(
+                    target_type=target_type,
+                    target_id=int(target_id),
+                    mentioned_user=u,
+                    defaults={"created_by": actor},
+                )
+            except Exception:
+                # race or bad values shouldn't block the main write
+                pass
+            actor_name = actor.get_full_name() or actor.email or actor.username or "Someone"
+            _create_in_app_notification(
+                user=u,
+                kind="info",
+                title="You were mentioned",
+                message=f"{actor_name} mentioned you{(' in: ' + context_title) if context_title else '.'}",
+                link=link,
+            )
+            # Email (optional) — respects user preferences and global email settings.
+            try:
+                from base.tasks import _transactional_from_email, dispatch_send_email_with_template
+                from base.user_email_prefs import user_wants_community_mention_emails
+
+                if _transactional_from_email() and user_wants_community_mention_emails(u):
+                    frontend = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
+                    view_url = f"{frontend}{link}" if str(link).startswith("/") else str(link)
+                    recipient_name = (u.get_full_name() or "").strip() or u.email or u.username or "there"
+                    ctx = {
+                        "app_name": getattr(settings, "APP_NAME", "ResolveMeQ"),
+                        "recipient_name": recipient_name,
+                        "actor_name": actor_name,
+                        "context_title": (context_title or "")[:180],
+                        "view_url": view_url,
+                    }
+                    data = {"subject": f"[{ctx['app_name']}] You were mentioned"}
+                    dispatch_send_email_with_template(data, "mention_notification.html", ctx, [u.email])
+            except Exception as exc:
+                logger.warning("KB mention email failed for %s: %s", getattr(u, "email", None), exc)
+    except Exception as exc:
+        logger.warning("KB mention notify failed: %s", exc)
 
 
 def _get_public_urls(request):
@@ -559,6 +651,14 @@ def community_questions(request):
             except ValueError as e:
                 return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
             _notify_new_question_to_workspace_members(question, request.user)
+            _notify_mentions(
+                target_type=KBMention.TargetType.QUESTION,
+                target_id=question.id,
+                body_text=f"{question.title}\n{question.body}",
+                actor=request.user,
+                link=f"/knowledge-base?view=community&question={question.id}",
+                context_title=question.title,
+            )
             question = (
                 _prefetch_community_question_detail(
                     KBQuestion.objects.filter(id=question.id),
@@ -649,6 +749,14 @@ def add_question_answer(request, question_id):
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
     question.answer_count = question.answers.filter(is_published=True).count()
     question.save(update_fields=["answer_count", "updated_at"])
+    _notify_mentions(
+        target_type=KBMention.TargetType.ANSWER,
+        target_id=answer.id,
+        body_text=answer.body,
+        actor=request.user,
+        link=f"/knowledge-base?view=community&question={question.id}",
+        context_title=question.title,
+    )
     owner_allows_answer_alerts = _community_pref_enabled(question.created_by, "community_answers", default=True) or _community_pref_enabled(
         question.created_by, "community_comments", default=True
     )
@@ -696,6 +804,14 @@ def add_question_comment(request, question_id):
             message=f"{actor_name} commented on: {question.title}",
             link=f"/knowledge-base?view=community&question={question.id}",
         )
+    _notify_mentions(
+        target_type=KBMention.TargetType.COMMENT,
+        target_id=comment.id,
+        body_text=comment.body,
+        actor=request.user,
+        link=f"/knowledge-base?view=community&question={question.id}",
+        context_title=question.title,
+    )
     return Response(KBCommentSerializer(comment, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
@@ -740,6 +856,14 @@ def add_answer_comment(request, answer_id):
             message=f"{actor_name} commented on an answer in: {answer.question.title}",
             link=f"/knowledge-base?view=community&question={answer.question_id}",
         )
+    _notify_mentions(
+        target_type=KBMention.TargetType.COMMENT,
+        target_id=comment.id,
+        body_text=comment.body,
+        actor=request.user,
+        link=f"/knowledge-base?view=community&question={answer.question_id}",
+        context_title=answer.question.title,
+    )
     return Response(KBCommentSerializer(comment, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 

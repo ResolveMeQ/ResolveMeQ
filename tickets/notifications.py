@@ -54,6 +54,7 @@ def _send_escalation_email(to_email, ticket, params):
         "issue_type": ticket.issue_type or "Support needed",
         "category": ticket.category or "—",
         "description": (ticket.description or "")[:500],
+        "request_phone": (params.get("request_phone") or "")[:40],
         "conversation_summary": params.get("conversation_summary", "")[:400],
         "handoff_text": (params.get("handoff_text") or "")[:4000],
         "handoff_summary": (params.get("handoff_summary") or "")[:600],

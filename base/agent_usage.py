@@ -46,9 +46,11 @@ def resolve_usage_period(user, now=None):
     except Subscription.DoesNotExist:
         sub = None
 
-    if sub and sub.current_period_start and sub.current_period_end:
-        if sub.current_period_start <= now < sub.current_period_end:
-            return sub.current_period_start, sub.current_period_end
+    if sub:
+        from base.billing.entitlements import subscription_is_active_now
+        if subscription_is_active_now(sub, now=now) and sub.current_period_start and sub.current_period_end:
+            if sub.current_period_start <= now < sub.current_period_end:
+                return sub.current_period_start, sub.current_period_end
 
     from dateutil.relativedelta import relativedelta
 
@@ -72,8 +74,12 @@ def get_effective_agent_ops_limit(user) -> Optional[int]:
         return getattr(settings, 'DEFAULT_AGENT_OPERATIONS_PER_MONTH', 500)
 
     plan = sub.plan
-    if plan.is_trial and sub.trial_ends_at and sub.trial_ends_at <= timezone.now():
-        return getattr(settings, 'AGENT_OPS_TRIAL_EXPIRED', 0)
+    from base.billing.entitlements import get_entitlements_for_subscription, reconcile_subscription_status
+    reconcile_subscription_status(sub)
+    ent = get_entitlements_for_subscription(sub)
+    if ent.is_expired:
+        # Industry default: disable paid AI operations when expired.
+        return ent.agent_ops_limit
 
     if plan.max_agent_operations_per_month is None:
         return None

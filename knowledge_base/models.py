@@ -203,6 +203,50 @@ class KBComment(models.Model):
             raise ValidationError("A comment cannot target both a question and an answer.")
 
 
+class KBMention(models.Model):
+    """
+    Tracks @mentions inside community Q&A text bodies (questions, answers, comments).
+    Used for notifications and future analytics.
+    """
+
+    class TargetType(models.TextChoices):
+        QUESTION = "question", "Question"
+        ANSWER = "answer", "Answer"
+        COMMENT = "comment", "Comment"
+
+    id = models.BigAutoField(primary_key=True)
+    target_type = models.CharField(max_length=20, choices=TargetType.choices, db_index=True)
+    target_id = models.PositiveIntegerField(db_index=True)
+    mentioned_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="kb_mentions",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kb_mentions_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["target_type", "target_id"]),
+            models.Index(fields=["mentioned_user", "created_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["target_type", "target_id", "mentioned_user"],
+                name="uniq_kbmention_target_user",
+            )
+        ]
+
+    def __str__(self):
+        return f"@{getattr(self.mentioned_user, 'username', 'user')} in {self.target_type}#{self.target_id}"
+
+
 class KBQuestionVote(models.Model):
     VOTE_CHOICES = ((1, "Upvote"), (-1, "Downvote"))
     question = models.ForeignKey(

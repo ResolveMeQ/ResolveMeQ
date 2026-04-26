@@ -712,7 +712,11 @@ def get_ticket(request, ticket_id):
         if not text.startswith("Comment: "):
             continue
         text = text[9:].strip()
-        author = (getattr(i.user, "get_full_name", lambda: "")() or getattr(i.user, "username", "") or "User").strip() or "User"
+        try:
+            from integrations.slack_installation import display_name_for_user
+            author = (display_name_for_user(i.user) or "").strip() or "User"
+        except Exception:
+            author = (getattr(i.user, "get_full_name", lambda: "")() or getattr(i.user, "username", "") or "User").strip() or "User"
         comments.append({
             "id": i.id,
             "content": text,
@@ -947,12 +951,18 @@ def add_comment(request, ticket_id):
     recipients = [u for u in recipients if user_can_access_ticket(u, ticket)]
     for recipient in recipients:
         try:
+            try:
+                from integrations.slack_installation import display_name_for_user
+                actor_name = (display_name_for_user(request.user) or "").strip()
+            except Exception:
+                actor_name = ""
+            if not actor_name:
+                actor_name = (request.user.get_full_name() or request.user.email or request.user.username or "A teammate")
             InAppNotification.objects.create(
                 user=recipient,
                 type=InAppNotification.Type.INFO,
                 title=f"New reply on Ticket #{ticket.ticket_id}",
-                message=(request.user.get_full_name() or request.user.email or request.user.username or "A teammate")
-                + f" replied: {(comment or '').strip()[:180]}",
+                message=actor_name + f" replied: {(comment or '').strip()[:180]}",
                 link=f"/tickets?highlight={ticket.ticket_id}",
             )
         except Exception as exc:
@@ -976,6 +986,17 @@ def escalate_ticket(request, ticket_id):
         )
     from .handoff import build_handoff_packet
 
+    if (ticket.status or "").lower() == "resolved":
+        return Response({"error": "This ticket is already resolved."}, status=status.HTTP_400_BAD_REQUEST)
+    if (ticket.status or "").lower() == "escalated":
+        # Idempotent: don't spam interactions/notifications if user clicks twice.
+        return Response(
+            {
+                "message": "Ticket is already in review.",
+                "ticket": TicketSerializer(ticket).data,
+            }
+        )
+
     ticket.status = "escalated"
     ticket.awaiting_response_from = "support"
     ticket.last_message_at = timezone.now()
@@ -983,7 +1004,16 @@ def escalate_ticket(request, ticket_id):
     apply_escalated_timestamp(ticket)
     ticket.save()
 
-    content = "Ticket escalated by user."
+    reason = (request.data.get("reason") or "").strip()[:120]
+    note = (request.data.get("note") or "").strip()
+    phone = (request.data.get("phone") or "").strip()[:40]
+    content = "Requested human help."
+    if reason:
+        content += f"\nReason: {reason}"
+    if phone:
+        content += f"\nPhone: {phone}"
+    if note:
+        content += f"\n\nUser note:\n{note[:2000]}"
     conversation_summary = (request.data.get("conversation_summary") or "").strip()
     if conversation_summary:
         content += f"\n\nConversation context for support:\n{conversation_summary[:2000]}"
@@ -995,7 +1025,13 @@ def escalate_ticket(request, ticket_id):
         content=content
     )
     _notify_ticket_status_change(ticket, "escalated")
-    params = {"reason": "Escalated by user"}
+    params = {"reason": "Requested human help"}
+    if reason:
+        params["request_reason"] = reason
+    if phone:
+        params["request_phone"] = phone
+    if note:
+        params["user_note"] = note[:500]
     if conversation_summary:
         params["conversation_summary"] = conversation_summary[:500]
     packet = build_handoff_packet(ticket, request.user, conversation_summary)
@@ -1277,6 +1313,18 @@ def audit_log(request, ticket_id):
     interactions = TicketInteraction.objects.filter(ticket=ticket).order_by("created_at")
     serializer = TicketInteractionSerializer(interactions, many=True)
     return Response(serializer.data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def my_ticket_reply_needed_count(request):
+    """
+    Count of tickets that currently await a reply from the requester.
+    Used for a lightweight global banner so users don't miss support replies.
+    """
+    qs = Ticket.objects.filter(user=request.user)
+    qs = qs.filter(awaiting_response_from="user").exclude(status="resolved")
+    return Response({"count": int(qs.count())})
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
