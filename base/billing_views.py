@@ -13,6 +13,7 @@ from base.billing.exceptions import BillingConfigurationError
 from base.billing.gateways.factory import get_billing_gateway
 from base.billing.entitlements import infer_billing_interval_from_subscription_period
 from base.billing.payment_sync import refresh_gateway_subscription_id_from_dodo, sync_invoices_from_dodo
+from base.billing.services import plan_price_for_interval
 from base.billing.subscription_sync import apply_dodo_subscription_payload
 from base.agent_usage import get_agent_usage_snapshot
 from base.models import Plan, Subscription, Invoice, Team, PlanGatewayProduct, SupportContactSubmission
@@ -34,8 +35,10 @@ except ImportError:
     dodopayments = None
 
 
-def _dodo_change_plan_missing_resource(exc: BaseException) -> bool:
-    """True when Dodo likely means unknown subscription_id or product_id (retry or better UX)."""
+def _dodo_is_not_found(exc: BaseException) -> bool:
+    """True when Dodo indicates missing subscription or product (404 or same message body)."""
+    if dodopayments and isinstance(exc, dodopayments.NotFoundError):
+        return True
     if dodopayments and isinstance(exc, dodopayments.APIStatusError):
         if getattr(exc, 'status_code', None) == 404:
             return True
@@ -45,6 +48,31 @@ def _dodo_change_plan_missing_resource(exc: BaseException) -> bool:
             if 'could not be found' in msg or 'does not exist' in msg or 'not found' in msg:
                 return True
     return False
+
+
+def _dodo_change_plan_kwargs(sub, plan, mapping, interval: str) -> tuple:
+    """
+    Build kwargs for subscriptions.change_plan.
+    Returns (kwargs, scheduled_downgrade) where scheduled_downgrade means effective_at=next_billing_date.
+    """
+    kwargs: dict = {
+        'subscription_id': sub.gateway_subscription_id,
+        'product_id': mapping.external_product_id,
+        'proration_billing_mode': 'difference_immediately',
+        'quantity': 1,
+    }
+    scheduled = False
+    current = sub.plan
+    if current and current.id != plan.id:
+        try:
+            old_p = plan_price_for_interval(current, interval)
+            new_p = plan_price_for_interval(plan, interval)
+            if new_p < old_p:
+                kwargs['effective_at'] = 'next_billing_date'
+                scheduled = True
+        except ValueError:
+            pass
+    return kwargs, scheduled
 
 
 def get_max_teams_for_user(user):
@@ -392,19 +420,78 @@ class BillingChangePlanView(GenericAPIView):
         if getattr(gateway, 'code', None) != 'dodo':
             return Response({'detail': 'Plan changes only supported for Dodo.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        for attempt in (1, 2):
+        # Preflight: subscription id exists in this Dodo environment (TEST vs LIVE mismatch otherwise 404s).
+        for pre in (1, 2):
             try:
-                gateway.client.subscriptions.change_plan(
-                    subscription_id=sub.gateway_subscription_id,
-                    product_id=mapping.external_product_id,
-                    proration_billing_mode='difference_immediately',
-                    quantity=1,
+                remote_sub = gateway.client.subscriptions.retrieve(
+                    subscription_id=sub.gateway_subscription_id
+                )
+                logger.info(
+                    'change_plan preflight ok: subscription_id=%s remote_product_id=%s',
+                    (sub.gateway_subscription_id or '')[:16],
+                    (getattr(remote_sub, 'product_id', None) or '')[:16],
                 )
                 break
             except Exception as exc:
-                if attempt == 1 and _dodo_change_plan_missing_resource(exc):
+                if pre == 1 and _dodo_is_not_found(exc) and refresh_gateway_subscription_id_from_dodo(
+                    request.user, sub
+                ):
+                    sub.refresh_from_db()
+                    logger.info('change_plan preflight: refreshed gateway_subscription_id, retrying retrieve')
+                    continue
+                if _dodo_is_not_found(exc):
+                    sid = (sub.gateway_subscription_id or '')[:18]
+                    return Response(
+                        {
+                            'detail': (
+                                'Dodo could not find this subscription id (wrong id, or '
+                                'DODO_PAYMENTS_ENVIRONMENT does not match where the subscription was created). '
+                                f'Id prefix: {sid}… '
+                                'Use the same API mode as checkout (test_mode vs live_mode), or subscribe again via checkout.'
+                            )
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                logger.exception('Dodo subscription.retrieve preflight failed')
+                return Response(
+                    {'detail': 'Payment provider error while verifying subscription. Try again later.'},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+
+        # Preflight: target product id exists (stale PlanGatewayProduct row vs dashboard).
+        try:
+            gateway.client.products.retrieve(id=mapping.external_product_id)
+        except Exception as exc:
+            if _dodo_is_not_found(exc):
+                slug = (plan.slug or 'unknown').strip() or 'unknown'
+                return Response(
+                    {
+                        'detail': (
+                            f'Dodo has no product with id "{mapping.external_product_id}" '
+                            f'(plan {slug}, {interval}). Re-create mappings: '
+                            f'python manage.py sync_dodo_plan_products --plan-slug {slug} --recreate '
+                            'Use the same DODO_PAYMENTS_ENVIRONMENT as this subscription.'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            logger.exception('Dodo products.retrieve preflight failed')
+            return Response(
+                {'detail': 'Payment provider error while verifying target plan. Try again later.'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        change_kwargs, scheduled_downgrade = _dodo_change_plan_kwargs(sub, plan, mapping, interval)
+
+        for attempt in (1, 2):
+            try:
+                gateway.client.subscriptions.change_plan(**change_kwargs)
+                break
+            except Exception as exc:
+                if attempt == 1 and _dodo_is_not_found(exc):
                     if refresh_gateway_subscription_id_from_dodo(request.user, sub):
                         sub.refresh_from_db()
+                        change_kwargs['subscription_id'] = sub.gateway_subscription_id
                         logger.info('change_plan: retried after refreshing gateway_subscription_id')
                         continue
                 if dodopayments and isinstance(exc, dodopayments.APIStatusError):
@@ -414,21 +501,36 @@ class BillingChangePlanView(GenericAPIView):
                     detail = str(exc)
                 logger.exception('Dodo change_plan failed')
                 hint = ''
-                if _dodo_change_plan_missing_resource(exc):
+                if _dodo_is_not_found(exc):
                     hint = (
-                        ' Confirm the plan is synced for this billing interval '
-                        '(python manage.py sync_dodo_plan_products) and that DODO_PAYMENTS_ENVIRONMENT '
-                        'matches the subscription (test vs live).'
+                        ' If preflight passed, contact Dodo support with subscription and product ids. '
+                        'Otherwise run sync_dodo_plan_products --recreate and align DODO_PAYMENTS_ENVIRONMENT.'
                     )
                 return Response(
                     {'detail': (detail or 'Plan change failed.') + hint},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+        if scheduled_downgrade:
+            logger.info(
+                'Plan change scheduled (next_billing_date) to %s for user %s — local plan unchanged until webhook',
+                plan.slug,
+                request.user.id,
+            )
+            return Response(
+                {
+                    'detail': (
+                        'Downgrade scheduled for your next billing date. '
+                        'You keep your current plan until then; we will update your account when Dodo confirms.'
+                    ),
+                    'scheduled': True,
+                }
+            )
+
         sub.plan = plan
         sub.save(update_fields=['plan', 'updated_at'])
         logger.info('Plan changed to %s for user %s', plan.slug, request.user.id)
-        return Response({'detail': 'Plan updated successfully.'})
+        return Response({'detail': 'Plan updated successfully.', 'scheduled': False})
 
 
 class BillingCustomerPortalView(GenericAPIView):
