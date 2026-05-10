@@ -482,36 +482,68 @@ class BillingChangePlanView(GenericAPIView):
             )
 
         change_kwargs, scheduled_downgrade = _dodo_change_plan_kwargs(sub, plan, mapping, interval)
+        downgrade_fallback_immediate = False
 
-        for attempt in (1, 2):
-            try:
-                gateway.client.subscriptions.change_plan(**change_kwargs)
-                break
-            except Exception as exc:
-                if attempt == 1 and _dodo_is_not_found(exc):
-                    if refresh_gateway_subscription_id_from_dodo(request.user, sub):
-                        sub.refresh_from_db()
-                        change_kwargs['subscription_id'] = sub.gateway_subscription_id
-                        logger.info('change_plan: retried after refreshing gateway_subscription_id')
-                        continue
-                if dodopayments and isinstance(exc, dodopayments.APIStatusError):
-                    body = getattr(exc, 'body', None) or {}
-                    detail = body.get('message') or body.get('code') or str(exc)
-                else:
-                    detail = str(exc)
-                logger.exception('Dodo change_plan failed')
-                hint = ''
-                if _dodo_is_not_found(exc):
-                    hint = (
-                        ' If preflight passed, contact Dodo support with subscription and product ids. '
-                        'Otherwise run sync_dodo_plan_products --recreate and align DODO_PAYMENTS_ENVIRONMENT.'
-                    )
-                return Response(
-                    {'detail': (detail or 'Plan change failed.') + hint},
-                    status=status.HTTP_400_BAD_REQUEST,
+        def _change_plan_error_response(exc) -> Response:
+            if dodopayments and isinstance(exc, dodopayments.APIStatusError):
+                body = getattr(exc, 'body', None) or {}
+                detail = body.get('message') or body.get('code') or str(exc)
+            else:
+                detail = str(exc)
+            logger.exception('Dodo change_plan failed')
+            hint = ''
+            if _dodo_is_not_found(exc):
+                hint = (
+                    ' If preflight passed, contact Dodo support with subscription and product ids. '
+                    'Otherwise run sync_dodo_plan_products --recreate and align DODO_PAYMENTS_ENVIRONMENT.'
                 )
+            return Response(
+                {'detail': (detail or 'Plan change failed.') + hint},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        if scheduled_downgrade:
+        def _run_change_plan_with_subscription_refresh(kw: dict) -> None:
+            for attempt in (1, 2):
+                try:
+                    w = dict(kw)
+                    sid = w.pop('subscription_id')
+                    gateway.client.subscriptions.change_plan(sid, **w)
+                    return
+                except Exception as exc:
+                    if attempt == 1 and _dodo_is_not_found(exc):
+                        if refresh_gateway_subscription_id_from_dodo(request.user, sub):
+                            sub.refresh_from_db()
+                            kw['subscription_id'] = sub.gateway_subscription_id
+                            change_kwargs['subscription_id'] = sub.gateway_subscription_id
+                            logger.info('change_plan: retried after refreshing gateway_subscription_id')
+                            continue
+                    raise
+
+        exc_out = None
+        try:
+            _run_change_plan_with_subscription_refresh(dict(change_kwargs))
+        except Exception as exc_first:
+            exc_out = exc_first
+            if (
+                change_kwargs.get('effective_at') == 'next_billing_date'
+                and _dodo_is_not_found(exc_first)
+            ):
+                logger.warning(
+                    'change_plan: effective_at=next_billing_date returned not-found; retrying without schedule: %s',
+                    exc_first,
+                )
+                try:
+                    kw_immediate = {k: v for k, v in change_kwargs.items() if k != 'effective_at'}
+                    _run_change_plan_with_subscription_refresh(kw_immediate)
+                    downgrade_fallback_immediate = True
+                    exc_out = None
+                except Exception as exc2:
+                    exc_out = exc2
+
+        if exc_out is not None:
+            return _change_plan_error_response(exc_out)
+
+        if scheduled_downgrade and not downgrade_fallback_immediate:
             logger.info(
                 'Plan change scheduled (next_billing_date) to %s for user %s — local plan unchanged until webhook',
                 plan.slug,

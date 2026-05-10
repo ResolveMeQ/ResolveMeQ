@@ -1,11 +1,13 @@
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from rest_framework.test import APITestCase
 
 from base.billing.exceptions import BillingConfigurationError
 from base.billing.gateways.factory import get_billing_gateway
@@ -245,3 +247,101 @@ class AgentUsageQuotaTests(TestCase):
         self.assertIsNone(get_effective_agent_ops_limit(self.user))
         self.assertTrue(try_consume_agent_operation(self.user).allowed)
         self.assertEqual(AgentUsageMonthly.objects.filter(user=self.user).count(), 0)
+
+
+@override_settings(
+    DODO_PAYMENTS_API_KEY='test_dummy_key_for_unit_tests',
+    DODO_PAYMENTS_ENVIRONMENT='test_mode',
+)
+class BillingChangePlanViewTests(APITestCase):
+    """POST /api/billing/change-plan/ with mocked Dodo client (no real HTTP)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='changeplan@test.com',
+            username='changeplantest',
+            password='test-pass-123',
+        )
+        self.client.force_authenticate(self.user)
+        self.pro = Plan.objects.create(
+            name='ChangePlan Pro U',
+            slug='changeplan-pro-u',
+            max_teams=10,
+            max_members=20,
+            price_monthly=Decimal('50.00'),
+            price_yearly=Decimal('500.00'),
+        )
+        self.starter = Plan.objects.create(
+            name='ChangePlan Starter U',
+            slug='changeplan-starter-u',
+            max_teams=2,
+            max_members=5,
+            price_monthly=Decimal('10.00'),
+            price_yearly=Decimal('100.00'),
+        )
+        for plan, ext in (
+            (self.pro, 'ext_prod_pro_m_u'),
+            (self.starter, 'ext_prod_starter_m_u'),
+        ):
+            PlanGatewayProduct.objects.create(
+                plan=plan,
+                gateway=PlanGatewayProduct.Gateway.DODO,
+                interval=PlanGatewayProduct.Interval.MONTHLY,
+                external_product_id=ext,
+            )
+
+    def _subscription(self, *, plan: Plan):
+        now = timezone.now()
+        Subscription.objects.create(
+            user=self.user,
+            plan=plan,
+            status=Subscription.Status.ACTIVE,
+            gateway='dodo',
+            gateway_subscription_id='sub_dodo_unit_test',
+            gateway_customer_id='cus_unit_test',
+            current_period_start=now,
+            current_period_end=now + timedelta(days=30),
+        )
+
+    @patch('base.billing_views.refresh_gateway_subscription_id_from_dodo', return_value=False)
+    @patch('base.billing_views.get_billing_gateway')
+    def test_upgrade_passes_subscription_id_positionally(self, mock_gw, _refresh):
+        self._subscription(plan=self.starter)
+        mock_client = MagicMock()
+        mock_client.subscriptions.retrieve.return_value = SimpleNamespace(product_id='ext_prod_starter_m_u')
+        mock_gw.return_value = MagicMock(code='dodo', client=mock_client)
+
+        resp = self.client.post(
+            '/api/billing/change-plan/',
+            {'plan': str(self.pro.id), 'billing_interval': 'monthly'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200, getattr(resp, 'data', resp.content))
+        mock_client.products.retrieve.assert_called_once_with(id='ext_prod_pro_m_u')
+        args, kwargs = mock_client.subscriptions.change_plan.call_args
+        self.assertEqual(args[0], 'sub_dodo_unit_test')
+        self.assertEqual(kwargs.get('product_id'), 'ext_prod_pro_m_u')
+        self.assertNotIn('effective_at', kwargs)
+        sub = Subscription.objects.get(user=self.user)
+        self.assertEqual(sub.plan_id, self.pro.id)
+
+    @patch('base.billing_views.refresh_gateway_subscription_id_from_dodo', return_value=False)
+    @patch('base.billing_views.get_billing_gateway')
+    def test_downgrade_uses_next_billing_date_and_keeps_local_plan(self, mock_gw, _refresh):
+        self._subscription(plan=self.pro)
+        mock_client = MagicMock()
+        mock_client.subscriptions.retrieve.return_value = SimpleNamespace(product_id='ext_prod_pro_m_u')
+        mock_gw.return_value = MagicMock(code='dodo', client=mock_client)
+
+        resp = self.client.post(
+            '/api/billing/change-plan/',
+            {'plan': str(self.starter.id), 'billing_interval': 'monthly'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200, getattr(resp, 'data', resp.content))
+        self.assertTrue(resp.data.get('scheduled'))
+        args, kwargs = mock_client.subscriptions.change_plan.call_args
+        self.assertEqual(args[0], 'sub_dodo_unit_test')
+        self.assertEqual(kwargs.get('effective_at'), 'next_billing_date')
+        sub = Subscription.objects.get(user=self.user)
+        self.assertEqual(sub.plan_id, self.pro.id)
