@@ -169,6 +169,20 @@ if _hostaddr:
 if _db_options:
     _db['OPTIONS'] = _db_options
 
+# Supabase pooler (PgBouncer) can terminate connections at any time (deploys/maintenance/limits).
+# Avoid reusing stale connections and enable health checks before first query.
+_is_supabase_pooler = '.pooler.supabase.com' in _db_host
+if _is_supabase_pooler:
+    # PgBouncer is commonly in transaction pooling mode; Django shouldn't hold connections open.
+    _db['CONN_MAX_AGE'] = int(os.getenv('DB_CONN_MAX_AGE', '0'))
+    _db['CONN_HEALTH_CHECKS'] = True
+    # Server-side cursors are incompatible with transaction pooling.
+    _db['DISABLE_SERVER_SIDE_CURSORS'] = True
+else:
+    # Direct Postgres connections can benefit from short-lived reuse.
+    _db['CONN_MAX_AGE'] = int(os.getenv('DB_CONN_MAX_AGE', '60'))
+    _db['CONN_HEALTH_CHECKS'] = True
+
 DATABASES = {'default': _db}
 
 CSRF_TRUSTED_ORIGINS = [
@@ -351,6 +365,28 @@ if ENABLE_DIGEST_EMAIL_SCHEDULE:
     CELERY_BEAT_SCHEDULE["daily-user-digest"] = {
         "task": "base.tasks.send_daily_digest_emails",
         "schedule": crontab(hour=DIGEST_EMAIL_HOUR_UTC, minute=0),
+    }
+
+# Subscription expired notice (email + in-app bell). Requires Celery worker + beat.
+SUBSCRIPTION_EXPIRED_NOTIFY_LOOKBACK_DAYS = int(
+    os.getenv("SUBSCRIPTION_EXPIRED_NOTIFY_LOOKBACK_DAYS", "45").strip() or "45"
+)
+SUBSCRIPTION_EXPIRED_EMAIL_HOUR_UTC = int(
+    os.getenv("SUBSCRIPTION_EXPIRED_EMAIL_HOUR_UTC", "10").strip() or "10"
+)
+SUBSCRIPTION_EXPIRED_EMAIL_MINUTE_UTC = int(
+    os.getenv("SUBSCRIPTION_EXPIRED_EMAIL_MINUTE_UTC", "15").strip() or "15"
+)
+ENABLE_SUBSCRIPTION_EXPIRED_EMAIL_SCHEDULE = os.getenv(
+    "ENABLE_SUBSCRIPTION_EXPIRED_EMAIL_SCHEDULE", "true"
+).strip().lower() in ("1", "true", "yes", "")
+if ENABLE_SUBSCRIPTION_EXPIRED_EMAIL_SCHEDULE:
+    CELERY_BEAT_SCHEDULE["subscription-expired-notifications"] = {
+        "task": "base.tasks.send_subscription_expired_notifications",
+        "schedule": crontab(
+            hour=SUBSCRIPTION_EXPIRED_EMAIL_HOUR_UTC,
+            minute=SUBSCRIPTION_EXPIRED_EMAIL_MINUTE_UTC,
+        ),
     }
 
 # Optional: token for GET /api/monitoring/health/complete/ (uptime checks without admin JWT)

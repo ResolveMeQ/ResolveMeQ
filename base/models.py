@@ -806,6 +806,11 @@ class Subscription(models.Model):
         null=True, blank=True,
         help_text=_('When the free trial expires. Trial plan only.')
     )
+    subscription_expired_notified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_('When we sent the subscription expired email/in-app notice (at most once).'),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

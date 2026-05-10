@@ -73,9 +73,36 @@ def subscription_is_expired(sub, *, now=None) -> bool:
     if sub.status == "trial":
         return bool(sub.trial_ends_at and sub.trial_ends_at <= now)
 
+    # After trial expiry, reconcile sets status to canceled without billing period dates.
+    if sub.status == "canceled":
+        if sub.current_period_end:
+            return (sub.current_period_end + _grace_period()) <= now
+        if sub.trial_ends_at:
+            return sub.trial_ends_at <= now
+        return True
+
     if sub.current_period_end and (sub.current_period_end + _grace_period()) <= now:
         return True
     return False
+
+
+def effective_subscription_expiry_at(sub):
+    """
+    Approximate instant when the subscription became (or becomes) expired for notification timing.
+    Returns None if we cannot infer a boundary from stored fields.
+    """
+    if sub is None:
+        return None
+    grace = _grace_period()
+    if sub.status == "trial":
+        return sub.trial_ends_at
+    if sub.status == "canceled":
+        if sub.current_period_end:
+            return sub.current_period_end + grace
+        return sub.trial_ends_at
+    if sub.current_period_end:
+        return sub.current_period_end + grace
+    return sub.trial_ends_at
 
 
 def reconcile_subscription_status(sub, *, now=None) -> None:

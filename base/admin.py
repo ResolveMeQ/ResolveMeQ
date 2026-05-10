@@ -226,6 +226,7 @@ class SubscriptionAdmin(admin.ModelAdmin):
     list_display = [
         'user', 'plan', 'status', 'gateway', 'gateway_subscription_id',
         'current_period_start', 'current_period_end',
+        'subscription_expired_notified_at',
     ]
     list_filter = ['status', 'gateway']
     search_fields = ['user__email', 'gateway_subscription_id', 'gateway_customer_id']

@@ -9,8 +9,10 @@ from typing import Optional
 
 from celery import shared_task
 from django.conf import settings
+from django.db import transaction
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
+from django.utils import timezone
 from django.utils.html import strip_tags
 
 logger = logging.getLogger(__name__)
@@ -197,3 +199,120 @@ def send_daily_digest_emails() -> None:
             logger.warning("Daily digest failed for %s: %s", user.email, exc)
 
     logger.info("Daily digest finished: enqueued %s digest email(s)", digest_enqueued)
+
+
+@shared_task(name="base.tasks.send_subscription_expired_notifications")
+def send_subscription_expired_notifications() -> None:
+    """
+    Email + in-app bell when a subscription is expired and we have not notified yet.
+    Scheduled via Celery Beat (ENABLE_SUBSCRIPTION_EXPIRED_EMAIL_SCHEDULE).
+
+    Only considers accounts whose effective expiry falls within the last
+    SUBSCRIPTION_EXPIRED_NOTIFY_LOOKBACK_DAYS so stale rows do not mass-email on first deploy.
+    """
+    from base.billing.entitlements import (
+        effective_subscription_expiry_at,
+        subscription_is_expired,
+    )
+    from base.models import InAppNotification, Subscription
+
+    if not _transactional_from_email():
+        logger.warning("Subscription expiry notices skipped: set DEFAULT_FROM_EMAIL or EMAIL_HOST_USER")
+        return
+
+    lookback_days = max(
+        1,
+        int(getattr(settings, "SUBSCRIPTION_EXPIRED_NOTIFY_LOOKBACK_DAYS", 45) or 45),
+    )
+    now = timezone.now()
+    window_start = now - timedelta(days=lookback_days)
+
+    candidate_ids = (
+        Subscription.objects.filter(
+            subscription_expired_notified_at__isnull=True,
+            user__is_active=True,
+        )
+        .exclude(user__email__exact="")
+        .values_list("pk", flat=True)
+        .iterator(chunk_size=200)
+    )
+
+    sent = 0
+    for sub_id in candidate_ids:
+        try:
+            with transaction.atomic():
+                sub = (
+                    Subscription.objects.select_for_update()
+                    .select_related("user", "plan")
+                    .filter(pk=sub_id)
+                    .first()
+                )
+                if (
+                    sub is None
+                    or sub.subscription_expired_notified_at is not None
+                    or not sub.user.email
+                    or not sub.user.is_active
+                ):
+                    continue
+
+                if not subscription_is_expired(sub, now=now):
+                    continue
+
+                eff = effective_subscription_expiry_at(sub)
+                if eff is None or eff > now or eff < window_start:
+                    continue
+
+                user = sub.user
+                frontend = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
+                app_name = getattr(settings, "APP_NAME", "ResolveMeQ")
+                billing_url = f"{frontend}/billing"
+                support_email = getattr(settings, "SUPPORT_EMAIL", "") or ""
+
+                plan_slug = (getattr(sub.plan, "slug", None) or "").strip()
+                detail = (
+                    "Your trial has ended."
+                    if plan_slug == "trial" or (sub.trial_ends_at and not (sub.gateway_subscription_id or "").strip())
+                    else "Your billing period has ended."
+                )
+
+                recipient_name = (user.get_full_name() or "").strip() or user.email
+                context = {
+                    "app_name": app_name,
+                    "recipient_name": recipient_name,
+                    "billing_url": billing_url,
+                    "frontend_url": frontend,
+                    "support_email": support_email,
+                    "expiry_detail": detail,
+                }
+                data = {"subject": f"{app_name}: subscription update"}
+
+                dispatch_send_email_with_template(
+                    data, "subscription_expired.html", context, [user.email]
+                )
+
+                try:
+                    InAppNotification.objects.create(
+                        user=user,
+                        type=InAppNotification.Type.WARNING,
+                        title="Subscription no longer active",
+                        message=(
+                            "Your plan has expired. Open Billing to renew or upgrade and restore full access."
+                        ),
+                        link="/billing",
+                    )
+                except Exception as exc:
+                    logger.warning("Subscription expiry in-app notify failed for %s: %s", user.email, exc)
+
+                sub.subscription_expired_notified_at = now
+                sub.save(
+                    update_fields=["subscription_expired_notified_at", "updated_at"]
+                )
+                sent += 1
+        except Exception as exc:
+            logger.warning(
+                "Subscription expiry notification failed for subscription_id=%s: %s",
+                sub_id,
+                exc,
+            )
+
+    logger.info("Subscription expiry notices finished: sent %s", sent)

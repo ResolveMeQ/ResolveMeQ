@@ -1322,9 +1322,20 @@ def my_ticket_reply_needed_count(request):
     Count of tickets that currently await a reply from the requester.
     Used for a lightweight global banner so users don't miss support replies.
     """
-    qs = Ticket.objects.filter(user=request.user)
-    qs = qs.filter(awaiting_response_from="user").exclude(status="resolved")
-    return Response({"count": int(qs.count())})
+    # Supabase/PgBouncer can drop connections between requests; retry once on transient DB errors.
+    from django.db import close_old_connections
+    from django.db.utils import OperationalError as DjangoOperationalError
+
+    def _count() -> int:
+        qs = Ticket.objects.filter(user=request.user)
+        qs = qs.filter(awaiting_response_from="user").exclude(status="resolved")
+        return int(qs.count())
+
+    try:
+        return Response({"count": _count()})
+    except DjangoOperationalError:
+        close_old_connections()
+        return Response({"count": _count()})
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])

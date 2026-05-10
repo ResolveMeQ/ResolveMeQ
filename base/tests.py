@@ -1,3 +1,4 @@
+from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ from django.utils import timezone
 from base.billing.exceptions import BillingConfigurationError
 from base.billing.gateways.factory import get_billing_gateway
 from base.billing.money import decimal_to_minor_units
+from base.billing.entitlements import effective_subscription_expiry_at, subscription_is_expired
 from base.billing.subscription_sync import apply_dodo_subscription_payload
 from base.agent_usage import (
     get_effective_agent_ops_limit,
@@ -106,6 +108,36 @@ class ApplyDodoSubscriptionPayloadTests(TestCase):
             )
         self.assertFalse(ok)
         self.assertFalse(Subscription.objects.filter(user=self.user).exists())
+
+
+@override_settings(BILLING_GRACE_DAYS=3)
+class SubscriptionExpiryEntitlementsTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='trialcx@test.com',
+            username='trialcx',
+            password='test-pass-123',
+        )
+
+    def test_canceled_after_trial_no_period_counts_as_expired(self):
+        past = timezone.now() - timedelta(days=1)
+        sub = Subscription.objects.create(
+            user=self.user,
+            status=Subscription.Status.CANCELED,
+            trial_ends_at=past,
+        )
+        self.assertTrue(subscription_is_expired(sub))
+        self.assertEqual(effective_subscription_expiry_at(sub), past)
+
+    def test_canceled_paid_until_period_end_not_expired(self):
+        future = timezone.now() + timedelta(days=10)
+        sub = Subscription.objects.create(
+            user=self.user,
+            status=Subscription.Status.CANCELED,
+            current_period_end=future,
+            trial_ends_at=timezone.now() - timedelta(days=30),
+        )
+        self.assertFalse(subscription_is_expired(sub))
 
 
 class BillingGatewayFactoryTests(TestCase):
