@@ -568,6 +568,7 @@ class PlanSerializer(serializers.ModelSerializer):
 
 class SubscriptionSerializer(serializers.ModelSerializer):
     plan_detail = PlanSerializer(source='plan', read_only=True)
+    billing_interval = serializers.SerializerMethodField()
     over_limit = serializers.SerializerMethodField()
     over_limit_reasons = serializers.SerializerMethodField()
 
@@ -577,6 +578,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'plan', 'plan_detail', 'status',
             'current_period_start', 'current_period_end', 'trial_ends_at',
+            'billing_interval',
             'gateway', 'gateway_customer_id', 'gateway_subscription_id',
             'over_limit', 'over_limit_reasons',
             'created_at', 'updated_at',
@@ -585,6 +587,11 @@ class SubscriptionSerializer(serializers.ModelSerializer):
             'id', 'created_at', 'updated_at',
             'gateway', 'gateway_customer_id', 'gateway_subscription_id',
         ]
+
+    def get_billing_interval(self, obj):
+        from base.billing.entitlements import infer_billing_interval_from_subscription_period
+
+        return infer_billing_interval_from_subscription_period(obj)
 
     def get_over_limit(self, obj):
         reasons = self.get_over_limit_reasons(obj) or []

@@ -159,6 +159,68 @@ def _resolve_customer_id_from_email(user, sub: Subscription) -> str:
     return ''
 
 
+def refresh_gateway_subscription_id_from_dodo(user, sub: Subscription) -> bool:
+    """
+    When Dodo returns 404 for the stored subscription id, repoint to an active subscription
+    for the same customer (e.g. after provider-side replacement or DB drift).
+    Returns True if gateway_subscription_id was updated.
+    """
+    try:
+        from base.billing.gateways.factory import get_billing_gateway
+
+        gateway = get_billing_gateway()
+    except Exception as e:
+        logger.debug('refresh_gateway_subscription_id_from_dodo: no gateway: %s', e)
+        return False
+
+    if getattr(gateway, 'code', None) != 'dodo':
+        return False
+    client = getattr(gateway, 'client', None)
+    if not client or not hasattr(client, 'subscriptions'):
+        return False
+
+    cid = (sub.gateway_customer_id or '').strip()
+    if not cid:
+        cid = _resolve_customer_id_from_email(user, sub)
+        sub.refresh_from_db()
+
+    cid = (sub.gateway_customer_id or '').strip()
+    if not cid:
+        return False
+
+    old = (sub.gateway_subscription_id or '').strip()
+    candidates: list[str] = []
+    for list_status in ('active', 'on_hold'):
+        try:
+            sub_pages = client.subscriptions.list(
+                customer_id=cid, status=list_status, page_size=20
+            )
+            for sp in sub_pages:
+                sp_items = getattr(sp, 'items', None) or getattr(sp, 'data', None) or []
+                for s in sp_items:
+                    sid = getattr(s, 'subscription_id', None) or ''
+                    if sid and sid not in candidates:
+                        candidates.append(sid)
+                if not sp_items:
+                    break
+        except Exception as e:
+            logger.debug('subscriptions.list status=%s failed: %s', list_status, e)
+
+    if not candidates:
+        return False
+    if old and old in candidates:
+        return False
+
+    sub.gateway_subscription_id = candidates[0]
+    sub.save(update_fields=['gateway_subscription_id', 'updated_at'])
+    logger.warning(
+        'Updated stale gateway_subscription_id for user %s (customer prefix=%s)',
+        getattr(user, 'id', None),
+        (cid[:10] + '…') if len(cid) > 10 else cid,
+    )
+    return True
+
+
 def apply_dodo_payment_succeeded(payment_data: Any) -> bool:
     """
     Create an Invoice from a Dodo payment.succeeded event.

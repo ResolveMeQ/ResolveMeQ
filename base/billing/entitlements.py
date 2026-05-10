@@ -42,6 +42,27 @@ def _expired_caps() -> tuple[int, int, int]:
     return max_teams, max_members, max_ops
 
 
+def infer_billing_interval_from_subscription_period(sub) -> Optional[str]:
+    """
+    Infer Dodo billing cadence (monthly vs yearly) from the current period window.
+
+    Used for change-plan: the gateway product_id must match the subscription's interval.
+    The billing UI toggle alone is often wrong (e.g. user on yearly but viewing monthly prices).
+    """
+    start = getattr(sub, "current_period_start", None)
+    end = getattr(sub, "current_period_end", None)
+    if not start or not end or end <= start:
+        return None
+    days = (end - start).days
+    if 24 <= days <= 40:
+        return "monthly"
+    if days >= 300:
+        return "yearly"
+    if days <= 45:
+        return "monthly"
+    return None
+
+
 def subscription_is_active_now(sub, *, now=None) -> bool:
     """
     True only when user should have paid/trial entitlements *right now*.

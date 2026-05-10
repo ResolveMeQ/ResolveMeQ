@@ -11,7 +11,8 @@ from rest_framework.response import Response
 
 from base.billing.exceptions import BillingConfigurationError
 from base.billing.gateways.factory import get_billing_gateway
-from base.billing.payment_sync import sync_invoices_from_dodo
+from base.billing.entitlements import infer_billing_interval_from_subscription_period
+from base.billing.payment_sync import refresh_gateway_subscription_id_from_dodo, sync_invoices_from_dodo
 from base.billing.subscription_sync import apply_dodo_subscription_payload
 from base.agent_usage import get_agent_usage_snapshot
 from base.models import Plan, Subscription, Invoice, Team, PlanGatewayProduct, SupportContactSubmission
@@ -31,6 +32,19 @@ try:
     import dodopayments
 except ImportError:
     dodopayments = None
+
+
+def _dodo_change_plan_missing_resource(exc: BaseException) -> bool:
+    """True when Dodo likely means unknown subscription_id or product_id (retry or better UX)."""
+    if dodopayments and isinstance(exc, dodopayments.APIStatusError):
+        if getattr(exc, 'status_code', None) == 404:
+            return True
+        body = getattr(exc, 'body', None)
+        if isinstance(body, dict):
+            msg = str(body.get('message') or body.get('code') or '').lower()
+            if 'could not be found' in msg or 'does not exist' in msg or 'not found' in msg:
+                return True
+    return False
 
 
 def get_max_teams_for_user(user):
@@ -347,6 +361,15 @@ class BillingChangePlanView(GenericAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        inferred = infer_billing_interval_from_subscription_period(sub)
+        if inferred and inferred != interval:
+            logger.info(
+                'change_plan: billing_interval %s -> %s (from current_period_start/end)',
+                interval,
+                inferred,
+            )
+            interval = inferred
+
         plan = Plan.objects.filter(id=plan_id, is_active=True).first()
         if not plan:
             return Response({'detail': 'Invalid or inactive plan.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -369,21 +392,38 @@ class BillingChangePlanView(GenericAPIView):
         if getattr(gateway, 'code', None) != 'dodo':
             return Response({'detail': 'Plan changes only supported for Dodo.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            gateway.client.subscriptions.change_plan(
-                subscription_id=sub.gateway_subscription_id,
-                product_id=mapping.external_product_id,
-                proration_billing_mode='difference_immediately',
-                quantity=1,
-            )
-        except Exception as exc:
-            if dodopayments and isinstance(exc, dodopayments.APIStatusError):
-                body = getattr(exc, 'body', None) or {}
-                detail = body.get('message') or body.get('code') or str(exc)
-            else:
-                detail = str(exc)
-            logger.exception('Dodo change_plan failed')
-            return Response({'detail': detail or 'Plan change failed.'}, status=status.HTTP_400_BAD_REQUEST)
+        for attempt in (1, 2):
+            try:
+                gateway.client.subscriptions.change_plan(
+                    subscription_id=sub.gateway_subscription_id,
+                    product_id=mapping.external_product_id,
+                    proration_billing_mode='difference_immediately',
+                    quantity=1,
+                )
+                break
+            except Exception as exc:
+                if attempt == 1 and _dodo_change_plan_missing_resource(exc):
+                    if refresh_gateway_subscription_id_from_dodo(request.user, sub):
+                        sub.refresh_from_db()
+                        logger.info('change_plan: retried after refreshing gateway_subscription_id')
+                        continue
+                if dodopayments and isinstance(exc, dodopayments.APIStatusError):
+                    body = getattr(exc, 'body', None) or {}
+                    detail = body.get('message') or body.get('code') or str(exc)
+                else:
+                    detail = str(exc)
+                logger.exception('Dodo change_plan failed')
+                hint = ''
+                if _dodo_change_plan_missing_resource(exc):
+                    hint = (
+                        ' Confirm the plan is synced for this billing interval '
+                        '(python manage.py sync_dodo_plan_products) and that DODO_PAYMENTS_ENVIRONMENT '
+                        'matches the subscription (test vs live).'
+                    )
+                return Response(
+                    {'detail': (detail or 'Plan change failed.') + hint},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         sub.plan = plan
         sub.save(update_fields=['plan', 'updated_at'])

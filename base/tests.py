@@ -10,7 +10,11 @@ from django.utils import timezone
 from base.billing.exceptions import BillingConfigurationError
 from base.billing.gateways.factory import get_billing_gateway
 from base.billing.money import decimal_to_minor_units
-from base.billing.entitlements import effective_subscription_expiry_at, subscription_is_expired
+from base.billing.entitlements import (
+    effective_subscription_expiry_at,
+    infer_billing_interval_from_subscription_period,
+    subscription_is_expired,
+)
 from base.billing.subscription_sync import apply_dodo_subscription_payload
 from base.agent_usage import (
     get_effective_agent_ops_limit,
@@ -108,6 +112,47 @@ class ApplyDodoSubscriptionPayloadTests(TestCase):
             )
         self.assertFalse(ok)
         self.assertFalse(Subscription.objects.filter(user=self.user).exists())
+
+
+class InferBillingIntervalTests(TestCase):
+    def test_monthly_from_period_length(self):
+        now = timezone.now()
+        sub = Subscription(
+            user=User.objects.create_user(
+                email='int@test.com',
+                username='inttest',
+                password='x',
+            ),
+            status=Subscription.Status.ACTIVE,
+            current_period_start=now,
+            current_period_end=now + timedelta(days=30),
+        )
+        self.assertEqual(infer_billing_interval_from_subscription_period(sub), 'monthly')
+
+    def test_yearly_from_period_length(self):
+        now = timezone.now()
+        sub = Subscription(
+            user=User.objects.create_user(
+                email='int2@test.com',
+                username='inttest2',
+                password='x',
+            ),
+            status=Subscription.Status.ACTIVE,
+            current_period_start=now,
+            current_period_end=now + timedelta(days=365),
+        )
+        self.assertEqual(infer_billing_interval_from_subscription_period(sub), 'yearly')
+
+    def test_missing_period_returns_none(self):
+        sub = Subscription(
+            user=User.objects.create_user(
+                email='int3@test.com',
+                username='inttest3',
+                password='x',
+            ),
+            status=Subscription.Status.ACTIVE,
+        )
+        self.assertIsNone(infer_billing_interval_from_subscription_period(sub))
 
 
 @override_settings(BILLING_GRACE_DAYS=3)
