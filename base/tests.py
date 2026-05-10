@@ -3,10 +3,13 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import httpx
+import dodopayments
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from rest_framework import status
 from rest_framework.test import APITestCase
 
 from base.billing.exceptions import BillingConfigurationError
@@ -345,3 +348,25 @@ class BillingChangePlanViewTests(APITestCase):
         self.assertEqual(kwargs.get('effective_at'), 'next_billing_date')
         sub = Subscription.objects.get(user=self.user)
         self.assertEqual(sub.plan_id, self.pro.id)
+
+    @patch('base.billing_views.refresh_gateway_subscription_id_from_dodo', return_value=False)
+    @patch('base.billing_views.get_billing_gateway')
+    def test_preflight_subscription_not_found_returns_recoverable_payload(self, mock_gw, _refresh):
+        self._subscription(plan=self.starter)
+        req = httpx.Request('GET', 'https://dodo.example/subscriptions/sub_x')
+        resp404 = httpx.Response(404, request=req)
+        nf = dodopayments.NotFoundError('gone', response=resp404, body={'message': 'not found'})
+        mock_client = MagicMock()
+        mock_client.subscriptions.retrieve.side_effect = nf
+        mock_gw.return_value = MagicMock(code='dodo', client=mock_client)
+
+        r = self.client.post(
+            '/api/billing/change-plan/',
+            {'plan': str(self.pro.id), 'billing_interval': 'monthly'},
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(r.data.get('billing_error'), 'subscription_not_found')
+        self.assertEqual(r.data.get('recovery'), 'checkout')
+        self.assertIn("couldn't link", r.data.get('detail', '').lower())
+        mock_client.subscriptions.change_plan.assert_not_called()

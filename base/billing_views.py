@@ -440,17 +440,18 @@ class BillingChangePlanView(GenericAPIView):
                     logger.info('change_plan preflight: refreshed gateway_subscription_id, retrying retrieve')
                     continue
                 if _dodo_is_not_found(exc):
-                    sid = (sub.gateway_subscription_id or '')[:18]
+                    # User‑friendly copy + machine‑readable recovery for the app (checkout fallback).
                     return Response(
                         {
                             'detail': (
-                                'Dodo could not find this subscription id (wrong id, or '
-                                'DODO_PAYMENTS_ENVIRONMENT does not match where the subscription was created). '
-                                f'Id prefix: {sid}… '
-                                'Use the same API mode as checkout (test_mode vs live_mode), or subscribe again via checkout.'
-                            )
+                                "We couldn't link your account to your payment subscription "
+                                '(often after switching billing modes or a refresh delay). '
+                                'Continue below—your card details stay secure.'
+                            ),
+                            'billing_error': 'subscription_not_found',
+                            'recovery': 'checkout',
                         },
-                        status=status.HTTP_400_BAD_REQUEST,
+                        status=status.HTTP_409_CONFLICT,
                     )
                 logger.exception('Dodo subscription.retrieve preflight failed')
                 return Response(
