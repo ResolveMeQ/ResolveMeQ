@@ -6,7 +6,32 @@ from rest_framework import status
 from .models import KnowledgeBaseArticle
 from tickets.models import Ticket
 import json
+from knowledge_base.views import _extract_mention_tokens, _resolve_mentioned_users
+
 User = get_user_model()
+
+
+class KBMentionTokenTests(TestCase):
+    def test_extract_full_email_like_username(self):
+        body = "Please help @alice@company.com and @bob"
+        tokens = _extract_mention_tokens(body)
+        self.assertIn("alice@company.com", tokens)
+        self.assertIn("bob", tokens)
+
+    def test_strip_trailing_punctuation(self):
+        tokens = _extract_mention_tokens("Thanks @carol!")
+        self.assertEqual(tokens, ["carol"])
+
+    def test_resolve_user_with_at_in_username(self):
+        u = User.objects.create_user(
+            username="alice@company.com",
+            email="alice@company.com",
+            password="pass12345!!",
+        )
+        found = _resolve_mentioned_users(["alice@company.com"])
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].id, u.id)
+
 
 class KnowledgeBaseTests(TestCase):
     def setUp(self):

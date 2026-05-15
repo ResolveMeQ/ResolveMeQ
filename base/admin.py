@@ -1,17 +1,23 @@
 import csv
 
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django import forms
+from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse
+from django.shortcuts import redirect
+from django.template.response import TemplateResponse
+from django.urls import path
 from django.utils import timezone
+
+from base.billing.staff_grant import apply_staff_subscription_grant
 
 from base.models import (
     Profile, Team, UserPreferences, Plan, Subscription, Invoice,
     PlanGatewayProduct, BillingWebhookDelivery,
     InAppNotification, NewsletterSubscription, ContactRequest,
-    SupportContactSubmission, AgentUsageMonthly,
+    SupportContactSubmission, AgentUsageMonthly, SubscriptionGrantLog,
 )
 
 User = get_user_model()
@@ -221,15 +227,160 @@ class PlanAdmin(admin.ModelAdmin):
     inlines = [PlanGatewayProductInline]
 
 
+class StaffGrantSubscriptionAdminForm(forms.Form):
+    """Form for the admin-only complimentary subscription grant tool."""
+
+    recipient_email = forms.EmailField(label='Recipient email', required=True)
+    plan = forms.ModelChoiceField(
+        queryset=Plan.objects.filter(is_active=True).order_by('name'),
+        empty_label=None,
+    )
+    months_valid = forms.IntegerField(min_value=1, max_value=60, initial=12)
+    clear_gateway = forms.BooleanField(
+        required=False,
+        initial=True,
+        help_text='Clear Dodo gateway IDs so this row is not confused with an active checkout subscription.',
+    )
+    note = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={'rows': 3}),
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        if 'recipient_email' not in cleaned:
+            return cleaned
+        email = (cleaned.get('recipient_email') or '').strip()
+        if not email:
+            return cleaned
+        user = User.objects.filter(email__iexact=email, is_active=True).first()
+        if not user:
+            self.add_error('recipient_email', 'No active user with this email address.')
+            return cleaned
+        self.grant_recipient = user
+        return cleaned
+
+
 @admin.register(Subscription)
 class SubscriptionAdmin(admin.ModelAdmin):
+    change_list_template = 'admin/base/subscription/change_list.html'
     list_display = [
         'user', 'plan', 'status', 'gateway', 'gateway_subscription_id',
         'current_period_start', 'current_period_end',
         'subscription_expired_notified_at',
+        'subscription_welcome_notified_at',
+        'subscription_renewed_notified_period_end',
+        'subscription_expiring_notified_for_end',
     ]
     list_filter = ['status', 'gateway']
     search_fields = ['user__email', 'gateway_subscription_id', 'gateway_customer_id']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+    fieldsets = (
+        (None, {'fields': ('user', 'plan', 'status')}),
+        (
+            'Billing period (local)',
+            {
+                'fields': ('current_period_start', 'current_period_end', 'trial_ends_at'),
+                'description': (
+                    'Entitlements use these dates. For paid plans via Dodo, webhooks usually set '
+                    'periods; manual grants often set them here without a gateway id.'
+                ),
+            },
+        ),
+        (
+            'Payment gateway (Dodo)',
+            {
+                'fields': ('gateway', 'gateway_customer_id', 'gateway_subscription_id'),
+                'description': 'Leave blank for complimentary / manual access not tied to Dodo.',
+            },
+        ),
+        (
+            'Notifications',
+            {
+                'fields': (
+                    'subscription_welcome_notified_at',
+                    'subscription_renewed_notified_period_end',
+                    'subscription_expiring_notified_for_end',
+                    'subscription_expired_notified_at',
+                ),
+                'description': 'Timestamps for billing lifecycle emails and in-app notices.',
+            },
+        ),
+        ('Meta', {'fields': ('id', 'created_at', 'updated_at')}),
+    )
+
+    def get_urls(self):
+        urls = super().get_urls()
+        info = self.model._meta.app_label, self.model._meta.model_name
+        custom = [
+            path(
+                'grant-subscription/',
+                self.admin_site.admin_view(self.grant_subscription_view),
+                name='%s_%s_grant_subscription' % info,
+            ),
+        ]
+        return custom + urls
+
+    def grant_subscription_view(self, request):
+        if not self.has_change_permission(request):
+            raise PermissionDenied
+
+        opts = self.model._meta
+        if request.method == 'POST':
+            form = StaffGrantSubscriptionAdminForm(request.POST)
+            if form.is_valid():
+                sub = apply_staff_subscription_grant(
+                    recipient=form.grant_recipient,
+                    plan=form.cleaned_data['plan'],
+                    months_valid=form.cleaned_data['months_valid'],
+                    clear_gateway=form.cleaned_data['clear_gateway'],
+                    note=form.cleaned_data.get('note') or '',
+                    granted_by=request.user,
+                )
+                messages.success(
+                    request,
+                    f'Subscription updated for {form.grant_recipient.email} (plan "{sub.plan.name}").',
+                )
+                return redirect('admin:%s_%s_changelist' % (opts.app_label, opts.model_name))
+        else:
+            form = StaffGrantSubscriptionAdminForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            'title': 'Grant subscription',
+            'form': form,
+            'opts': opts,
+            'app_label': opts.app_label,
+        }
+        return TemplateResponse(
+            request,
+            'admin/base/subscription/grant_subscription.html',
+            context,
+        )
+
+
+@admin.register(SubscriptionGrantLog)
+class SubscriptionGrantLogAdmin(admin.ModelAdmin):
+    list_display = [
+        'created_at', 'recipient', 'plan', 'status_after', 'months_applied',
+        'cleared_gateway', 'granted_by',
+    ]
+    list_filter = ['cleared_gateway', 'status_after']
+    search_fields = ['recipient__email', 'note', 'granted_by__email']
+    readonly_fields = [
+        'id', 'recipient', 'granted_by', 'subscription', 'plan', 'status_after',
+        'period_start', 'period_end', 'trial_ends_at', 'cleared_gateway',
+        'months_applied', 'note', 'created_at',
+    ]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
 
 
 @admin.register(Invoice)

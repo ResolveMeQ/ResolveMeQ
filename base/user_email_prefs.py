@@ -39,6 +39,14 @@ def user_wants_system_alert_emails(user: User) -> bool:
     return _prefs(user).system_alerts
 
 
+def user_wants_billing_emails(user: User) -> bool:
+    """
+    Billing lifecycle email (subscribe, renew, expiring, expired).
+    Matches Billing → Email notifications (master switch for subscription updates).
+    """
+    return user_accepts_email(user)
+
+
 def user_wants_community_mention_emails(user: User) -> bool:
     """
     Email for community @mentions.

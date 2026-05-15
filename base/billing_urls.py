@@ -11,6 +11,7 @@ from .billing_views import (
     BillingChangePlanView,
     BillingCustomerPortalView,
     BillingSupportContactView,
+    StaffGrantSubscriptionView,
 )
 
 urlpatterns = [
@@ -22,5 +23,6 @@ urlpatterns = [
     path('change-plan/', BillingChangePlanView.as_view(), name='billing-change-plan'),
     path('customer-portal/', BillingCustomerPortalView.as_view(), name='billing-customer-portal'),
     path('support-contact/', BillingSupportContactView.as_view(), name='billing-support-contact'),
+    path('staff/grant-subscription/', StaffGrantSubscriptionView.as_view(), name='billing-staff-grant-subscription'),
     path('webhooks/dodo/', DodoWebhookView.as_view(), name='billing-webhook-dodo'),
 ]

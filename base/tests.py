@@ -26,7 +26,7 @@ from base.agent_usage import (
     refund_agent_operation,
     try_consume_agent_operation,
 )
-from base.models import AgentUsageMonthly, Plan, PlanGatewayProduct, Subscription
+from base.models import AgentUsageMonthly, Plan, PlanGatewayProduct, Subscription, SubscriptionGrantLog, InAppNotification
 
 User = get_user_model()
 
@@ -77,7 +77,8 @@ class ApplyDodoSubscriptionPayloadTests(TestCase):
         defaults.update(kwargs)
         return SimpleNamespace(**defaults)
 
-    def test_resolves_user_from_metadata_and_upserts_subscription(self):
+    @patch('base.billing.subscription_notifications.dispatch_send_email_with_template')
+    def test_resolves_user_from_metadata_and_upserts_subscription(self, mock_dispatch):
         with transaction.atomic():
             ok = apply_dodo_subscription_payload(self._payload())
         self.assertTrue(ok)
@@ -88,7 +89,8 @@ class ApplyDodoSubscriptionPayloadTests(TestCase):
         self.assertEqual(sub.plan_id, self.plan.id)
         self.assertEqual(sub.status, Subscription.Status.ACTIVE)
 
-    def test_resolves_user_from_email_when_metadata_missing(self):
+    @patch('base.billing.subscription_notifications.dispatch_send_email_with_template')
+    def test_resolves_user_from_email_when_metadata_missing(self, mock_dispatch):
         with transaction.atomic():
             ok = apply_dodo_subscription_payload(
                 self._payload(
@@ -100,7 +102,8 @@ class ApplyDodoSubscriptionPayloadTests(TestCase):
         sub = Subscription.objects.get(user=self.user)
         self.assertEqual(sub.gateway_customer_id, 'cus_test_2')
 
-    def test_maps_dodo_status_on_hold_to_past_due(self):
+    @patch('base.billing.subscription_notifications.dispatch_send_email_with_template')
+    def test_maps_dodo_status_on_hold_to_past_due(self, mock_dispatch):
         with transaction.atomic():
             ok = apply_dodo_subscription_payload(self._payload(status='on_hold'))
         self.assertTrue(ok)
@@ -370,3 +373,169 @@ class BillingChangePlanViewTests(APITestCase):
         self.assertEqual(r.data.get('recovery'), 'checkout')
         self.assertIn("couldn't link", r.data.get('detail', '').lower())
         mock_client.subscriptions.change_plan.assert_not_called()
+
+
+@override_settings(DODO_PAYMENTS_API_KEY='')
+class StaffGrantSubscriptionTests(APITestCase):
+    def setUp(self):
+        self.staff = User.objects.create_user(
+            email='staff@test.com',
+            username='stafftest',
+            password='pw',
+            is_staff=True,
+        )
+        self.user = User.objects.create_user(
+            email='grantee@test.com',
+            username='grantee',
+            password='pw',
+        )
+        self.plan = Plan.objects.create(
+            name='Grant Pro',
+            slug='grant-pro',
+            max_teams=20,
+            max_members=50,
+            price_monthly=Decimal('49.00'),
+            price_yearly=Decimal('490.00'),
+            is_trial=False,
+        )
+
+    def test_non_staff_forbidden(self):
+        self.client.force_authenticate(self.user)
+        r = self.client.post(
+            '/api/billing/staff/grant-subscription/',
+            {'user_id': str(self.user.id), 'plan_id': str(self.plan.id)},
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_staff_grants_paid_plan_and_logs(self):
+        self.client.force_authenticate(self.staff)
+        r = self.client.post(
+            '/api/billing/staff/grant-subscription/',
+            {
+                'user_id': str(self.user.id),
+                'plan_id': str(self.plan.id),
+                'months_valid': 3,
+                'clear_gateway': True,
+                'note': 'Pilot access',
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_200_OK, getattr(r, 'data', r.content))
+        sub = Subscription.objects.get(user=self.user)
+        self.assertEqual(sub.plan_id, self.plan.id)
+        self.assertEqual(sub.status, Subscription.Status.ACTIVE)
+        self.assertFalse((sub.gateway_subscription_id or '').strip())
+        self.assertIsNotNone(sub.current_period_end)
+        self.assertEqual(SubscriptionGrantLog.objects.filter(recipient=self.user).count(), 1)
+        self.assertTrue(
+            InAppNotification.objects.filter(user=self.user, link='/billing').exists()
+        )
+
+
+@override_settings(
+    DEFAULT_FROM_EMAIL='billing@test.resolvemeq.net',
+    FRONTEND_URL='https://app.test',
+    APP_NAME='ResolveMeQ Test',
+)
+class SubscriptionBillingNotificationTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='billing-notify@test.com',
+            username='billingnotify',
+            password='pw',
+        )
+        self.plan = Plan.objects.create(
+            name='Pro Notify Test',
+            slug='pro-notify-test',
+            max_teams=10,
+            max_members=20,
+            price_monthly=Decimal('29.00'),
+            price_yearly=Decimal('290.00'),
+        )
+
+    def _sub(self, **kwargs):
+        defaults = {
+            'user': self.user,
+            'plan': self.plan,
+            'status': Subscription.Status.ACTIVE,
+            'gateway': 'dodo',
+            'gateway_subscription_id': 'sub_gw_1',
+            'current_period_start': timezone.now(),
+            'current_period_end': timezone.now() + timedelta(days=30),
+        }
+        defaults.update(kwargs)
+        return Subscription.objects.create(**defaults)
+
+    @patch('base.billing.subscription_notifications.dispatch_send_email_with_template')
+    def test_welcome_on_first_gateway_link(self, mock_dispatch):
+        sub = self._sub(gateway_subscription_id='')
+        from base.billing.subscription_notifications import (
+            handle_subscription_sync_notifications,
+            snapshot_subscription,
+        )
+
+        before_snap = snapshot_subscription(sub)
+        sub.gateway_subscription_id = 'sub_gw_new'
+        sub.save()
+        handle_subscription_sync_notifications(sub, before=before_snap)
+        sub.refresh_from_db()
+        self.assertIsNotNone(sub.subscription_welcome_notified_at)
+        mock_dispatch.assert_called()
+        self.assertTrue(
+            InAppNotification.objects.filter(
+                user=self.user, title='Subscription confirmed'
+            ).exists()
+        )
+
+    @patch('base.billing.subscription_notifications.dispatch_send_email_with_template')
+    def test_renewal_when_period_extends(self, mock_dispatch):
+        now = timezone.now()
+        sub = self._sub(
+            subscription_welcome_notified_at=now,
+            current_period_end=now + timedelta(days=10),
+        )
+        from base.billing.subscription_notifications import (
+            handle_subscription_sync_notifications,
+            snapshot_subscription,
+        )
+
+        before = snapshot_subscription(sub)
+        sub.current_period_end = now + timedelta(days=40)
+        sub.save()
+        handle_subscription_sync_notifications(sub, before=before)
+        sub.refresh_from_db()
+        self.assertEqual(sub.subscription_renewed_notified_period_end, sub.current_period_end)
+        mock_dispatch.assert_called()
+
+    @patch('base.billing.subscription_notifications.dispatch_send_email_with_template')
+    def test_expiring_soon_respects_dedup(self, mock_dispatch):
+        ends = timezone.now() + timedelta(days=3)
+        sub = self._sub(
+            status=Subscription.Status.ACTIVE,
+            current_period_end=ends,
+        )
+        from base.billing.subscription_notifications import notify_subscription_expiring_soon
+
+        self.assertTrue(notify_subscription_expiring_soon(sub, ends_at=ends, days_remaining=3))
+        mock_dispatch.reset_mock()
+        self.assertFalse(notify_subscription_expiring_soon(sub, ends_at=ends, days_remaining=3))
+        mock_dispatch.assert_not_called()
+
+    @patch('base.billing.subscription_notifications.dispatch_send_email_with_template')
+    def test_expired_respects_email_pref(self, mock_dispatch):
+        from base.models import UserPreferences
+        from base.billing.subscription_notifications import notify_subscription_expired
+
+        sub = self._sub(
+            status=Subscription.Status.CANCELED,
+            current_period_end=timezone.now() - timedelta(days=5),
+        )
+        prefs, _ = UserPreferences.objects.get_or_create(user=self.user)
+        prefs.email_notifications = False
+        prefs.save()
+        self.assertTrue(notify_subscription_expired(sub, expiry_detail='Your billing period has ended.'))
+        mock_dispatch.assert_not_called()
+        self.assertTrue(
+            InAppNotification.objects.filter(user=self.user, title='Subscription no longer active').exists()
+        )

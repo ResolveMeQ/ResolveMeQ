@@ -73,6 +73,12 @@ def apply_dodo_subscription_payload(sub_payload: Any) -> bool:
         user=user,
         defaults={'status': Subscription.Status.ACTIVE},
     )
+    from base.billing.subscription_notifications import (
+        handle_subscription_sync_notifications,
+        snapshot_subscription,
+    )
+
+    before = snapshot_subscription(sub)
     sub.gateway = PlanGatewayProduct.Gateway.DODO
     if customer_id:
         sub.gateway_customer_id = customer_id
@@ -95,4 +101,6 @@ def apply_dodo_subscription_payload(sub_payload: Any) -> bool:
             'updated_at',
         ]
     )
+    sub.refresh_from_db()
+    handle_subscription_sync_notifications(sub, before=before)
     return True

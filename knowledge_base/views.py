@@ -41,7 +41,15 @@ import logging
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
-_MENTION_RE = re.compile(r"(?<![\w@])@([A-Za-z0-9_.+-]{2,150})")
+_MENTION_RE = re.compile(r"(?<![\w@])@([^\s<]+)")
+
+
+def _clean_mention_token(raw: str) -> str:
+    """Strip whitespace and trailing sentence punctuation from a captured @mention."""
+    t = (raw or "").strip()
+    if not t:
+        return ""
+    return t.rstrip('.,;:!?*)]}"\'»').strip()
 
 
 def _resolve_mentioned_users(tokens):
@@ -71,7 +79,12 @@ def _resolve_mentioned_users(tokens):
 def _extract_mention_tokens(text):
     if not text:
         return []
-    return [m.group(1) for m in _MENTION_RE.finditer(str(text))]
+    out = []
+    for m in _MENTION_RE.finditer(str(text)):
+        tok = _clean_mention_token(m.group(1))
+        if len(tok) >= 2:
+            out.append(tok)
+    return out
 
 
 def _notify_mentions(*, target_type, target_id, body_text, actor, link, context_title=""):
@@ -98,6 +111,8 @@ def _notify_mentions(*, target_type, target_id, body_text, actor, link, context_
             except Exception:
                 # race or bad values shouldn't block the main write
                 pass
+            if not _community_pref_enabled(u, "community_mentions", default=True):
+                continue
             actor_name = actor.get_full_name() or actor.email or actor.username or "Someone"
             _create_in_app_notification(
                 user=u,

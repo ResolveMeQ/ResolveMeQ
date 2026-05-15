@@ -665,6 +665,18 @@ class BillingChangePlanSerializer(serializers.Serializer):
     billing_interval = serializers.ChoiceField(choices=['monthly', 'yearly'])
 
 
+class StaffGrantSubscriptionSerializer(serializers.Serializer):
+    """
+    Staff-only: assign or extend a user's subscription (comp, pilot, support) outside Dodo checkout.
+    """
+
+    user_id = serializers.UUIDField()
+    plan_id = serializers.UUIDField()
+    months_valid = serializers.IntegerField(min_value=1, max_value=60, default=12)
+    clear_gateway = serializers.BooleanField(default=True)
+    note = serializers.CharField(required=False, allow_blank=True, max_length=2000, default='')
+
+
 class InvoiceSerializer(serializers.ModelSerializer):
     class Meta:
         from base.models import Invoice

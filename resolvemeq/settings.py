@@ -389,6 +389,22 @@ if ENABLE_SUBSCRIPTION_EXPIRED_EMAIL_SCHEDULE:
         ),
     }
 
+# Reminder before trial or billing period ends (email + in-app bell).
+SUBSCRIPTION_EXPIRING_SOON_DAYS = int(
+    os.getenv("SUBSCRIPTION_EXPIRING_SOON_DAYS", "7").strip() or "7"
+)
+SUBSCRIPTION_EXPIRING_SOON_HOUR_UTC = int(
+    os.getenv("SUBSCRIPTION_EXPIRING_SOON_HOUR_UTC", "9").strip() or "9"
+)
+ENABLE_SUBSCRIPTION_EXPIRING_SOON_SCHEDULE = os.getenv(
+    "ENABLE_SUBSCRIPTION_EXPIRING_SOON_SCHEDULE", "true"
+).strip().lower() in ("1", "true", "yes", "")
+if ENABLE_SUBSCRIPTION_EXPIRING_SOON_SCHEDULE:
+    CELERY_BEAT_SCHEDULE["subscription-expiring-soon-notifications"] = {
+        "task": "base.tasks.send_subscription_expiring_soon_notifications",
+        "schedule": crontab(hour=SUBSCRIPTION_EXPIRING_SOON_HOUR_UTC, minute=0),
+    }
+
 # Optional: token for GET /api/monitoring/health/complete/ (uptime checks without admin JWT)
 MONITORING_HEALTH_SECRET = os.getenv("MONITORING_HEALTH_SECRET", "").strip()
 

@@ -5,6 +5,7 @@ import logging
 import os
 
 from django.conf import settings as django_settings
+from django.utils import timezone
 from rest_framework import permissions, serializers, status
 from rest_framework.generics import GenericAPIView, ListAPIView
 from rest_framework.response import Response
@@ -13,6 +14,7 @@ from base.billing.exceptions import BillingConfigurationError
 from base.billing.gateways.factory import get_billing_gateway
 from base.billing.entitlements import infer_billing_interval_from_subscription_period
 from base.billing.payment_sync import refresh_gateway_subscription_id_from_dodo, sync_invoices_from_dodo
+from base.billing.staff_grant import apply_staff_subscription_grant
 from base.billing.services import plan_price_for_interval
 from base.billing.subscription_sync import apply_dodo_subscription_payload
 from base.agent_usage import get_agent_usage_snapshot
@@ -24,6 +26,7 @@ from base.serializers import (
     BillingCheckoutSessionSerializer,
     BillingChangePlanSerializer,
     PortalSupportContactSerializer,
+    StaffGrantSubscriptionSerializer,
 )
 from base.tasks import dispatch_send_email_with_template
 
@@ -732,3 +735,53 @@ class BillingSupportContactView(GenericAPIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+class StaffGrantSubscriptionView(GenericAPIView):
+    """
+    Staff-only: assign or extend a user's subscription outside self-serve checkout
+    (complimentary access, pilots, manual sales). Writes ``Subscription`` and a
+    ``SubscriptionGrantLog`` row for audit.
+
+    Does not charge Dodo. If ``clear_gateway`` is true (default), gateway ids are
+    cleared so the row is not confused with an active Dodo subscription; the user
+    can still subscribe via checkout later.
+
+    POST body: ``user_id``, ``plan_id``, optional ``months_valid`` (1–60, default 12),
+    ``clear_gateway`` (default true), ``note`` (optional).
+    """
+    permission_classes = [permissions.IsAdminUser]
+    serializer_class = StaffGrantSubscriptionSerializer
+
+    def get_queryset(self):
+        return Team.objects.none()
+
+    def post(self, request):
+        from django.contrib.auth import get_user_model
+
+        ser = self.get_serializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        User = get_user_model()
+        user_id = ser.validated_data['user_id']
+        plan_id = ser.validated_data['plan_id']
+        months_valid = int(ser.validated_data['months_valid'])
+        clear_gateway = bool(ser.validated_data['clear_gateway'])
+        note = (ser.validated_data.get('note') or '').strip()
+
+        recipient = User.objects.filter(id=user_id, is_active=True).first()
+        if not recipient:
+            return Response({'detail': 'User not found or inactive.'}, status=status.HTTP_404_NOT_FOUND)
+        plan = Plan.objects.filter(id=plan_id, is_active=True).first()
+        if not plan:
+            return Response({'detail': 'Plan not found or inactive.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        sub = apply_staff_subscription_grant(
+            recipient=recipient,
+            plan=plan,
+            months_valid=months_valid,
+            clear_gateway=clear_gateway,
+            note=note,
+            granted_by=request.user,
+        )
+        out = SubscriptionSerializer(sub, context={'request': request}).data
+        return Response({'detail': 'Subscription updated.', 'subscription': out}, status=status.HTTP_200_OK)

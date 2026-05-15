@@ -271,6 +271,9 @@ def apply_dodo_payment_succeeded(payment_data: Any) -> bool:
         if created_at and inv.created_at != created_at:
             Invoice.objects.filter(pk=inv.pk).update(created_at=created_at)
         logger.info('Dodo payment.succeeded: created invoice %s for subscription %s', inv.id, subscription_id)
+        from base.billing.subscription_notifications import handle_payment_succeeded_notifications
+
+        handle_payment_succeeded_notifications(sub, invoice_created=True)
         return True
     except IntegrityError:
         return True

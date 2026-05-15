@@ -811,6 +811,21 @@ class Subscription(models.Model):
         blank=True,
         help_text=_('When we sent the subscription expired email/in-app notice (at most once).'),
     )
+    subscription_welcome_notified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_('When we sent the subscription confirmed (welcome) notice.'),
+    )
+    subscription_renewed_notified_period_end = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_('Period end we last sent a renewal notice for (dedupes webhooks/payments).'),
+    )
+    subscription_expiring_notified_for_end = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_('Trial or period end date we sent an expiring-soon reminder for.'),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -824,6 +839,57 @@ class Subscription(models.Model):
     @property
     def max_teams(self):
         return self.plan.max_teams if self.plan else getattr(settings, 'PLAN_MAX_TEAMS', 20)
+
+
+class SubscriptionGrantLog(models.Model):
+    """
+    Audit trail when staff grant or extend a subscription outside self-serve checkout (comp, pilot, support).
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='subscription_grant_logs',
+        verbose_name=_('recipient'),
+    )
+    granted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='subscription_grants_made',
+        verbose_name=_('granted by'),
+    )
+    subscription = models.ForeignKey(
+        Subscription,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='grant_logs',
+    )
+    plan = models.ForeignKey(
+        Plan,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='grant_logs',
+    )
+    status_after = models.CharField(max_length=20, blank=True, default='')
+    period_start = models.DateTimeField(null=True, blank=True)
+    period_end = models.DateTimeField(null=True, blank=True)
+    trial_ends_at = models.DateTimeField(null=True, blank=True)
+    cleared_gateway = models.BooleanField(default=False)
+    months_applied = models.PositiveSmallIntegerField(default=0)
+    note = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = _('Subscription grant log')
+        verbose_name_plural = _('Subscription grant logs')
+
+    def __str__(self):
+        return f'{self.recipient_id} ← {self.plan_id} @ {self.created_at}'
 
 
 class Invoice(models.Model):
