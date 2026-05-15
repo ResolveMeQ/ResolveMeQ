@@ -35,6 +35,25 @@ except ImportError:
     dodopayments = None
 
 
+def _dodo_body_message_lower(exc: BaseException) -> str:
+    """Best-effort string from Dodo error JSON for matching (message/detail/code)."""
+    body = getattr(exc, 'body', None)
+    if not isinstance(body, dict):
+        return ''
+    parts: list[str] = []
+    for key in ('message', 'detail', 'code', 'error'):
+        v = body.get(key)
+        if v is None:
+            continue
+        if isinstance(v, str):
+            parts.append(v)
+        elif isinstance(v, list) and v:
+            parts.append(str(v[0]))
+        else:
+            parts.append(str(v))
+    return ' '.join(parts).lower()
+
+
 def _dodo_is_not_found(exc: BaseException) -> bool:
     """True when Dodo indicates missing subscription or product (404 or same message body)."""
     if dodopayments and isinstance(exc, dodopayments.NotFoundError):
@@ -42,11 +61,16 @@ def _dodo_is_not_found(exc: BaseException) -> bool:
     if dodopayments and isinstance(exc, dodopayments.APIStatusError):
         if getattr(exc, 'status_code', None) == 404:
             return True
-        body = getattr(exc, 'body', None)
-        if isinstance(body, dict):
-            msg = str(body.get('message') or body.get('code') or '').lower()
-            if 'could not be found' in msg or 'does not exist' in msg or 'not found' in msg:
-                return True
+        msg = _dodo_body_message_lower(exc)
+        if msg and (
+            'could not be found' in msg
+            or 'could not find' in msg
+            or 'does not exist' in msg
+            or 'not found' in msg
+            or 'wrong id' in msg
+            or ('environment' in msg and 'match' in msg)
+        ):
+            return True
     return False
 
 
@@ -486,20 +510,28 @@ class BillingChangePlanView(GenericAPIView):
         downgrade_fallback_immediate = False
 
         def _change_plan_error_response(exc) -> Response:
+            if _dodo_is_not_found(exc):
+                logger.warning('Dodo change_plan: subscription missing or wrong environment: %s', exc)
+                return Response(
+                    {
+                        'detail': (
+                            "We couldn't link your account to your payment subscription "
+                            '(often after switching billing modes or a refresh delay). '
+                            'Continue below—your card details stay secure.'
+                        ),
+                        'billing_error': 'subscription_not_found',
+                        'recovery': 'checkout',
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
             if dodopayments and isinstance(exc, dodopayments.APIStatusError):
                 body = getattr(exc, 'body', None) or {}
                 detail = body.get('message') or body.get('code') or str(exc)
             else:
                 detail = str(exc)
             logger.exception('Dodo change_plan failed')
-            hint = ''
-            if _dodo_is_not_found(exc):
-                hint = (
-                    ' If preflight passed, contact Dodo support with subscription and product ids. '
-                    'Otherwise run sync_dodo_plan_products --recreate and align DODO_PAYMENTS_ENVIRONMENT.'
-                )
             return Response(
-                {'detail': (detail or 'Plan change failed.') + hint},
+                {'detail': detail or 'Plan change failed.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
