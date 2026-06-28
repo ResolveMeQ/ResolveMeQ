@@ -268,7 +268,7 @@ def _kb_conversation_history_payload(ticket):
     for m in msgs:
         if m.sender_type == "user":
             role = "user"
-        elif m.sender_type in ("ai", "system"):
+        elif m.sender_type in ("ai", "system", "agent"):
             role = "assistant"
         else:
             continue
@@ -334,7 +334,7 @@ def _ticket_has_persisted_ai_chat(ticket):
     try:
         return ChatMessage.objects.filter(
             conversation__ticket=ticket,
-            sender_type="ai",
+            sender_type__in=("ai", "agent"),
         ).exists()
     except DatabaseError:
         return False
@@ -355,7 +355,7 @@ def _kb_pick_final_assistant_text(ticket):
         candidates = list(
             ChatMessage.objects.filter(
                 conversation__ticket=ticket,
-                sender_type="ai",
+                sender_type__in=("ai", "agent"),
             )
             .exclude(text="")
             .order_by("-created_at")[:24]

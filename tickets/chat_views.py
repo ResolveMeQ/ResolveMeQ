@@ -9,6 +9,7 @@ from rest_framework import status
 from django.shortcuts import get_object_or_404
 from django.http import Http404
 from django.conf import settings
+from django.utils import timezone
 from rest_framework.exceptions import APIException
 import json
 import requests
@@ -21,8 +22,10 @@ from base.agent_usage import (
     refund_agent_operation,
     try_consume_agent_operation,
 )
+from base.models import InAppNotification
 from .scoping import user_can_access_ticket
 from .outcome_helpers import log_agent_confidence_snapshot, touch_first_ai_at
+from .user_email_notify import dispatch_ticket_comment_email
 from .chat_models import Conversation, ChatMessage, QuickReply
 from .chat_serializers import (
     ConversationSerializer, ChatMessageSerializer, QuickReplySerializer
@@ -180,6 +183,48 @@ def _send_chat_message_impl(request, ticket_id):
             defaults={'summary': f'Chat about: {ticket.issue_type}'}
         )
 
+    # First message in conversation = user is actively working on the ticket
+    is_first_message = not ChatMessage.objects.filter(conversation=conversation).exists()
+    if is_first_message and ticket.status in ("new", "open"):
+        ticket.status = "in_progress"
+        ticket.save(update_fields=["status"])
+
+    # Save user message
+    user_message = ChatMessage.objects.create(
+        conversation=conversation,
+        sender_type='user',
+        message_type='text',
+        text=message_text
+    )
+
+    if ticket.claimed_at:
+        # A human is actively handling this ticket (see assign_ticket / the Escalation
+        # Queue's Claim button) -- don't also trigger an automatic AI reply that might
+        # contradict what they're doing, and don't spend AI quota on a message the AI
+        # never actually processes. Just notify the assigned agent and let them reply
+        # via send_agent_reply.
+        ticket.awaiting_response_from = "support"
+        ticket.last_message_at = timezone.now()
+        ticket.last_message_by = request.user
+        ticket.save(update_fields=["awaiting_response_from", "last_message_at", "last_message_by", "updated_at"])
+        if ticket.assigned_to_id:
+            requester_name = request.user.get_full_name() or request.user.email or "The customer"
+            InAppNotification.objects.create(
+                user=ticket.assigned_to,
+                type=InAppNotification.Type.INFO,
+                title=f"New message on Ticket #{ticket.ticket_id}",
+                message=f"{requester_name}: {message_text[:180]}",
+                link=f"/tickets?highlight={ticket.ticket_id}",
+            )
+        return Response({
+            'conversation_id': str(conversation.id),
+            'user_message': ChatMessageSerializer(user_message).data,
+            'ai_message': None,
+            'ticket_status': ticket.status,
+            'initial_solution_was_helpful': conversation.initial_solution_was_helpful,
+            'routed_to_human': True,
+        })
+
     billing_user = get_billing_user_for_ticket(ticket)
 
     quota = try_consume_agent_operation(billing_user)
@@ -194,20 +239,6 @@ def _send_chat_message_impl(request, ticket_id):
             status=status.HTTP_429_TOO_MANY_REQUESTS,
         )
 
-    # First message in conversation = user is actively working on the ticket
-    is_first_message = not ChatMessage.objects.filter(conversation=conversation).exists()
-    if is_first_message and ticket.status in ("new", "open"):
-        ticket.status = "in_progress"
-        ticket.save(update_fields=["status"])
-
-    # Save user message
-    user_message = ChatMessage.objects.create(
-        conversation=conversation,
-        sender_type='user',
-        message_type='text',
-        text=message_text
-    )
-    
     # Get AI response
     try:
         ai_response = _get_ai_chat_response(
@@ -287,8 +318,11 @@ def _send_chat_message_impl(request, ticket_id):
 def get_conversation_history(request, ticket_id):
     """
     Get chat conversation history for a ticket.
-    
-    Returns all messages in the active conversation.
+
+    Returns all messages in the active conversation. There is only ever one
+    customer per ticket, so a teammate viewing someone else's ticket sees the
+    same (ticket.user-keyed) conversation the customer sees -- not an empty
+    one of their own -- so they have context before replying.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
     if not user_can_access_ticket(request.user, ticket):
@@ -297,28 +331,110 @@ def get_conversation_history(request, ticket_id):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    # Get active conversation
-    try:
-        conversation = Conversation.objects.get(
-            ticket=ticket,
-            user=request.user,
-            is_active=True
-        )
-        serializer = ConversationSerializer(conversation)
-        data = serializer.data
-        return Response(
-            {
-                "conversation": data,
-                "messages": data.get("messages") or [],
-                "initial_solution_was_helpful": data.get("initial_solution_was_helpful"),
-            }
-        )
-    except Conversation.DoesNotExist:
+    conversation_user = ticket.user if request.user.id != ticket.user_id else request.user
+    # .filter().first() instead of .get(): defensive against the rare race where two
+    # concurrent get_or_create calls (customer's own + the agent-reply endpoint) both
+    # create a conversation -- avoids an uncaught MultipleObjectsReturned.
+    conversation = (
+        Conversation.objects.filter(ticket=ticket, user=conversation_user, is_active=True)
+        .order_by('-updated_at')
+        .first()
+    )
+    if conversation is None:
         return Response({
             'conversation': None,
             'messages': [],
             'initial_solution_was_helpful': None,
         })
+
+    serializer = ConversationSerializer(conversation)
+    data = serializer.data
+    return Response(
+        {
+            "conversation": data,
+            "messages": data.get("messages") or [],
+            "initial_solution_was_helpful": data.get("initial_solution_was_helpful"),
+        }
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def send_agent_reply(request, ticket_id):
+    """
+    POST /api/tickets/<ticket_id>/chat/agent-reply/
+    Body: {"message": "..."}
+
+    A teammate's reply to the customer, landing as a 'agent' message in the SAME
+    chat thread the customer's been using (Conversation keyed by ticket.user) --
+    not the separate Comments/TicketInteraction thread. Requires the ticket to
+    already be claimed (see assign_ticket / the Escalation Queue's Claim button)
+    so replying doesn't silently make the replier the permanent owner.
+    """
+    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"error": "You don't have permission to access this ticket"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    if request.user.id == ticket.user_id:
+        return Response(
+            {"error": "Use the regular chat to send your own message."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    if not ticket.claimed_at:
+        return Response(
+            {"error": "Claim this ticket before replying to the customer."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    text = (request.data.get("message") or "").strip()
+    if not text:
+        return Response({"error": "Message text is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    conversation = (
+        Conversation.objects.filter(ticket=ticket, user=ticket.user, is_active=True)
+        .order_by('-updated_at')
+        .first()
+    )
+    if conversation is None:
+        conversation = Conversation.objects.create(
+            ticket=ticket, user=ticket.user, summary=f'Chat about: {ticket.issue_type}'
+        )
+
+    agent_message = ChatMessage.objects.create(
+        conversation=conversation,
+        sender_type='agent',
+        message_type='text',
+        text=text,
+        author=request.user,
+    )
+    agent_name = request.user.get_full_name() or request.user.email or request.user.username
+
+    TicketInteraction.objects.create(
+        ticket=ticket,
+        user=request.user,
+        interaction_type="agent_response",
+        content=f"{agent_name} replied: {text}",
+    )
+    ticket.awaiting_response_from = "user"
+    ticket.last_message_at = timezone.now()
+    ticket.last_message_by = request.user
+    ticket.save(update_fields=["awaiting_response_from", "last_message_at", "last_message_by", "updated_at"])
+
+    InAppNotification.objects.create(
+        user=ticket.user,
+        type=InAppNotification.Type.INFO,
+        title="New reply from support",
+        message=f"{agent_name}: {text[:180]}",
+        link=f"/tickets?highlight={ticket.ticket_id}",
+    )
+    dispatch_ticket_comment_email(ticket, [ticket.user], commenter=request.user, comment_text=text)
+
+    return Response({
+        'conversation_id': str(conversation.id),
+        'message': ChatMessageSerializer(agent_message).data,
+    })
 
 
 @api_view(['POST'])

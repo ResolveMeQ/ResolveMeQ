@@ -5,6 +5,7 @@ from django.urls import path
 from .chat_views import (
     start_or_get_conversation,
     send_chat_message,
+    send_agent_reply,
     get_conversation_history,
     submit_message_feedback,
     submit_initial_solution_feedback,
@@ -16,6 +17,7 @@ urlpatterns = [
     path('<int:ticket_id>/chat/', send_chat_message, name='chat-send-message'),
     path('<int:ticket_id>/chat/start/', start_or_get_conversation, name='chat-start'),
     path('<int:ticket_id>/chat/history/', get_conversation_history, name='chat-history'),
+    path('<int:ticket_id>/chat/agent-reply/', send_agent_reply, name='chat-agent-reply'),
     path('<int:ticket_id>/chat/<uuid:message_id>/feedback/', submit_message_feedback, name='chat-feedback'),
     path(
         '<int:ticket_id>/chat/initial-solution-feedback/',

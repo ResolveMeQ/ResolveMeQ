@@ -61,12 +61,21 @@ class ChatMessage(models.Model):
         ('user', 'User'),
         ('ai', 'AI Assistant'),
         ('system', 'System'),
+        ('agent', 'Support Agent'),
     ]
-    
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name='messages')
     sender_type = models.CharField(max_length=10, choices=SENDER_TYPES)
     message_type = models.CharField(max_length=20, choices=MESSAGE_TYPES, default='text')
+    author = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='chat_messages_authored',
+        help_text="Set only for sender_type='agent' -- which teammate wrote this reply.",
+    )
     
     # Content
     text = models.TextField()
