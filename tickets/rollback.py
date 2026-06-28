@@ -152,7 +152,40 @@ class RollbackManager:
         except Exception as e:
             logger.error(f"Escalation rollback failed for ticket {ticket.ticket_id}: {str(e)}")
             return False
-    
+
+    @staticmethod
+    def rollback_claim(ticket, action_history, rollback_by, reason):
+        """
+        Revert a CLAIM (un-claim): restores assigned_to/claimed_at to whatever they were
+        before the claim (always None/None, since a ticket can only be claimed once --
+        see assign_ticket's race-safe `claimed_at__isnull=True` guard).
+        """
+        try:
+            before = action_history.before_state or {}
+            ticket.assigned_to_id = before.get('assigned_to_id')
+            ticket.claimed_at = before.get('claimed_at')
+            ticket.save()
+
+            TicketInteraction.objects.create(
+                ticket=ticket,
+                user=rollback_by,
+                interaction_type='agent_response',
+                content=f"🔄 Ticket claim was rolled back.\n\nReason: {reason}"
+            )
+
+            action_history.rolled_back = True
+            action_history.rolled_back_at = timezone.now()
+            action_history.rolled_back_by = rollback_by
+            action_history.rollback_reason = reason
+            action_history.save()
+
+            logger.info(f"Successfully rolled back claim for ticket {ticket.ticket_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Claim rollback failed for ticket {ticket.ticket_id}: {str(e)}")
+            return False
+
     @staticmethod
     def can_rollback(action_type):
         """
@@ -169,6 +202,8 @@ class RollbackManager:
             'ASSIGN_TO_TEAM',
             'ESCALATE',
             'SCHEDULE_FOLLOWUP',
+            'MANUAL_RESOLVE',
+            'CLAIM',
         ]
         return action_type in ROLLBACK_SUPPORTED
     
@@ -190,10 +225,15 @@ class RollbackManager:
         
         if action_type == 'AUTO_RESOLVE':
             return RollbackManager.rollback_auto_resolve(ticket, action_history, rollback_by, reason)
+        elif action_type == 'MANUAL_RESOLVE':
+            # Same shape as AUTO_RESOLVE's before_state ({"status": ...}) -- same restore logic applies.
+            return RollbackManager.rollback_auto_resolve(ticket, action_history, rollback_by, reason)
         elif action_type == 'ASSIGN_TO_TEAM':
             return RollbackManager.rollback_assign_to_team(ticket, action_history, rollback_by, reason)
         elif action_type == 'ESCALATE':
             return RollbackManager.rollback_escalate(ticket, action_history, rollback_by, reason)
+        elif action_type == 'CLAIM':
+            return RollbackManager.rollback_claim(ticket, action_history, rollback_by, reason)
         else:
             logger.warning(f"No rollback handler for action type: {action_type}")
             return False

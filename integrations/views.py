@@ -1172,6 +1172,23 @@ def notify_user_auto_resolution(user_id, ticket_id, params):
     resp = slack_inst.slack_api_post(inst, "chat.postMessage", payload)
     logger.info("Sent auto-resolution notification: %s", getattr(resp, "text", resp))
 
+def notify_ticket_claimed(user_id, ticket_id, agent_name, eta_text=""):
+    """Notify the customer (Slack DM) that a support agent has picked up their ticket."""
+    inst, slack_channel = _slack_install_and_dm_for_ticket_id(ticket_id)
+    if not inst or not slack_channel:
+        return
+
+    text = f"✅ *{agent_name}* is now looking into ticket #{ticket_id}."
+    if eta_text:
+        text += f" Typically resolved {eta_text}."
+    payload = {
+        "channel": slack_channel,
+        "text": text,
+    }
+    resp = slack_inst.slack_api_post(inst, "chat.postMessage", payload)
+    logger.info("Sent ticket-claimed notification: %s", getattr(resp, "text", resp))
+
+
 def notify_escalation(user_id, ticket_id, params):
     """
     Notify user that their ticket has been escalated.
@@ -1199,7 +1216,7 @@ def notify_escalation(user_id, ticket_id, params):
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": "A human support agent will review your case and contact you shortly."
+                "text": f"A human support agent will review your case and contact you {params.get('eta_text', 'shortly')}."
             }
         }
     ]

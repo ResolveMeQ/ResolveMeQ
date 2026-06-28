@@ -51,8 +51,13 @@ def _send_to_users(
             logger.warning("Ticket email failed for %s: %s", u.email, exc)
 
 
-def dispatch_ticket_status_emails(ticket, old_status: str, new_status: str) -> None:
-    """Email requester and assignee when status changes (if they opted in)."""
+def dispatch_ticket_status_emails(ticket, old_status: str, new_status: str, escalation_msg: Optional[dict] = None) -> None:
+    """
+    Email requester and assignee when status changes (if they opted in).
+    `escalation_msg` is the dict from escalation_copy.build_escalation_message -- pass it
+    when new_status == "escalated" so the email shows the same priority/ETA as every other
+    channel instead of a generic "status changed" line.
+    """
     if old_status == new_status:
         return
     recipients = [ticket.user]
@@ -68,8 +73,45 @@ def dispatch_ticket_status_emails(ticket, old_status: str, new_status: str) -> N
         "old_status": old_status.replace("_", " "),
         "new_status": new_status.replace("_", " "),
         "view_url": _ticket_url(ticket.ticket_id),
+        "escalation_priority": (escalation_msg or {}).get("priority", ""),
+        "escalation_eta_text": (escalation_msg or {}).get("eta_text", ""),
     }
     _send_to_users(recipients, subject=subject, template="ticket_status_update.html", context=context)
+
+
+def dispatch_ticket_claimed_email(ticket, agent) -> None:
+    """Email the requester when a support agent picks up their escalated ticket."""
+    if ticket.user is None or not getattr(ticket.user, "email", None):
+        return
+    agent_name = (agent.get_full_name() or "").strip() or getattr(agent, "email", "") or "A support specialist"
+    eta_text = ""
+    if ticket.sla_due_at:
+        eta_text = f"Typically resolved {escalation_sla_eta_text(ticket)}."
+
+    subject = f"[{_app_name()}] {agent_name} is looking into ticket #{ticket.ticket_id}"
+    context = {
+        "app_name": _app_name(),
+        "ticket_id": ticket.ticket_id,
+        "issue_type": ticket.issue_type or "Support ticket",
+        "category": ticket.category or "—",
+        "agent_name": agent_name,
+        "eta_text": eta_text,
+        "view_url": _ticket_url(ticket.ticket_id),
+    }
+    _send_to_users([ticket.user], subject=subject, template="ticket_claimed.html", context=context)
+
+
+def escalation_sla_eta_text(ticket) -> str:
+    """Human-readable remaining-time text from ticket.sla_due_at, e.g. 'within about 6 hours'."""
+    if not ticket.sla_due_at:
+        return ""
+    from django.utils import timezone
+
+    remaining = ticket.sla_due_at - timezone.now()
+    hours = remaining.total_seconds() / 3600
+    if hours <= 0:
+        return "shortly"
+    return f"within about {max(1, int(round(hours)))} hours"
 
 
 def dispatch_ticket_assigned_email(ticket, assignee, assigned_by: Optional[object] = None) -> None:

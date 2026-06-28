@@ -2,6 +2,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 from django.conf import settings
+import hmac
 import os
 
 
@@ -38,7 +39,7 @@ class AgentAPIKeyAuthentication(BaseAuthentication):
         # Get expected API key from environment or settings
         expected_key = getattr(settings, 'AGENT_API_KEY', os.getenv('AGENT_API_KEY', 'resolvemeq-agent-secret-key-2026'))
         
-        if api_key != expected_key:
+        if not hmac.compare_digest(api_key, expected_key):
             raise AuthenticationFailed('Invalid Agent API Key')
         
         # Return a tuple of (user, auth) - we'll use None for user since it's the agent

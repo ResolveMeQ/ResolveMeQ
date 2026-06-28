@@ -722,6 +722,7 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
                 'quick_replies': _normalize_quick_replies_metadata(
                     data.get('quick_replies'), data, ticket, resolution_state
                 ),
+                'kb_article_citations': data.get('kb_article_citations') or [],
             }
             return {
                 'text': chat_text,
@@ -774,6 +775,7 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
             'quick_replies': _normalize_quick_replies_metadata(
                 data.get('quick_replies'), data, ticket, resolution_state
             ),
+            'kb_article_citations': data.get('kb_article_citations') or [],
         }
         if steps_list:
             metadata['steps'] = steps_list

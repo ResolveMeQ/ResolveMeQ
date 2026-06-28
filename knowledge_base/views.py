@@ -13,6 +13,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes, parser_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
+from base.permissions import IsAuthenticatedOrAgent
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from .models import (
     KnowledgeBaseArticle,
@@ -181,10 +182,20 @@ def _bool_from_input(value):
 
 
 def _article_queryset_for_request(request):
+    """
+    Scope KB articles to the requester's team. team=None articles are platform-seeded
+    baseline content, visible to everyone; team-owned articles are private to that team
+    so one customer's internal KB content never leaks to another (see PLATFORM_ASSESSMENT.md).
+    """
     qs = KnowledgeBaseArticle.objects.all()
     if not request.user.is_authenticated:
-        qs = qs.filter(is_published=True)
-    return qs
+        return qs.filter(is_published=True, team__isnull=True)
+    from tickets.scoping import active_team_id_for_user
+
+    tid = active_team_id_for_user(request.user)
+    if tid:
+        return qs.filter(Q(team_id=tid) | Q(team__isnull=True))
+    return qs.filter(Q(team__isnull=True) | Q(author=request.user))
 
 
 _ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
@@ -415,6 +426,17 @@ class KnowledgeBaseArticleViewSet(viewsets.ModelViewSet):
         ctx["request"] = self.request
         return ctx
 
+    def perform_create(self, serializer):
+        from tickets.scoping import active_team_id_for_user
+
+        team_obj = None
+        tid = active_team_id_for_user(self.request.user)
+        if tid:
+            from base.models import Team
+
+            team_obj = Team.objects.filter(pk=tid).first()
+        serializer.save(team=team_obj)
+
     @action(detail=False, methods=['post'])
     def search(self, request):
         query = (request.data.get('query') or '').strip().lower()
@@ -556,7 +578,7 @@ class LLMResponseViewSet(viewsets.ModelViewSet):
 
 # API endpoints for FastAPI agent access
 @api_view(['GET'])
-@permission_classes([AllowAny])  # You can add authentication later
+@permission_classes([IsAuthenticatedOrAgent])  # agent calls send X-Agent-API-Key
 def kb_articles_for_agent(request):
     """
     Public API endpoint for FastAPI agent to access Knowledge Base articles.
@@ -569,7 +591,7 @@ def kb_articles_for_agent(request):
     return Response(list(articles))
 
 @api_view(['POST'])
-@permission_classes([AllowAny])  # You can add authentication later
+@permission_classes([IsAuthenticatedOrAgent])  # agent calls send X-Agent-API-Key
 def search_kb_for_agent(request):
     """
     Search Knowledge Base articles for FastAPI agent.
@@ -630,7 +652,7 @@ def search_kb_for_agent(request):
     })
 
 @api_view(['GET'])
-@permission_classes([AllowAny])  # You can add authentication later
+@permission_classes([IsAuthenticatedOrAgent])  # agent calls send X-Agent-API-Key
 def kb_article_by_id(request, kb_id):
     """
     Get specific Knowledge Base article by ID for FastAPI agent.

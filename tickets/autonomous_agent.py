@@ -108,18 +108,20 @@ class AutonomousAgent:
     def _prepare_escalate_params(self) -> Dict[str, Any]:
         """Prepare parameters for escalation."""
         analysis = self.agent_response.get("analysis", {})
+        assignment = self.agent_response.get("assignment", {})
         return {
             "escalation_reason": self.agent_response.get("reasoning", "Complex issue requiring human attention"),
             "severity": analysis.get("severity", "medium"),
-            "suggested_team": analysis.get("suggested_team", "IT Support"),
+            "suggested_team": assignment.get("team", "IT Support"),
             "priority": "high" if self._is_critical_issue() else "medium"
         }
-    
+
     def _prepare_assign_params(self) -> Dict[str, Any]:
         """Prepare parameters for team assignment."""
         analysis = self.agent_response.get("analysis", {})
+        assignment = self.agent_response.get("assignment", {})
         return {
-            "assigned_team": analysis.get("suggested_team", "IT Support"),
+            "assigned_team": assignment.get("team", "IT Support"),
             "reasoning": self.agent_response.get("reasoning", ""),
             "priority": analysis.get("severity", "medium")
         }
@@ -140,14 +142,27 @@ class AutonomousAgent:
         }
     
     def _prepare_clarification_params(self) -> Dict[str, Any]:
-        """Prepare parameters for requesting clarification."""
-        analysis = self.agent_response.get("analysis", {})
-        return {
-            "questions": analysis.get("clarification_questions", [
+        """
+        Prepare parameters for requesting clarification.
+        `analysis.clarification_questions` is not a real field the agent ever returns
+        (see AnalysisDetails) -- use the AI's own situation-specific quick_replies first,
+        falling back to its prose reasoning, and only to generic questions if neither exists.
+        """
+        quick_replies = self.agent_response.get("quick_replies", [])
+        questions = [
+            qr.get("label") or qr.get("value")
+            for qr in quick_replies
+            if isinstance(qr, dict) and (qr.get("label") or qr.get("value"))
+        ]
+        if not questions:
+            reasoning = (self.agent_response.get("reasoning") or "").strip()
+            questions = [reasoning] if reasoning else [
                 "Can you provide more details about the issue?",
                 "When did this problem first occur?",
                 "What steps have you already tried?"
-            ]),
+            ]
+        return {
+            "questions": questions,
             "reason": "Need additional information to provide accurate solution",
             "confidence": self.get_confidence()
         }

@@ -1,5 +1,5 @@
 from django.shortcuts import render, get_object_or_404
-from django.db.models import Count, Avg, F, ExpressionWrapper, DurationField, Q
+from django.db.models import Count, Avg, F, ExpressionWrapper, DurationField, Q, Case, When, IntegerField
 from django.db.models.functions import TruncWeek
 from django.utils import timezone
 from django.utils.text import get_valid_filename
@@ -22,9 +22,17 @@ from .user_email_notify import (
     dispatch_ticket_assigned_email,
     dispatch_ticket_status_emails,
     dispatch_ticket_comment_email,
+    dispatch_ticket_claimed_email,
+    escalation_sla_eta_text,
 )
 from .serializers import TicketSerializer, TicketInteractionSerializer
 from .outcome_helpers import apply_escalated_timestamp
+from .escalation_copy import (
+    derive_escalation_priority,
+    compute_sla_due_at,
+    build_escalation_message,
+    REQUEST_REASON_LABEL,
+)
 from .feedback_prompts import build_feedback_prompts
 from .cache_decorators import cache_api_response, no_cache
 import logging
@@ -320,70 +328,20 @@ def process_with_agent(request, ticket_id):
     except OperationalError as e:
         logger.warning(f"Celery unavailable, processing synchronously: {e}")
 
+        from .tasks import process_ticket_with_agent_sync
+
         try:
-            import requests
-
-            payload = {
-                "ticket_id": ticket.ticket_id,
-                "issue_type": ticket.issue_type or "",
-                "description": ticket.description or "",
-                "category": ticket.category or "",
-                "tags": ticket.tags or [],
-                "user": {
-                    "id": str(ticket.user.id),
-                    "name": ticket.user.username,
-                    "department": getattr(ticket.user, "department", "")
-                },
-            }
-            if ticket.screenshot:
-                payload["screenshot"] = ticket.screenshot
-
-            agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
-            headers_req = get_agent_service_headers()
-
-            try:
-                logger.info(f"Sending POST to AI agent (sync): {agent_url}")
-                response = requests.post(agent_url, json=payload, headers=headers_req, timeout=10)
-                response.raise_for_status()
-                agent_response = response.json()
-            except Exception as agent_error:
-                logger.warning(f"AI Agent unavailable, using mock response: {agent_error}")
-                refund_agent_operation(billing_user)
-                agent_response = {
-                    "confidence": 0.75,
-                    "recommended_action": "request_clarification",
-                    "analysis": {
-                        "category": ticket.category or "general",
-                        "severity": "medium",
-                        "complexity": "medium",
-                        "suggested_team": "IT Support"
-                    },
-                    "solution": {
-                        "steps": [
-                            "This is a mock response - AI agent is currently unavailable",
-                            "Please check the issue description and category",
-                            "You can manually assign this ticket to the appropriate team"
-                        ],
-                        "estimated_time": "Pending agent availability",
-                        "success_probability": 0.5
-                    },
-                    "reasoning": "AI agent service is currently unavailable. This is a placeholder response."
-                }
-
-            ticket.agent_response = agent_response
-            ticket.agent_processed = True
-            ticket.save()
-
-            from .outcome_helpers import log_agent_confidence_snapshot, touch_first_ai_at
-
-            touch_first_ai_at(ticket)
-            if isinstance(ticket.agent_response, dict):
-                log_agent_confidence_snapshot(
-                    ticket,
-                    "analyze",
-                    confidence=ticket.agent_response.get("confidence"),
-                    recommended_action=str(ticket.agent_response.get("recommended_action") or ""),
-                )
+            ok = process_ticket_with_agent_sync(
+                ticket, billing_user, force=force, billing_precharged=True,
+            )
+            if not ok:
+                return Response({
+                    'task_id': None,
+                    'ticket_id': ticket.ticket_id,
+                    'status': 'error',
+                    'error': 'Synchronous agent processing failed or quota exceeded.',
+                    'agent_processed': ticket.agent_processed,
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             logger.info(f"Ticket {ticket.ticket_id} processed synchronously")
             task_id = None
@@ -997,19 +955,26 @@ def escalate_ticket(request, ticket_id):
             }
         )
 
+    previous_status = ticket.status
     ticket.status = "escalated"
     ticket.awaiting_response_from = "support"
     ticket.last_message_at = timezone.now()
     ticket.last_message_by = request.user
     apply_escalated_timestamp(ticket)
-    ticket.save()
 
     reason = (request.data.get("reason") or "").strip()[:120]
     note = (request.data.get("note") or "").strip()
     phone = (request.data.get("phone") or "").strip()[:40]
+
+    priority = derive_escalation_priority({"request_reason_key": reason})
+    ticket.escalation_priority = priority
+    ticket.sla_due_at = compute_sla_due_at(ticket.escalated_at, priority)
+    ticket.save()
+
+    reason_text = REQUEST_REASON_LABEL.get(reason, "Requested human help")
     content = "Requested human help."
     if reason:
-        content += f"\nReason: {reason}"
+        content += f"\nReason: {reason_text}"
     if phone:
         content += f"\nPhone: {phone}"
     if note:
@@ -1024,10 +989,18 @@ def escalate_ticket(request, ticket_id):
         interaction_type="user_message",
         content=content
     )
-    _notify_ticket_status_change(ticket, "escalated")
-    params = {"reason": "Requested human help"}
+    msg = build_escalation_message(ticket, priority, reason_text)
+    _notify_ticket_status_change(ticket, "escalated", escalation_msg=msg)
+    dispatch_ticket_status_emails(ticket, previous_status, "escalated", escalation_msg=msg)
+    params = {
+        "reason": "Requested human help",
+        "escalation_reason": msg["reason"],
+        "priority": msg["priority"],
+        "suggested_team": msg["suggested_team"],
+        "eta_text": msg["eta_text"],
+    }
     if reason:
-        params["request_reason"] = reason
+        params["request_reason"] = reason_text
     if phone:
         params["request_phone"] = phone
     if note:
@@ -1047,6 +1020,11 @@ def escalate_ticket(request, ticket_id):
     return Response({
         "message": "Ticket escalated.",
         "ticket": TicketSerializer(ticket).data,
+        "eta": {
+            "priority": msg["priority"],
+            "eta_text": msg["eta_text"],
+            "sla_due_at": ticket.sla_due_at,
+        },
         "handoff": packet,
     })
 
@@ -1072,10 +1050,27 @@ def assign_ticket(request, ticket_id):
             {"error": "Assignee must be a member or owner of this ticket's team."},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    ticket.assigned_to = agent
-    if ticket.status == "escalated" and ticket.awaiting_response_from != "user":
-        ticket.awaiting_response_from = "support"
-    ticket.save()
+
+    # "Claiming" an escalated ticket = self/teammate assignment while it's still
+    # unclaimed. Race-safe: whoever's conditional UPDATE actually matches wins (mirrors
+    # outcome_helpers.touch_first_ai_at's pattern), the loser just sees the real state
+    # reflected back instead of erroring or double-notifying the customer.
+    is_claim_attempt = ticket.status == "escalated" and not ticket.claimed_at and agent.id != ticket.user_id
+    claimed_now = False
+    new_awaiting = "support" if (ticket.status == "escalated" and ticket.awaiting_response_from != "user") else ticket.awaiting_response_from
+
+    if is_claim_attempt:
+        now = timezone.now()
+        updated = Ticket.objects.filter(pk=ticket.pk, claimed_at__isnull=True).update(
+            claimed_at=now, assigned_to=agent, awaiting_response_from=new_awaiting,
+        )
+        ticket.refresh_from_db()
+        claimed_now = updated == 1
+    else:
+        ticket.assigned_to = agent
+        ticket.awaiting_response_from = new_awaiting
+        ticket.save()
+
     TicketInteraction.objects.create(
         ticket=ticket,
         user=request.user,
@@ -1083,11 +1078,49 @@ def assign_ticket(request, ticket_id):
         content=f"Ticket assigned to {agent.get_full_name() or agent.email}.",
     )
     dispatch_ticket_assigned_email(ticket, agent, request.user)
-    assignee_name = agent.get_full_name() or agent.email or agent.username
-    return Response({"message": f"Ticket assigned to {assignee_name}."})
 
-def _notify_ticket_status_change(ticket, new_status):
-    """Create in-app notification for ticket owner and trigger Slack if applicable."""
+    if claimed_now:
+        ActionHistory.objects.create(
+            ticket=ticket,
+            action_type="CLAIM",
+            action_params={"agent_id": str(agent.id)},
+            executed_by=getattr(request.user, "username", "") or "user",
+            rollback_possible=True,
+            rollback_steps={"handler": "rollback_claim"},
+            before_state={"assigned_to_id": None, "claimed_at": None},
+            after_state={"assigned_to_id": str(agent.id), "claimed_at": ticket.claimed_at.isoformat()},
+        )
+        agent_name = agent.get_full_name() or agent.email or agent.username
+        eta_text = escalation_sla_eta_text(ticket) if ticket.sla_due_at else ""
+        InAppNotification.objects.create(
+            user=ticket.user,
+            type=InAppNotification.Type.INFO,
+            title="Someone's on it",
+            message=f"{agent_name} is now looking into ticket #{ticket.ticket_id}.",
+            link=f"/tickets?highlight={ticket.ticket_id}",
+        )
+        dispatch_ticket_claimed_email(ticket, agent)
+        try:
+            from integrations.views import notify_ticket_claimed
+
+            notify_ticket_claimed(str(ticket.user.id), ticket.ticket_id, agent_name, eta_text)
+        except Exception:
+            pass
+
+    assignee_name = agent.get_full_name() or agent.email or agent.username
+    message = f"Ticket assigned to {assignee_name}."
+    if is_claim_attempt and not claimed_now:
+        message = f"Already claimed by {ticket.assigned_to.get_full_name() or ticket.assigned_to.email or ticket.assigned_to.username}."
+    return Response({"message": message, "ticket": TicketSerializer(ticket).data})
+
+def _notify_ticket_status_change(ticket, new_status, escalation_msg=None):
+    """
+    Create in-app notification for ticket owner and trigger Slack if applicable.
+    `escalation_msg` is the dict from escalation_copy.build_escalation_message -- pass it
+    so the in-app text matches the Slack/email text instead of a separately hand-written
+    generic line. Callers that don't have one yet (e.g. update_ticket_status's generic
+    status flow) fall back to the old bare text.
+    """
     try:
         if new_status == "resolved":
             InAppNotification.objects.create(
@@ -1104,11 +1137,16 @@ def _notify_ticket_status_change(ticket, new_status):
             except Exception:
                 pass
         elif new_status == "escalated":
+            message = (
+                escalation_msg["body"]
+                if escalation_msg
+                else f"Ticket #{ticket.ticket_id} has been escalated to support."
+            )
             InAppNotification.objects.create(
                 user=ticket.user,
                 type=InAppNotification.Type.WARNING,
                 title="Ticket escalated",
-                message=f"Ticket #{ticket.ticket_id} has been escalated to support.",
+                message=message,
                 link=f"/tickets?highlight={ticket.ticket_id}",
             )
     except Exception as e:
@@ -1168,6 +1206,24 @@ def update_ticket_status(request, ticket_id):
         interaction_type="agent_response" if request.auth and not request.user else "user_message",
         content=f"Status updated to {canonical}.",
     )
+    if canonical == "resolved" and previous_status != "resolved":
+        # Give manually-resolved tickets the same audit trail / rollback capability that
+        # autonomous auto-resolve gets in tickets.tasks.handle_auto_resolve, so "undo this
+        # resolution" works the same way regardless of who/what resolved the ticket.
+        TicketResolution.objects.get_or_create(
+            ticket=ticket,
+            defaults={"autonomous_action": "manual_resolve"},
+        )
+        ActionHistory.objects.create(
+            ticket=ticket,
+            action_type="MANUAL_RESOLVE",
+            action_params={},
+            executed_by=getattr(user, "username", "") or "user",
+            rollback_possible=True,
+            rollback_steps={"handler": "rollback_auto_resolve"},
+            before_state={"status": previous_status},
+            after_state={"status": canonical},
+        )
     if previous_status != canonical:
         _notify_ticket_status_change(ticket, canonical)
         dispatch_ticket_status_emails(ticket, previous_status, canonical)
@@ -1185,11 +1241,20 @@ def escalation_queue(request):
     """
     limit = min(int(request.GET.get("limit", 50)), 100)
     offset = int(request.GET.get("offset", 0))
+    priority_rank = Case(
+        When(escalation_priority="critical", then=0),
+        When(escalation_priority="high", then=1),
+        When(escalation_priority="medium", then=2),
+        When(escalation_priority="low", then=3),
+        default=4,
+        output_field=IntegerField(),
+    )
     queryset = (
         _tickets_for_user(request)
         .filter(status="escalated")
-        .select_related("user")
-        .order_by("-created_at")
+        .select_related("user", "assigned_to")
+        .annotate(_priority_rank=priority_rank)
+        .order_by("_priority_rank", "escalated_at")
     )
     total = queryset.count()
     queryset = queryset[offset : offset + limit]
@@ -1213,14 +1278,16 @@ def agent_dashboard(request):
         status__in=["new", "open", "in_progress", "in-progress", "escalated"]
     ).count()
     closed_tickets = scope.filter(status="resolved").count()
-    avg_response = TicketInteraction.objects.filter(
-        interaction_type="agent_response",
-        ticket__in=scope,
-    ).aggregate(avg=Avg("created_at"))
+    # Time from ticket creation to first AI output, not Avg(created_at) (averaging absolute
+    # timestamps is meaningless and was the previous bug here).
+    avg_response = scope.filter(first_ai_at__isnull=False).aggregate(
+        avg=Avg(ExpressionWrapper(F("first_ai_at") - F("created_at"), output_field=DurationField()))
+    )
+    avg_seconds = avg_response["avg"].total_seconds() if avg_response["avg"] else None
     return Response({
         "open_tickets": open_tickets,
         "closed_tickets": closed_tickets,
-        "avg_agent_response_time": avg_response["avg"],
+        "avg_agent_response_time_seconds": avg_seconds,
     })
 
 @api_view(["POST"])

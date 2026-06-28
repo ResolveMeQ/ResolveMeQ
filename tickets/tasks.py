@@ -75,7 +75,7 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False, bill
             payload["screenshot"] = ticket.screenshot
 
         # Send to agent
-        agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.com/api/analyze')
+        agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
         headers = get_agent_service_headers()
         logger.info(f"Sending POST to FastAPI: {agent_url} with payload: {payload}")
         response = requests.post(agent_url, json=payload, headers=headers, timeout=30)
@@ -182,6 +182,128 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False, bill
             refund_agent_operation(billing_user)
         return False
 
+
+def process_ticket_with_agent_sync(ticket, billing_user, force=False, billing_precharged=False):
+    """
+    No-Celery-required path: calls the agent directly (degrading to a placeholder response
+    if it's unreachable) and runs the same autonomous-decision / Solution / KB-sync steps as
+    the `process_ticket_with_agent` task above, executed in-process instead of via the broker.
+
+    Used when Celery itself is unavailable, so a new ticket gets the same resilience the
+    manual "process with agent" trigger already had -- previously, if Celery was down at
+    ticket-creation time, the ticket silently never got analyzed at all.
+    """
+    if ticket.agent_processed and not force:
+        if billing_precharged:
+            refund_agent_operation(billing_user)
+        return False
+
+    if not billing_precharged:
+        quota = try_consume_agent_operation(billing_user)
+        if not quota.allowed:
+            return False
+
+    agent_saved = False
+    try:
+        payload = {
+            "ticket_id": ticket.ticket_id,
+            "issue_type": ticket.issue_type,
+            "description": ticket.description,
+            "category": ticket.category,
+            "tags": ticket.tags,
+            "user": {
+                "id": str(ticket.user.id),
+                "name": ticket.user.username,
+                "department": getattr(ticket.user, "department", ""),
+            },
+        }
+        if ticket.screenshot:
+            payload["screenshot"] = ticket.screenshot
+
+        agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
+        headers = get_agent_service_headers()
+
+        try:
+            response = requests.post(agent_url, json=payload, headers=headers, timeout=10)
+            response.raise_for_status()
+            agent_response = response.json()
+        except Exception as agent_error:
+            logger.warning(f"AI Agent unavailable for ticket {ticket.ticket_id}, using placeholder: {agent_error}")
+            refund_agent_operation(billing_user)
+            agent_response = {
+                "confidence": 0.0,
+                "recommended_action": "request_clarification",
+                "analysis": {
+                    "category": ticket.category or "general",
+                    "severity": "medium",
+                    "complexity": "medium",
+                },
+                "solution": {
+                    "steps": [
+                        "This is a placeholder response - the AI agent is currently unavailable",
+                        "Please check the issue description and category",
+                        "You can manually assign this ticket to the appropriate team",
+                    ],
+                    "estimated_time": "Pending agent availability",
+                    "success_probability": 0.0,
+                },
+                "reasoning": "AI agent service is currently unavailable. This is a placeholder response.",
+            }
+
+        ticket.agent_response = agent_response
+        ticket.agent_processed = True
+        ticket.save()
+        agent_saved = True
+
+        touch_first_ai_at(ticket)
+        log_agent_confidence_snapshot(
+            ticket,
+            "analyze",
+            confidence=agent_response.get("confidence"),
+            recommended_action=str(agent_response.get("recommended_action") or ""),
+        )
+
+        try:
+            notify_user_agent_response(str(ticket.user_id), ticket.ticket_id, agent_response)
+        except Exception as slack_exc:
+            logger.warning("notify_user_agent_response failed for ticket %s: %s", ticket.ticket_id, slack_exc)
+
+        autonomous_agent = AutonomousAgent(ticket)
+        action, params = autonomous_agent.decide_autonomous_action()
+        logger.info(f"Autonomous agent decided: {action.value} for ticket {ticket.ticket_id} (sync path)")
+        # Run in-process: Celery's broker may be exactly what's unavailable right now.
+        execute_autonomous_action(ticket.ticket_id, action.value, params)
+
+        steps = None
+        confidence = 0.0
+        solution_data = agent_response.get("solution", {})
+        steps = solution_data.get("steps") or agent_response.get("resolution_steps") or agent_response.get("steps")
+        confidence = agent_response.get("confidence", 0.0)
+        if isinstance(steps, list):
+            steps = "\n".join(steps)
+        if steps:
+            Solution.objects.get_or_create(
+                ticket=ticket,
+                defaults={
+                    "steps": steps,
+                    "worked": confidence >= agent_confidence_high(),
+                    "created_by": ticket.user,
+                    "confidence_score": confidence,
+                },
+            )
+
+        if ticket.status == "resolved":
+            ticket.sync_to_knowledge_base()
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Synchronous agent processing failed for ticket {ticket.ticket_id}: {str(e)}")
+        if not agent_saved:
+            refund_agent_operation(billing_user)
+        return False
+
+
 @app.task
 def execute_autonomous_action(ticket_id, action, params):
     """
@@ -238,7 +360,7 @@ def handle_auto_resolve(ticket, params):
     
     resolution_steps = params.get("resolution_steps", "No steps provided")
     confidence = ticket.agent_response.get('confidence', 0.0) if isinstance(ticket.agent_response, dict) else 0.0
-    reasoning = ticket.agent_response.get('explanation', '') if isinstance(ticket.agent_response, dict) else ''
+    reasoning = ticket.agent_response.get('reasoning', '') if isinstance(ticket.agent_response, dict) else ''
     
     # Execute action
     ticket.status = "resolved"
@@ -293,21 +415,33 @@ def handle_escalate(ticket, params):
     """Escalate the ticket to human support with action history."""
     from integrations.views import notify_escalation
     from tickets.models import TicketInteraction
+    from .escalation_copy import derive_escalation_priority, compute_sla_due_at, build_escalation_message
+    from .user_email_notify import dispatch_ticket_status_emails
 
     params = dict(params or {})
-    
+
     # Capture state before
     before_state = {'status': ticket.status}
-    
+
     ticket.status = "escalated"
     apply_escalated_timestamp(ticket)
+
+    priority = derive_escalation_priority(params)
+    ticket.escalation_priority = priority
+    ticket.sla_due_at = compute_sla_due_at(ticket.escalated_at, priority)
     ticket.save()
-    
+
     # Capture state after
     after_state = {'status': ticket.status}
-    
+
     confidence = ticket.agent_response.get('confidence', 0.0) if isinstance(ticket.agent_response, dict) else 0.0
     reasoning = params.get('escalation_reason', 'Requires human attention')
+
+    msg = build_escalation_message(ticket, priority, reasoning, params.get('suggested_team'))
+    params.setdefault('escalation_reason', msg['reason'])
+    params['priority'] = msg['priority']
+    params['suggested_team'] = msg['suggested_team']
+    params['eta_text'] = msg['eta_text']
     
     # Record action in history
     ActionHistory.objects.create(
@@ -336,10 +470,11 @@ def handle_escalate(ticket, params):
     params["handoff_text"] = packet["handoff_text"]
     params["handoff_summary"] = packet["handoff_summary"]
 
-    # Notify user (Slack + in-app)
+    # Notify user (Slack + in-app + email)
     notify_escalation(str(ticket.user.id), ticket.ticket_id, params)
     from .views import _notify_ticket_status_change
-    _notify_ticket_status_change(ticket, "escalated")
+    _notify_ticket_status_change(ticket, "escalated", escalation_msg=msg)
+    dispatch_ticket_status_emails(ticket, before_state['status'], "escalated", escalation_msg=msg)
     # Notify support staff (in-app + optional Slack channel)
     from .notifications import notify_support_escalation
     notify_support_escalation(ticket, params)

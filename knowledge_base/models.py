@@ -17,6 +17,15 @@ class KnowledgeBaseArticle(models.Model):
         on_delete=models.SET_NULL,
         related_name="kb_articles",
     )
+    team = models.ForeignKey(
+        "base.Team",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="knowledge_base_articles",
+        help_text="Owning workspace/team. Null means a global article visible to every team "
+                   "(used for platform-seeded baseline content) rather than per-tenant private content.",
+    )
     is_published = models.BooleanField(default=True)
     is_verified = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)

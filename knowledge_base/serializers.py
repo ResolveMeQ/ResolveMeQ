@@ -15,12 +15,12 @@ class KnowledgeBaseArticleSerializer(serializers.ModelSerializer):
     class Meta:
         model = KnowledgeBaseArticle
         fields = [
-            'kb_id', 'title', 'content', 'tags', 'author', 'is_published', 'is_verified',
+            'kb_id', 'title', 'content', 'tags', 'author', 'team', 'is_published', 'is_verified',
             'created_at', 'updated_at', 'views', 'helpful_votes', 'total_votes',
             'helpfulness_score', 'user_vote'
         ]
         read_only_fields = [
-            'kb_id', 'created_at', 'updated_at', 'views',
+            'kb_id', 'team', 'created_at', 'updated_at', 'views',
             'helpful_votes', 'total_votes', 'helpfulness_score', 'user_vote'
         ]
 

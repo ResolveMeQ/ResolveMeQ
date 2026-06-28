@@ -19,7 +19,10 @@ schema_view = get_schema_view(
       ),
    ),
    public=True,
-   permission_classes=(permissions.AllowAny,),
+   # Anyone could browse/enumerate the full schema and use "Try it out" against live
+   # endpoints with no login at all (this view is mounted at the site root). Keep it
+   # open for local development; require auth once deployed.
+   permission_classes=(permissions.AllowAny,) if settings.DEBUG else (permissions.IsAuthenticated,),
    url='https://api.resolvemeq.net/' if not settings.DEBUG else None,
 )
 

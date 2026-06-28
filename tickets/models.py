@@ -91,44 +91,32 @@ class Ticket(models.Model):
         on_delete=models.SET_NULL,
         help_text="User who sent the latest comment/message.",
     )
+    ESCALATION_PRIORITY_CHOICES = [
+        ("critical", "Critical"),
+        ("high", "High"),
+        ("medium", "Medium"),
+        ("low", "Low"),
+    ]
+    escalation_priority = models.CharField(
+        max_length=10,
+        choices=ESCALATION_PRIORITY_CHOICES,
+        null=True,
+        blank=True,
+        help_text="Priority derived at escalation time; drives SLA and queue ordering.",
+    )
+    claimed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When a support agent first picked up this escalated ticket. Set once; sticky across status changes.",
+    )
+    sla_due_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Computed deadline (escalated_at + SLA hours for priority). Not paused/recomputed.",
+    )
 
     def __str__(self):
         return f"{self.issue_type} ({self.status})"
-
-    def send_to_agent(self):
-        """
-        Sends the ticket to the AI agent for processing.
-        Returns True if successful, False otherwise.
-        """
-        if self.agent_processed:
-            return False
-
-        try:
-            agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.com/analyze/')
-            payload = {
-                'ticket_id': self.ticket_id,
-                'issue_type': self.issue_type,
-                'description': self.description,
-                'category': self.category,
-                'tags': self.tags,
-                'user': {
-                    'id': self.user.user_id,
-                    'name': self.user.name,
-                    'department': self.user.department
-                }
-            }
-
-            response = requests.post(agent_url, json=payload)
-            response.raise_for_status()
-
-            self.agent_response = response.json()
-            self.agent_processed = True
-            self.save()
-            return True
-
-        except Exception as e:
-            print(f"Error sending ticket {self.ticket_id} to AI agent: {str(e)}")
-            return False
 
     def sync_to_knowledge_base(self):
         """
