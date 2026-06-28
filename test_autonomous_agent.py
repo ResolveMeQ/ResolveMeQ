@@ -12,6 +12,8 @@ from unittest.mock import patch, Mock
 import json
 from datetime import datetime, timedelta
 
+from django.conf import settings
+
 from base.models import User, Profile
 from tickets.models import Ticket, TicketInteraction
 from solutions.models import Solution
@@ -199,46 +201,65 @@ class AutonomousAgentTest(TestCase):
         self.assertEqual(action, AgentAction.REQUEST_CLARIFICATION)
 
 class KnowledgeBaseAPITest(APITestCase):
-    """Test the Knowledge Base API endpoints for agent access."""
-    
+    """
+    Test the Knowledge Base API endpoints for agent access.
+
+    These endpoints require X-Agent-API-Key (see base.authentication.AgentAPIKeyAuthentication
+    and base.permissions.IsAuthenticatedOrAgent) -- they used to be AllowAny, which meant
+    anyone on the internet could enumerate/search the KB with no auth at all. The real
+    FastAPI agent already sends this header on every call (resolvemeq-agent's
+    django_kb_client.py), so these tests authenticate the same way instead of going back
+    to AllowAny.
+    """
+
     def setUp(self):
         self.client = Client()
+        self.agent_headers = {
+            'HTTP_X_AGENT_API_KEY': getattr(settings, 'AGENT_API_KEY', 'resolvemeq-agent-secret-key-2026'),
+        }
         self.kb_article = KnowledgeBaseArticle.objects.create(
             title='WiFi Connection Issues',
             content='Steps to resolve WiFi connectivity problems',
             tags=['wifi', 'network', 'connectivity']
         )
-    
+
     def test_kb_articles_endpoint(self):
         """Test the KB articles endpoint for agent access."""
         url = '/api/knowledge_base/api/articles/'
-        response = self.client.get(url)
-        
+        response = self.client.get(url, **self.agent_headers)
+
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIsInstance(data, list)
         self.assertGreater(len(data), 0)
-    
+
     def test_kb_search_endpoint(self):
         """Test the KB search endpoint."""
         url = '/api/knowledge_base/api/search/'
         payload = {'query': 'wifi', 'limit': 5}
-        response = self.client.post(url, data=json.dumps(payload), content_type='application/json')
-        
+        response = self.client.post(
+            url, data=json.dumps(payload), content_type='application/json', **self.agent_headers
+        )
+
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn('results', data)
         self.assertIn('query', data)
         self.assertEqual(data['query'], 'wifi')
-    
+
     def test_kb_article_by_id_endpoint(self):
         """Test getting specific KB article by ID."""
         url = f'/api/knowledge_base/api/articles/{self.kb_article.kb_id}/'
-        response = self.client.get(url)
-        
+        response = self.client.get(url, **self.agent_headers)
+
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data['title'], self.kb_article.title)
+
+    def test_kb_articles_endpoint_requires_auth(self):
+        """Without the agent key (or a logged-in user), these endpoints must reject the request."""
+        response = self.client.get('/api/knowledge_base/api/articles/')
+        self.assertEqual(response.status_code, 401)
 
 @patch('tickets.tasks.requests.post')
 class TicketProcessingTest(TestCase):
