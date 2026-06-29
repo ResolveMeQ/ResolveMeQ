@@ -1,3 +1,4 @@
+from django.core.files.storage import default_storage
 from rest_framework import serializers
 from .models import (
     KnowledgeBaseArticle,
@@ -57,6 +58,8 @@ class LLMResponseSerializer(serializers.ModelSerializer):
 
 
 class KBAttachmentSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+
     class Meta:
         model = KBAttachment
         fields = [
@@ -68,6 +71,17 @@ class KBAttachmentSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
+
+    def get_file_url(self, obj):
+        url = (obj.file_url or "").strip()
+        if not url and obj.file_path:
+            url = default_storage.url(obj.file_path)
+        if url.startswith(("http://", "https://")):
+            return url
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(url)
+        return url
 
 
 class KBCommentSerializer(serializers.ModelSerializer):

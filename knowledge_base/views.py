@@ -1016,7 +1016,10 @@ def upload_community_attachment(request):
         content_type=(uploaded.content_type or "")[:100],
         file_size=uploaded.size,
     )
-    return Response(KBAttachmentSerializer(attachment).data, status=status.HTTP_201_CREATED)
+    return Response(
+        KBAttachmentSerializer(attachment, context={"request": request}).data,
+        status=status.HTTP_201_CREATED,
+    )
 
 
 @api_view(["GET"])
