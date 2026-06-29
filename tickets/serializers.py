@@ -39,11 +39,12 @@ class KnowledgeBaseEntryListSerializer(serializers.ModelSerializer):
 
 class TicketSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.SerializerMethodField()
+    team_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Ticket
         fields = [
-            'ticket_id', 'team', 'user', 'issue_type', 'status', 'description', 'screenshot',
+            'ticket_id', 'team', 'team_name', 'user', 'issue_type', 'status', 'description', 'screenshot',
             'assigned_to', 'assigned_to_name', 'category', 'tags', 'created_at', 'updated_at',
             'agent_response', 'agent_processed',
             'first_ai_at', 'escalated_at', 'awaiting_response_from', 'last_message_at', 'last_message_by',
@@ -54,6 +55,12 @@ class TicketSerializer(serializers.ModelSerializer):
             'first_ai_at', 'escalated_at', 'awaiting_response_from', 'last_message_at', 'last_message_by',
             'escalation_priority', 'claimed_at', 'sla_due_at',
         ]
+
+    def get_team_name(self, obj):
+        """Lets ResolveMeQ platform agents tell customers apart in a cross-tenant queue."""
+        if not obj.team_id:
+            return None
+        return obj.team.name
 
     def get_assigned_to_name(self, obj):
         if not obj.assigned_to_id:

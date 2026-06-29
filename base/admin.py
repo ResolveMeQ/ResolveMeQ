@@ -89,7 +89,7 @@ class UserAdmin(BaseUserAdmin):
     form = UserChangeForm
     add_form = UserCreationForm
 
-    list_display = ('email', 'username', 'is_active', 'is_staff')
+    list_display = ('email', 'username', 'is_active', 'is_staff', 'is_platform_agent')
     search_fields = ('email', 'username')
     ordering = ('email',)
     readonly_fields = ('secure_code',)
@@ -97,7 +97,7 @@ class UserAdmin(BaseUserAdmin):
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
         ('Personal Info', {'fields': ('first_name','username', 'last_name')}),
-        ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'is_verified', 'secure_code')}),
+        ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'is_verified', 'is_platform_agent', 'secure_code')}),
         ('Active Bar', {'fields': ('status',)})
     )
 

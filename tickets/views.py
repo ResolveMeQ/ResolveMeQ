@@ -1252,7 +1252,7 @@ def escalation_queue(request):
     queryset = (
         _tickets_for_user(request)
         .filter(status="escalated")
-        .select_related("user", "assigned_to")
+        .select_related("user", "assigned_to", "team")
         .annotate(_priority_rank=priority_rank)
         .order_by("_priority_rank", "escalated_at")
     )

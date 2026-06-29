@@ -124,6 +124,15 @@ class User(AbstractBaseUser, PermissionsMixin):
         help_text=_("Designates whether the user has verified their email address."),
     )
 
+    is_platform_agent = models.BooleanField(
+        _("platform support agent"),
+        default=False,
+        help_text=_(
+            "ResolveMeQ support staff who can claim/reply to escalated tickets across any "
+            "customer's team -- independent of is_staff (Django admin access)."
+        ),
+    )
+
     date_joined = models.DateTimeField(
         _("date joined"),
         default=timezone.now,
