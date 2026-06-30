@@ -431,6 +431,15 @@ def send_agent_reply(request, ticket_id):
     )
     dispatch_ticket_comment_email(ticket, [ticket.user], commenter=request.user, comment_text=text)
 
+    from integrations.notify import notify_ticket_reporter_message
+
+    notify_ticket_reporter_message(
+        ticket,
+        title=f"New reply on Ticket #{ticket.ticket_id}",
+        body=text[:500],
+        actor_name=agent_name,
+    )
+
     return Response({
         'conversation_id': str(conversation.id),
         'message': ChatMessageSerializer(agent_message).data,

@@ -114,6 +114,18 @@ class Ticket(models.Model):
         blank=True,
         help_text="Computed deadline (escalated_at + SLA hours for priority). Not paused/recomputed.",
     )
+    slack_thread_ts = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+        help_text="Root Slack DM thread timestamp for threaded replies to this ticket's reporter.",
+    )
+    teams_reply_to_id = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text="Root Teams activity id for this ticket's reporter conversation, for threaded replies.",
+    )
 
     def __str__(self):
         return f"{self.issue_type} ({self.status})"

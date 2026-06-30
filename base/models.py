@@ -320,6 +320,28 @@ Profile model that extends the User model with additional fields.
         help_text=_("Slack workspace ID (T123...) this user is linked to; optional"),
     )
 
+    # Optional Microsoft Teams identity, same rationale as the Slack fields above.
+    teams_aad_object_id = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text=_("Teams/AAD object id for proactive messaging; optional"),
+    )
+    teams_tenant_id = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text=_("AAD tenant id this user is linked to; optional"),
+    )
+    teams_conversation_id = models.CharField(
+        max_length=256,
+        blank=True,
+        default="",
+        help_text=_("Cached 1:1 conversation id for this user, avoids re-creating it on every notify"),
+    )
+
     def __str__(self):
         return self.user.username
 

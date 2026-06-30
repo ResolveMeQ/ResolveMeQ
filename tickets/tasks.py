@@ -5,7 +5,7 @@ import requests
 from .models import Ticket, ActionHistory, TicketResolution
 import logging
 from resolvemeq.celery import app
-from integrations.views import notify_user_agent_response  # Restored import for Slack feedback
+from integrations.notify import notify_user_agent_response  # fans out to every connected provider
 from solutions.models import Solution
 from .autonomous_agent import AutonomousAgent, AgentAction
 from .confidence_settings import agent_confidence_high
@@ -97,20 +97,25 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False, bill
                 recommended_action=str(ticket.agent_response.get("recommended_action") or ""),
             )
 
-        # Slack DM: agent JSON is saved above, but autonomous handlers only notify for some paths.
-        try:
-            notify_user_agent_response(
-                str(ticket.user_id),
-                ticket.ticket_id,
-                ticket.agent_response,
-                thread_ts=thread_ts,
-            )
-        except Exception as slack_exc:
-            logger.warning("notify_user_agent_response failed for ticket %s: %s", ticket_id, slack_exc)
-
-        # --- NEW: Autonomous Agent Decision Making ---
+        # Slack DM: skip generic summary when autonomous action sends its own tailored message.
         autonomous_agent = AutonomousAgent(ticket)
         action, params = autonomous_agent.decide_autonomous_action()
+
+        skip_agent_slack_summary = action in (
+            AgentAction.AUTO_RESOLVE,
+            AgentAction.ESCALATE,
+            AgentAction.REQUEST_CLARIFICATION,
+        )
+        if not skip_agent_slack_summary:
+            try:
+                notify_user_agent_response(
+                    str(ticket.user_id),
+                    ticket.ticket_id,
+                    ticket.agent_response,
+                    thread_ts=thread_ts,
+                )
+            except Exception as slack_exc:
+                logger.warning("notify_user_agent_response failed for ticket %s: %s", ticket_id, slack_exc)
 
         logger.info(f"Autonomous agent decided: {action.value} for ticket {ticket_id}")
 
@@ -349,7 +354,7 @@ def handle_auto_resolve(ticket, params):
     Automatically resolve the ticket.
     Enhanced with action history tracking and follow-up scheduling.
     """
-    from integrations.views import notify_user_auto_resolution
+    from integrations.notify import notify_user_auto_resolution
     from tickets.models import TicketInteraction
     
     # Capture state before action
@@ -413,7 +418,7 @@ def handle_auto_resolve(ticket, params):
 
 def handle_escalate(ticket, params):
     """Escalate the ticket to human support with action history."""
-    from integrations.views import notify_escalation
+    from integrations.notify import notify_escalation
     from tickets.models import TicketInteraction
     from .escalation_copy import derive_escalation_priority, compute_sla_due_at, build_escalation_message
     from .user_email_notify import dispatch_ticket_status_emails
@@ -484,7 +489,7 @@ def handle_escalate(ticket, params):
 
 def handle_request_clarification(ticket, params):
     """Request clarification from user."""
-    from integrations.views import request_clarification_from_user
+    from integrations.notify import request_clarification_from_user
     
     ticket.status = "pending_clarification"
     ticket.save()
@@ -617,13 +622,14 @@ def schedule_resolution_followup(ticket_id):
         resolution.followup_sent_at = timezone.now()
         resolution.save()
         
-        # Send Slack message with interactive buttons (if Slack integration available)
-        # For now, log it - actual Slack implementation would go here
-        logger.info(f"Would send follow-up message for ticket {ticket_id}")
-        
-        # TODO: Implement actual Slack interactive message
-        # from integrations.views import send_slack_feedback_request
-        # send_slack_feedback_request(ticket, resolution)
+        # Send Slack follow-up verification message
+        try:
+            from integrations.notify import notify_resolution_followup
+
+            notify_resolution_followup(ticket.ticket_id)
+            logger.info("Sent 24h resolution follow-up for ticket %s", ticket_id)
+        except Exception as exc:
+            logger.warning("Failed to send resolution follow-up for ticket %s: %s", ticket_id, exc)
         
     except Ticket.DoesNotExist:
         logger.error(f"Ticket {ticket_id} not found for follow-up")

@@ -110,5 +110,10 @@ def notify_support_escalation(ticket, params):
             notify_support_escalation_slack(ticket, params)
         except Exception as e:
             logger.warning("Slack support escalation notification failed: %s", e)
+        try:
+            from integrations.teams_views import notify_support_escalation_teams
+            notify_support_escalation_teams(ticket, params)
+        except Exception as e:
+            logger.warning("Teams support escalation notification failed: %s", e)
     except Exception as e:
         logger.warning("Failed to notify support of escalation: %s", e)

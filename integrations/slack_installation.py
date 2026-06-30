@@ -144,7 +144,13 @@ def legacy_installation_fallback() -> SlackToken | None:
     """
     When only one bot installation exists (typical single-tenant dev), use it if workspace-specific
     lookup fails. Avoids using arbitrary rows when multiple workspaces are connected.
+    Disabled in production unless SLACK_LEGACY_INSTALL_FALLBACK=true.
     """
+    allow = getattr(settings, "SLACK_LEGACY_INSTALL_FALLBACK", None)
+    if allow is None:
+        allow = bool(getattr(settings, "DEBUG", False))
+    if not allow:
+        return None
     qs = SlackToken.objects.filter(is_active=True)
     if qs.count() == 1:
         return qs.select_related("resolvemeq_team", "installed_by").first()
@@ -320,3 +326,106 @@ def slack_api_post(
 
 def escalation_channel_id() -> str:
     return (getattr(settings, "SLACK_ESCALATION_CHANNEL", "") or "").strip()
+
+
+def user_can_receive_slack_dm(user) -> bool:
+    return bool(slack_dm_channel_for_user(user))
+
+
+def _normalize_slack_channel_id(channel: str | None) -> str | None:
+    ch = (channel or "").strip()
+    if not ch:
+        return None
+    if (
+        len(ch) >= 9
+        and ch[0].upper() in ("U", "W")
+        and ch[1:].replace("_", "").isalnum()
+    ):
+        return ch.upper()
+    return ch
+
+
+def install_and_dm_for_ticket(ticket) -> tuple[SlackToken | None, str | None]:
+    """Resolve bot installation + DM channel id for a ticket's reporter."""
+    if not ticket:
+        return None, None
+    inst = get_installation_for_ticket(ticket)
+    slack_user_or_channel = _normalize_slack_channel_id(slack_dm_channel_for_user(ticket.user))
+    if not inst or not slack_user_or_channel:
+        return inst, slack_user_or_channel
+    if slack_user_or_channel.startswith(("D", "C", "G")):
+        return inst, slack_user_or_channel
+    dm_resp = slack_api_post(inst, "conversations.open", {"users": slack_user_or_channel})
+    if not dm_resp:
+        logger.warning("Slack DM open failed for ticket %s: empty response", getattr(ticket, "ticket_id", "?"))
+        return inst, slack_user_or_channel
+    try:
+        dm_data = dm_resp.json()
+    except Exception:
+        dm_data = {}
+    if dm_data.get("ok") and isinstance(dm_data.get("channel"), dict):
+        dm_channel_id = (dm_data["channel"].get("id") or "").strip()
+        if dm_channel_id:
+            return inst, dm_channel_id
+    logger.warning(
+        "Slack DM open failed for ticket %s user %s: %s",
+        getattr(ticket, "ticket_id", "?"),
+        slack_user_or_channel,
+        dm_data.get("error") or getattr(dm_resp, "text", "unknown_error"),
+    )
+    return inst, slack_user_or_channel
+
+
+def install_and_dm_for_ticket_id(ticket_id) -> tuple[SlackToken | None, str | None]:
+    from tickets.models import Ticket
+
+    ticket = Ticket.objects.select_related("user", "team").filter(ticket_id=ticket_id).first()
+    return install_and_dm_for_ticket(ticket)
+
+
+def persist_slack_thread_ts(ticket, message_ts: str | None) -> None:
+    ts = (message_ts or "").strip()
+    if not ticket or not ts:
+        return
+    current = (getattr(ticket, "slack_thread_ts", None) or "").strip()
+    if current == ts:
+        return
+    ticket.slack_thread_ts = ts
+    ticket.save(update_fields=["slack_thread_ts", "updated_at"])
+
+
+def post_dm_for_ticket(ticket, *, text: str, blocks=None, thread_ts: str | None = None) -> bool:
+    """Post a DM to the ticket reporter; persists thread root ts on the ticket when new."""
+    inst, channel = install_and_dm_for_ticket(ticket)
+    if not inst or not channel:
+        return False
+    payload: dict[str, Any] = {"channel": channel, "text": text}
+    if blocks:
+        payload["blocks"] = blocks
+    use_thread = (thread_ts or getattr(ticket, "slack_thread_ts", None) or "").strip()
+    if use_thread:
+        payload["thread_ts"] = use_thread
+    resp = slack_api_post(inst, "chat.postMessage", payload)
+    try:
+        data = resp.json() if resp else {}
+    except Exception:
+        data = {}
+    if data.get("ok"):
+        if not use_thread and data.get("ts"):
+            persist_slack_thread_ts(ticket, data.get("ts"))
+        return True
+    logger.warning(
+        "Slack DM failed for ticket %s: %s",
+        getattr(ticket, "ticket_id", "?"),
+        data.get("error") or getattr(resp, "text", resp),
+    )
+    return False
+
+
+def notify_ticket_reporter_message(ticket, *, title: str, body: str, actor_name: str = "") -> bool:
+    """Sync a support reply or comment from the web app to the reporter's Slack DM."""
+    if not user_can_receive_slack_dm(ticket.user):
+        return False
+    actor = (actor_name or "Support").strip()
+    text = f"*{title}*\n{actor}: {body}"
+    return post_dm_for_ticket(ticket, text=text)

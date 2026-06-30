@@ -1,6 +1,6 @@
 from django.contrib import admin
 from .models import AgentConfidenceLog, Ticket, ResolutionTemplate
-from integrations.views import notify_user_ticket_resolved
+from integrations.notify import notify_user_ticket_resolved
 import csv
 from django.http import HttpResponse
 

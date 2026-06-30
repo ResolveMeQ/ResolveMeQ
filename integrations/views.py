@@ -115,7 +115,9 @@ def slack_oauth_redirect(request):
     token_data = resp.json()
 
     if not token_data.get("ok"):
-        return HttpResponse(f"Slack OAuth failed: {token_data.get('error', 'Unknown error')}", status=400)
+        err = token_data.get("error", "unknown_error")
+        fe = getattr(settings, "FRONTEND_URL", "https://app.resolvemeq.net").rstrip("/")
+        return HttpResponseRedirect(f"{fe}/settings/integrations?slack=error&reason={urllib.parse.quote(str(err))}")
 
     slack_workspace_id = token_data.get("team", {}).get("id")
     SlackToken.objects.update_or_create(
@@ -160,6 +162,27 @@ def slack_integration_status(request):
             "updated_at": inst.updated_at.isoformat() if inst and inst.updated_at else None,
         }
     )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def slack_disconnect(request):
+    """Deactivate the Slack workspace link for the requested ResolveMeQ team."""
+    team_id = request.data.get("team_id") or request.GET.get("team_id")
+    if not team_id:
+        prefs = getattr(request.user, "preferences", None)
+        if prefs and prefs.active_team_id:
+            team_id = str(prefs.active_team_id)
+    if not team_id:
+        return Response({"detail": "team_id is required."}, status=400)
+    try:
+        team = Team.objects.get(pk=team_id)
+    except Team.DoesNotExist:
+        return Response({"detail": "Team not found."}, status=404)
+    if team.owner_id != request.user.pk and not team.members.filter(pk=request.user.pk).exists():
+        return Response({"detail": "You are not a member of this team."}, status=403)
+    updated = SlackToken.objects.filter(resolvemeq_team=team, is_active=True).update(is_active=False)
+    return Response({"disconnected": bool(updated), "team_id": str(team.id)})
 
 
 def verify_slack_request(request):
@@ -232,24 +255,13 @@ def slack_events(request):
             return response
 
         event = payload.get("event", {})
-        slack_team_id = _slack_team_id_from_payload(payload)
-        inst = slack_inst.get_installation_for_slack_team(slack_team_id)
-        # Respond to app_mention events
-        if event.get("type") == "app_mention":
-            if inst:
-                slack_inst.slack_api_post(
-                    inst,
-                    "chat.postMessage",
-                    {"channel": event["channel"], "text": "Hello! You mentioned me :wave:"},
-                )
-        # Handle message events
-        if event.get("type") == "message" and not event.get("bot_id"):
-            if inst:
-                slack_inst.slack_api_post(
-                    inst,
-                    "chat.postMessage",
-                    {"channel": event["channel"], "text": "Hello from ResolveMeQ bot! :robot_face:"},
-                )
+        # Acknowledge events without auto-replying. Ticket intake uses /resolvemeq and interactivity.
+        if event.get("type") in {"app_mention", "message"} and not event.get("bot_id"):
+            logger.debug(
+                "Slack event %s ignored (channel=%s)",
+                event.get("type"),
+                event.get("channel"),
+            )
         return HttpResponse(status=200, content_type='text/plain; charset=utf-8')
     return HttpResponse(status=405, content_type='text/plain; charset=utf-8')
 
@@ -312,13 +324,25 @@ def _slack_modal_payload_view_submission(payload):
         inst = slack_inst.get_installation_for_slack_team(slack_team_id)
         from tickets.models import Ticket, TicketInteraction
 
-        qs = Ticket.objects.filter(
-            user__username=user_id,
-            status__in=["new", "open", "in_progress", "in-progress"],
-        )
-        if inst and inst.resolvemeq_team_id:
-            qs = qs.filter(team_id=inst.resolvemeq_team_id)
-        ticket = qs.order_by("-created_at").first()
+        ticket_id_raw = (payload.get("view", {}).get("private_metadata") or "").strip()
+        ticket = None
+        if ticket_id_raw:
+            qs = Ticket.objects.filter(ticket_id=ticket_id_raw)
+            if inst and inst.resolvemeq_team_id:
+                qs = qs.filter(team_id=inst.resolvemeq_team_id)
+            ticket = qs.select_related("user").first()
+            if ticket:
+                reporter_slack = slack_inst.slack_dm_channel_for_user(ticket.user)
+                if reporter_slack and reporter_slack.upper() != user_id.upper():
+                    ticket = None
+        if ticket is None:
+            qs = Ticket.objects.filter(
+                user__username=user_id,
+                status__in=["new", "open", "in_progress", "in-progress", "pending_clarification"],
+            )
+            if inst and inst.resolvemeq_team_id:
+                qs = qs.filter(team_id=inst.resolvemeq_team_id)
+            ticket = qs.order_by("-created_at").first()
         if not ticket:
             if inst:
                 slack_inst.slack_api_post(
@@ -333,6 +357,8 @@ def _slack_modal_payload_view_submission(payload):
         try:
             ticket.description = description
             ticket.issue_type = issue_type
+            if (ticket.status or "").lower() == "pending_clarification":
+                ticket.status = "open"
             ticket.save()
             TicketInteraction.objects.create(
                 ticket=ticket,
@@ -454,8 +480,16 @@ def slack_slash_command(request):
         if command == "/resolvemeq" and text == "status":
             from tickets.models import Ticket
 
-            tickets = Ticket.objects.filter(user__username=user_id).order_by("-created_at")
-            if tickets.exists():
+            inst = slack_inst.get_installation_for_slack_team(slack_team_id)
+            user, _ = slack_inst.get_or_create_slack_shadow_user(
+                user_id,
+                installation=inst,
+            )
+            tickets = Ticket.objects.filter(user=user).order_by("-created_at")
+            if inst and inst.resolvemeq_team_id:
+                tickets = tickets.filter(team_id=inst.resolvemeq_team_id)
+            tickets = tickets[:15]
+            if tickets:
                 status_lines = [
                     f"• Ticket #{t.ticket_id}: {t.issue_type} — {t.status.capitalize()}"
                     for t in tickets
@@ -560,16 +594,24 @@ def slack_slash_command(request):
                     },
                 ],
             }
-            # Open modal
-            headers = {
-                "Authorization": f"Bearer {token_obj.access_token}",
-                "Content-Type": "application/json",
-            }
             data = {
                 "trigger_id": trigger_id,
                 "view": modal_view,
             }
-            requests.post("https://slack.com/api/views.open", headers=headers, json=data, timeout=30)
+            open_resp = slack_inst.slack_api_post(token_obj, "views.open", data)
+            if open_resp:
+                try:
+                    open_data = open_resp.json()
+                except Exception:
+                    open_data = {}
+                if not open_data.get("ok"):
+                    err = open_data.get("error", "views_open_failed")
+                    return JsonResponse(
+                        {
+                            "response_type": "ephemeral",
+                            "text": f"Could not open the ticket form ({err}). Try again or use the web app.",
+                        }
+                    )
             return HttpResponse()  # Slack expects 200 OK
         return JsonResponse({"text": "Unknown command."})
     return HttpResponse(status=405)
@@ -653,16 +695,20 @@ class SlackInteractiveActionView(View):
                         "text": f"🔄 Ticket #{ticket_id} is being reprocessed by the agent."
                     })
                     return HttpResponse()
-                # Handle "Mark as Resolved"
-                elif action_id == "resolve_ticket" and value.startswith("resolve_"):
-                    ticket_id = value.replace("resolve_", "")
+                # Handle "Mark as Resolved" (agent summary or solution follow-up)
+                elif action_id in ("resolve_ticket", "mark_resolved") and (
+                    value.startswith("resolve_") or value.startswith("resolved_")
+                ):
+                    if value.startswith("resolved_"):
+                        ticket_id = value[len("resolved_") :]
+                    else:
+                        ticket_id = value[len("resolve_") :]
                     from tickets.models import Ticket
                     try:
                         ticket = Ticket.objects.get(ticket_id=ticket_id)
                         ticket.status = "resolved"
-                        ticket.save()
+                        ticket.save(update_fields=["status", "updated_at"])
                         notify_user_ticket_resolved(ticket)
-                        # Prompt for feedback
                         if inst_workspace:
                             feedback_blocks = [
                                 {
@@ -709,7 +755,60 @@ class SlackInteractiveActionView(View):
                             "text": f"❌ Ticket #{ticket_id} not found."
                         })
                     return HttpResponse()
-                # Handle feedback buttons
+                elif action_id == "confirm_resolution" and value.startswith("confirm_resolved_"):
+                    ticket_id = value.replace("confirm_resolved_", "")
+                    from tickets.models import Ticket, TicketInteraction
+                    try:
+                        ticket = Ticket.objects.get(ticket_id=ticket_id)
+                        if (ticket.status or "").lower() != "resolved":
+                            ticket.status = "resolved"
+                            ticket.save(update_fields=["status", "updated_at"])
+                            ticket.sync_to_knowledge_base()
+                        TicketInteraction.objects.create(
+                            ticket=ticket,
+                            user=ticket.user,
+                            interaction_type="feedback",
+                            content="User confirmed auto-resolution via Slack.",
+                        )
+                        requests.post(response_url, json={
+                            "replace_original": False,
+                            "text": f"✅ Thanks for confirming Ticket #{ticket_id} is resolved.",
+                        })
+                    except Ticket.DoesNotExist:
+                        requests.post(response_url, json={
+                            "replace_original": False,
+                            "text": f"❌ Ticket #{ticket_id} not found.",
+                        })
+                    return HttpResponse()
+                elif action_id == "reopen_ticket" and value.startswith("reopen_"):
+                    ticket_id = value.replace("reopen_", "")
+                    from tickets.models import Ticket, TicketInteraction
+                    from tickets.tasks import handle_escalate
+                    try:
+                        ticket = Ticket.objects.get(ticket_id=ticket_id)
+                        ticket.status = "open"
+                        ticket.save(update_fields=["status", "updated_at"])
+                        TicketInteraction.objects.create(
+                            ticket=ticket,
+                            user=ticket.user,
+                            interaction_type="user_message",
+                            content="User reported the issue is still occurring via Slack.",
+                        )
+                        handle_escalate(ticket, {
+                            "escalation_reason": "User reported issue persists after auto-resolution.",
+                            "reason": "Requested human help",
+                            "priority": "high",
+                        })
+                        requests.post(response_url, json={
+                            "replace_original": False,
+                            "text": f"🚨 Ticket #{ticket_id} reopened and escalated for human review.",
+                        })
+                    except Ticket.DoesNotExist:
+                        requests.post(response_url, json={
+                            "replace_original": False,
+                            "text": f"❌ Ticket #{ticket_id} not found.",
+                        })
+                    return HttpResponse()
                 elif action_id in ("feedback_positive", "feedback_negative"):
                     feedback = "helpful" if action_id == "feedback_positive" else "not helpful"
                     ticket_id = value.split("_")[-1]
@@ -783,21 +882,26 @@ class SlackInteractiveActionView(View):
                 # Handle "Escalate" action
                 elif action_id == "escalate_ticket" and value.startswith("escalate_"):
                     ticket_id = value.replace("escalate_", "")
-                    from tickets.models import Ticket, TicketInteraction
+                    from tickets.models import Ticket
+                    from tickets.tasks import handle_escalate
                     try:
                         ticket = Ticket.objects.get(ticket_id=ticket_id)
-                        TicketInteraction.objects.create(
-                            ticket=ticket,
-                            user=ticket.user,
-                            interaction_type="user_message",
-                            content="User requested escalation via Slack."
-                        )
-                        # Optionally, notify admins or escalation channel here
-                    except Exception:
-                        pass
+                        if (ticket.status or "").lower() == "escalated":
+                            msg = f"Ticket #{ticket_id} is already escalated."
+                        else:
+                            handle_escalate(ticket, {
+                                "escalation_reason": "User requested escalation via Slack.",
+                                "reason": "Requested human help",
+                            })
+                            msg = f"🚨 Ticket #{ticket_id} has been escalated. An IT admin will review it shortly."
+                    except Ticket.DoesNotExist:
+                        msg = f"❌ Ticket #{ticket_id} not found."
+                    except Exception as exc:
+                        logger.exception("Slack escalate failed for ticket %s", ticket_id)
+                        msg = f"Could not escalate Ticket #{ticket_id}: {exc}"
                     requests.post(response_url, json={
                         "replace_original": False,
-                        "text": f"🚨 Ticket #{ticket_id} has been escalated. An IT admin will review it shortly."
+                        "text": msg,
                     })
                     return HttpResponse()
                 # Handle feedback text button
@@ -840,59 +944,7 @@ class SlackInteractiveActionView(View):
 
 def _slack_install_and_dm_for_ticket_id(ticket_id):
     """Resolve bot installation + DM channel id for a ticket's reporter (Slack shadow users)."""
-    from tickets.models import Ticket
-
-    ticket = (
-        Ticket.objects.select_related("user", "team")
-        .filter(ticket_id=ticket_id)
-        .first()
-    )
-    if not ticket:
-        return None, None
-    inst = slack_inst.get_installation_for_ticket(ticket)
-    slack_user_or_channel = slack_inst.slack_dm_channel_for_user(ticket.user)
-    if not inst or not slack_user_or_channel:
-        return inst, slack_user_or_channel
-
-    # Hard safety normalization for legacy lowercase Slack IDs.
-    if (
-        len(slack_user_or_channel) >= 9
-        and slack_user_or_channel[0].upper() in ("U", "W")
-        and slack_user_or_channel[1:].replace("_", "").isalnum()
-    ):
-        slack_user_or_channel = slack_user_or_channel.upper()
-
-    # Prefer a real DM channel id. Posting directly to a user id can return channel_not_found
-    # depending on workspace/app configuration.
-    if slack_user_or_channel.startswith(("D", "C", "G")):
-        return inst, slack_user_or_channel
-
-    dm_resp = slack_inst.slack_api_post(
-        inst,
-        "conversations.open",
-        {"users": slack_user_or_channel},
-    )
-    if not dm_resp:
-        logger.warning("Slack DM open failed for ticket %s: empty response", ticket_id)
-        return inst, slack_user_or_channel
-
-    try:
-        dm_data = dm_resp.json()
-    except Exception:
-        dm_data = {}
-    if dm_data.get("ok") and isinstance(dm_data.get("channel"), dict):
-        dm_channel_id = (dm_data["channel"].get("id") or "").strip()
-        if dm_channel_id:
-            return inst, dm_channel_id
-
-    logger.warning(
-        "Slack DM open failed for ticket %s user %s: %s",
-        ticket_id,
-        slack_user_or_channel,
-        dm_data.get("error") or getattr(dm_resp, "text", "unknown_error"),
-    )
-    # Fallback to previous behavior; some workspaces allow posting with user id.
-    return inst, slack_user_or_channel
+    return slack_inst.install_and_dm_for_ticket_id(ticket_id)
 
 
 def _slack_truncate_mrkdwn(text: str, max_len: int = 2800) -> str:
@@ -1094,6 +1146,11 @@ def notify_user_agent_response(user_id, ticket_id, agent_response, thread_ts=Non
         data = {}
     if data.get("ok"):
         logger.info("Sent agent response to Slack (ticket=%s, channel=%s)", ticket_id, slack_channel)
+        from tickets.models import Ticket
+
+        ticket = Ticket.objects.filter(ticket_id=ticket_id).first()
+        if ticket and data.get("ts") and not thread_ts:
+            slack_inst.persist_slack_thread_ts(ticket, data.get("ts"))
     else:
         logger.warning(
             "Failed to send agent response to Slack (ticket=%s, channel=%s): %s",
@@ -1430,3 +1487,50 @@ def send_solution_with_followup(user_id, ticket_id, params):
     }
     resp = slack_inst.slack_api_post(inst, "chat.postMessage", payload)
     logger.info("Sent solution with follow-up: %s", getattr(resp, "text", resp))
+
+
+def notify_resolution_followup(ticket_id):
+    """
+    24-hour follow-up after auto-resolve: ask the reporter to confirm the fix still holds.
+    """
+    from tickets.models import Ticket
+
+    ticket = Ticket.objects.select_related("user", "team").filter(ticket_id=ticket_id).first()
+    if not ticket:
+        return
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"⏰ *Follow-up on Ticket #{ticket_id}*\n\n"
+                    "It's been about a day since we marked this resolved. Is everything still working?"
+                ),
+            },
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "✅ Yes, all good"},
+                    "style": "primary",
+                    "value": f"confirm_resolved_{ticket_id}",
+                    "action_id": "confirm_resolution",
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "❌ Still having issues"},
+                    "style": "danger",
+                    "value": f"reopen_{ticket_id}",
+                    "action_id": "reopen_ticket",
+                },
+            ],
+        },
+    ]
+    slack_inst.post_dm_for_ticket(
+        ticket,
+        text=f"Follow-up on Ticket #{ticket_id}",
+        blocks=blocks,
+    )

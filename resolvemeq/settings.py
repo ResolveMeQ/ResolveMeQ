@@ -291,13 +291,29 @@ SLACK_REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI")
 # Bot token scopes for oauth.v2/authorize (comma-separated)
 SLACK_BOT_SCOPES = os.getenv(
     "SLACK_BOT_SCOPES",
-    "commands,chat:write,im:write,im:history,users:read,app_mentions:read",
+    "commands,chat:write,im:write,im:history,users:read,users:read.email,app_mentions:read",
+)
+# Allow single-install fallback when workspace lookup fails (dev only by default).
+SLACK_LEGACY_INSTALL_FALLBACK = os.getenv("SLACK_LEGACY_INSTALL_FALLBACK", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
 )
 # Optional: Slack channel ID (e.g. C01234ABCD) to post escalated tickets for support visibility
 SLACK_ESCALATION_CHANNEL = os.getenv("SLACK_ESCALATION_CHANNEL", "").strip()
 # Optional: digest / alert target (channel ID); management commands post per active install
 SLACK_DIGEST_CHANNEL = os.getenv("SLACK_DIGEST_CHANNEL", "").strip()
 SLACK_ESCALATION_ALERT_CHANNEL = os.getenv("SLACK_ESCALATION_ALERT_CHANNEL", "").strip()
+
+# Microsoft Teams (Azure Bot Framework registration -- App ID/password, not a per-workspace
+# OAuth token like Slack's; the bot is bot-wide, what's per-tenant is the conversation
+# reference captured at install/link time, see integrations/teams_bot.py)
+TEAMS_APP_ID = os.getenv("TEAMS_APP_ID", "").strip()
+TEAMS_APP_PASSWORD = os.getenv("TEAMS_APP_PASSWORD", "").strip()
+# Only set if the Azure Bot was registered as single-tenant rather than multi-tenant.
+TEAMS_APP_TENANT_ID = os.getenv("TEAMS_APP_TENANT_ID", "").strip()
+# Informational: what the Azure Bot resource's messaging endpoint should point at.
+TEAMS_MESSAGING_ENDPOINT = os.getenv("TEAMS_MESSAGING_ENDPOINT", "").strip()
 
 # Google Sign-In (Web client ID; must match VITE_GOOGLE_CLIENT_ID in the frontend)
 GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()

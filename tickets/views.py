@@ -907,15 +907,17 @@ def add_comment(request, ticket_id):
 
     recipients = _conversation_recipients_for_comment(ticket, request.user)
     recipients = [u for u in recipients if user_can_access_ticket(u, ticket)]
+    try:
+        from integrations.slack_installation import display_name_for_user
+        actor_name = (display_name_for_user(request.user) or "").strip()
+    except Exception:
+        actor_name = ""
+    if not actor_name:
+        actor_name = (
+            request.user.get_full_name() or request.user.email or request.user.username or "A teammate"
+        )
     for recipient in recipients:
         try:
-            try:
-                from integrations.slack_installation import display_name_for_user
-                actor_name = (display_name_for_user(request.user) or "").strip()
-            except Exception:
-                actor_name = ""
-            if not actor_name:
-                actor_name = (request.user.get_full_name() or request.user.email or request.user.username or "A teammate")
             InAppNotification.objects.create(
                 user=recipient,
                 type=InAppNotification.Type.INFO,
@@ -927,6 +929,14 @@ def add_comment(request, ticket_id):
             logger.warning("Failed to create comment notification: %s", exc)
     if recipients:
         dispatch_ticket_comment_email(ticket, recipients, commenter=request.user, comment_text=comment)
+    from integrations.notify import notify_ticket_reporter_message
+
+    notify_ticket_reporter_message(
+        ticket,
+        title=f"New reply on Ticket #{ticket.ticket_id}",
+        body=(comment or "").strip()[:500],
+        actor_name=actor_name,
+    )
     return Response({"message": "Comment added."})
 
 @api_view(["POST"])
@@ -1011,7 +1021,7 @@ def escalate_ticket(request, ticket_id):
     params["handoff_text"] = packet["handoff_text"]
     params["handoff_summary"] = packet["handoff_summary"]
     try:
-        from integrations.views import notify_escalation
+        from integrations.notify import notify_escalation
         notify_escalation(str(ticket.user.id), ticket.ticket_id, params)
     except Exception:
         pass
@@ -1101,7 +1111,7 @@ def assign_ticket(request, ticket_id):
         )
         dispatch_ticket_claimed_email(ticket, agent)
         try:
-            from integrations.views import notify_ticket_claimed
+            from integrations.notify import notify_ticket_claimed
 
             notify_ticket_claimed(str(ticket.user.id), ticket.ticket_id, agent_name, eta_text)
         except Exception:
@@ -1131,7 +1141,7 @@ def _notify_ticket_status_change(ticket, new_status, escalation_msg=None):
                 link=f"/tickets?highlight={ticket.ticket_id}",
             )
             try:
-                from integrations.views import notify_user_ticket_resolved
+                from integrations.notify import notify_user_ticket_resolved
 
                 notify_user_ticket_resolved(ticket)
             except Exception:
