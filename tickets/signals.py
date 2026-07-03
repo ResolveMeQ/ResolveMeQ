@@ -39,3 +39,23 @@ def ticket_created(sender, instance, created, **kwargs):
                 logger.error(
                     f"Synchronous fallback failed for ticket {instance.ticket_id}: {sync_error}"
                 )
+
+
+@receiver(post_save, sender=Ticket)
+def sync_support_contact_submission_from_ticket(sender, instance, **kwargs):
+    """Keep SupportContactSubmission status/assignee in sync with the linked ticket."""
+    from base.models import SupportContactSubmission
+
+    sub = SupportContactSubmission.objects.filter(ticket_id=instance.pk).first()
+    if sub is None:
+        return
+    new_status = SupportContactSubmission.status_from_ticket(instance)
+    update_fields = []
+    if sub.status != new_status:
+        sub.status = new_status
+        update_fields.append("status")
+    if sub.assigned_to_id != instance.assigned_to_id:
+        sub.assigned_to = instance.assigned_to
+        update_fields.append("assigned_to")
+    if update_fields:
+        sub.save(update_fields=update_fields)

@@ -1117,8 +1117,14 @@ class ContactRequest(models.Model):
 class SupportContactSubmission(models.Model):
     """
     Logged-in portal user reached out via Contact support (e.g. Billing page).
-    Stored for audit; admins are notified by email.
+    Stored for audit; linked to an escalated ticket when created from the portal.
     """
+    class Status(models.TextChoices):
+        OPEN = 'open', _('Open')
+        IN_PROGRESS = 'in_progress', _('In progress')
+        RESOLVED = 'resolved', _('Resolved')
+        CLOSED = 'closed', _('Closed')
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
         User,
@@ -1126,6 +1132,28 @@ class SupportContactSubmission(models.Model):
         null=True,
         blank=True,
         related_name='support_contact_submissions',
+    )
+    ticket = models.ForeignKey(
+        'tickets.Ticket',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='support_contact_submissions',
+        help_text=_('Escalated ticket created from this enquiry (portal billing form).'),
+    )
+    assigned_to = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_support_contact_submissions',
+        help_text=_('Mirrors the linked ticket assignee when set.'),
+    )
+    status = models.CharField(
+        _('status'),
+        max_length=20,
+        choices=Status.choices,
+        default=Status.OPEN,
     )
     email = models.EmailField(_("submitter email"), max_length=254)
     subject = models.CharField(_("subject"), max_length=200, blank=True)
@@ -1141,3 +1169,14 @@ class SupportContactSubmission(models.Model):
 
     def __str__(self):
         return f"{self.email} — {self.created_at:%Y-%m-%d %H:%M}"
+
+    @classmethod
+    def status_from_ticket(cls, ticket) -> str:
+        """Map linked ticket state to submission workflow status."""
+        if ticket is None:
+            return cls.Status.OPEN
+        if (ticket.status or "").lower() == "resolved":
+            return cls.Status.RESOLVED
+        if ticket.claimed_at or ticket.assigned_to_id:
+            return cls.Status.IN_PROGRESS
+        return cls.Status.OPEN

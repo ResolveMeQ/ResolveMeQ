@@ -731,13 +731,35 @@ class BillingSupportContactView(GenericAPIView):
             message=ser.validated_data['message'],
             page_context=page,
             ip_address=_support_contact_client_ip(request),
+            status=SupportContactSubmission.Status.OPEN,
         )
         _email_admins_support_submission(submission)
+        ticket = None
+        try:
+            from tickets.support_enquiry import create_billing_support_ticket
+
+            ticket = create_billing_support_ticket(
+                request.user,
+                subject=subj,
+                message=ser.validated_data['message'],
+                page_context=page,
+                submission=submission,
+            )
+        except Exception as exc:
+            logger.exception('Billing support ticket creation failed for submission %s: %s', submission.id, exc)
+        if ticket:
+            message = (
+                f'Thanks — we opened ticket #{ticket.ticket_id} for your request. '
+                'You will get updates in Tickets and by email when our team replies.'
+            )
+        else:
+            message = 'Thanks — we received your message and will get back to you soon.'
         return Response(
             {
                 'ok': True,
-                'message': 'Thanks — we received your message and will get back to you soon.',
+                'message': message,
                 'id': str(submission.id),
+                'ticket_id': ticket.ticket_id if ticket else None,
             },
             status=status.HTTP_201_CREATED,
         )

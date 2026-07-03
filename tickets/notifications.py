@@ -59,7 +59,7 @@ def _send_escalation_email(to_email, ticket, params):
         "handoff_text": (params.get("handoff_text") or "")[:4000],
         "handoff_summary": (params.get("handoff_summary") or "")[:600],
         "view_url": view_url,
-        "app_name": "ResolveMeQ",
+        "app_name": getattr(settings, "APP_NAME", "ResolveMeQ"),
     }
     data = {"subject": f"[Escalation] Ticket #{ticket.ticket_id}: {ticket.issue_type or 'Support needed'}"}
     try:
@@ -67,6 +67,53 @@ def _send_escalation_email(to_email, ticket, params):
         dispatch_send_email_with_template(data, "escalation_notification.html", context, [email])
     except Exception as e:
         logger.warning("Failed to queue escalation email for %s: %s", email, e)
+
+
+def notify_ticket_escalated_for_user(ticket, escalation_msg) -> None:
+    """In-app bell for the ticket requester when status becomes escalated."""
+    try:
+        message = (
+            escalation_msg["body"]
+            if escalation_msg
+            else f"Ticket #{ticket.ticket_id} has been escalated to support."
+        )
+        InAppNotification.objects.create(
+            user=ticket.user,
+            type=InAppNotification.Type.WARNING,
+            title="Ticket escalated",
+            message=message,
+            link=f"/tickets?highlight={ticket.ticket_id}",
+        )
+    except Exception as exc:
+        logger.warning("Failed to create escalation in-app notification: %s", exc)
+
+
+def run_full_escalation_notifications(
+    ticket,
+    *,
+    previous_status: str,
+    escalation_msg: dict,
+    params: dict,
+    acting_user=None,
+) -> None:
+    """
+    User + operator notifications for a newly escalated ticket (shared by API escalate
+    and billing support enquiry flow).
+    """
+    from tickets.user_email_notify import dispatch_ticket_status_emails
+
+    notify_ticket_escalated_for_user(ticket, escalation_msg)
+    dispatch_ticket_status_emails(
+        ticket, previous_status, "escalated", escalation_msg=escalation_msg
+    )
+    notify_support_escalation(ticket, params)
+    if acting_user is not None:
+        try:
+            from integrations.notify import notify_escalation
+
+            notify_escalation(str(acting_user.id), ticket.ticket_id, params)
+        except Exception:
+            pass
 
 
 def notify_support_escalation(ticket, params):

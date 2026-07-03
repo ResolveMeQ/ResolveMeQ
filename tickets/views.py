@@ -1000,8 +1000,8 @@ def escalate_ticket(request, ticket_id):
         content=content
     )
     msg = build_escalation_message(ticket, priority, reason_text)
-    _notify_ticket_status_change(ticket, "escalated", escalation_msg=msg)
-    dispatch_ticket_status_emails(ticket, previous_status, "escalated", escalation_msg=msg)
+    from .notifications import run_full_escalation_notifications
+
     params = {
         "reason": "Requested human help",
         "escalation_reason": msg["reason"],
@@ -1020,13 +1020,13 @@ def escalate_ticket(request, ticket_id):
     packet = build_handoff_packet(ticket, request.user, conversation_summary)
     params["handoff_text"] = packet["handoff_text"]
     params["handoff_summary"] = packet["handoff_summary"]
-    try:
-        from integrations.notify import notify_escalation
-        notify_escalation(str(ticket.user.id), ticket.ticket_id, params)
-    except Exception:
-        pass
-    from .notifications import notify_support_escalation
-    notify_support_escalation(ticket, params)
+    run_full_escalation_notifications(
+        ticket,
+        previous_status=previous_status,
+        escalation_msg=msg,
+        params=params,
+        acting_user=request.user,
+    )
     return Response({
         "message": "Ticket escalated.",
         "ticket": TicketSerializer(ticket).data,
@@ -1246,9 +1246,17 @@ def update_ticket_status(request, ticket_id):
 @permission_classes([IsAuthenticated])
 def escalation_queue(request):
     """
-    List escalated tickets visible to the current user (created by or assigned to them).
+    List escalated tickets visible to the current user.
+    Restricted to platform support staff and team owners (leads).
     Query params: limit (default 50), offset (default 0).
     """
+    from base.escalation_access import user_can_access_escalation_queue
+
+    if not user_can_access_escalation_queue(request.user):
+        return Response(
+            {"error": "You do not have access to the escalation queue."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     limit = min(int(request.GET.get("limit", 50)), 100)
     offset = int(request.GET.get("offset", 0))
     priority_rank = Case(

@@ -234,6 +234,8 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
     thumbnail_url = serializers.SerializerMethodField()
     profile_image_url = serializers.SerializerMethodField()
+    is_platform_agent = serializers.SerializerMethodField()
+    can_access_escalation_queue = serializers.SerializerMethodField()
     user_email = serializers.CharField(source='user.email', read_only=True)
     user_full_name = serializers.CharField(source='user.full_name', read_only=True)
     user_id = serializers.UUIDField(source='user.id', read_only=True)
@@ -254,6 +256,8 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'user_full_name',
             'first_name',
             'last_name',
+            'is_platform_agent',
+            'can_access_escalation_queue',
             'profile_image',
             'profile_image_url',
             'thumbnail_url',
@@ -261,6 +265,13 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'location',
             'city'
         ]
+
+    def get_is_platform_agent(self, obj):
+        return bool(getattr(obj.user, 'is_platform_agent', False))
+
+    def get_can_access_escalation_queue(self, obj):
+        from base.escalation_access import user_can_access_escalation_queue
+        return user_can_access_escalation_queue(obj.user)
 
     def get_profile_image_url(self, obj):
         """Get full URL for profile image."""

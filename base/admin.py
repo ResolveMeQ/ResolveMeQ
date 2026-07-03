@@ -436,9 +436,14 @@ class ContactRequestAdmin(admin.ModelAdmin):
 
 @admin.register(SupportContactSubmission)
 class SupportContactSubmissionAdmin(admin.ModelAdmin):
-    list_display = ['email', 'subject', 'page_context', 'created_at']
-    list_filter = ['page_context', 'created_at']
+    list_display = ['email', 'subject', 'status', 'assigned_to', 'ticket', 'page_context', 'created_at']
+    list_filter = ['status', 'page_context', 'created_at']
     search_fields = ['email', 'message', 'subject']
     readonly_fields = ['id', 'created_at', 'ip_address']
     ordering = ['-created_at']
-    raw_id_fields = ['user']
+    raw_id_fields = ['user', 'ticket', 'assigned_to']
+    fieldsets = (
+        (None, {'fields': ('user', 'email', 'subject', 'message', 'page_context', 'status')}),
+        ('Linked ticket', {'fields': ('ticket', 'assigned_to')}),
+        ('System', {'fields': ('id', 'created_at', 'ip_address'), 'classes': ('collapse',)}),
+    )
