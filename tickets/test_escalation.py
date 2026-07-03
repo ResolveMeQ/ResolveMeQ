@@ -86,7 +86,7 @@ class EscalateTicketViewTest(TestCase):
         self.ticket.refresh_from_db()
         self.assertEqual(self.ticket.sla_due_at, first_sla)  # not overwritten by the second (low-priority) call
 
-    @patch("tickets.views.dispatch_ticket_status_emails")
+    @patch("tickets.user_email_notify.dispatch_ticket_status_emails")
     def test_escalate_dispatches_customer_email(self, mock_email):
         self.client.post(f"/api/tickets/{self.ticket.ticket_id}/escalate/", {"reason": "talk_to_human"}, format="json")
         mock_email.assert_called_once()
@@ -212,8 +212,12 @@ class AssignTicketClaimTest(TestCase):
 
 class EscalationQueueOrderingTest(TestCase):
     def setUp(self):
+        from base.models import Team
+
         self.client = APIClient()
         self.user = User.objects.create_user(username="queueuser", email="queue@example.com", password="testpass123")
+        # Escalation queue requires platform agent or team owner (see base.escalation_access).
+        Team.objects.create(name="Queue Team", owner=self.user)
         self.client.force_authenticate(user=self.user)
 
         def make(priority, minutes_ago):
@@ -232,6 +236,7 @@ class EscalationQueueOrderingTest(TestCase):
 
     def test_ordered_by_priority_then_age(self):
         resp = self.client.get("/api/tickets/escalated/")
+        self.assertEqual(resp.status_code, 200)
         ids = [t["ticket_id"] for t in resp.data["tickets"]]
         self.assertEqual(
             ids,
