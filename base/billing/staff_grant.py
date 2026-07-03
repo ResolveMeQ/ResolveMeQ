@@ -10,6 +10,7 @@ from dateutil.relativedelta import relativedelta
 from django.utils import timezone
 
 from base.models import InAppNotification, Plan, Subscription, SubscriptionGrantLog
+from base.billing.subscription_notifications import notify_staff_subscription_granted
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,11 @@ def apply_staff_subscription_grant(
         )
     except Exception as exc:
         logger.warning("Staff grant: in-app notify failed for %s: %s", recipient.id, exc)
+
+    try:
+        notify_staff_subscription_granted(sub, note=note)
+    except Exception as exc:
+        logger.warning("Staff grant: email notify failed for %s: %s", recipient.id, exc)
 
     logger.info(
         "Staff subscription grant: recipient=%s plan=%s months=%s by=%s",

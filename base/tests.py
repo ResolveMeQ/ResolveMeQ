@@ -429,17 +429,18 @@ class StaffGrantSubscriptionTests(APITestCase):
 
     def test_staff_grants_paid_plan_and_logs(self):
         self.client.force_authenticate(self.staff)
-        r = self.client.post(
-            '/api/billing/staff/grant-subscription/',
-            {
-                'user_id': str(self.user.id),
-                'plan_id': str(self.plan.id),
-                'months_valid': 3,
-                'clear_gateway': True,
-                'note': 'Pilot access',
-            },
-            format='json',
-        )
+        with patch('base.billing.subscription_notifications.dispatch_send_email_with_template') as mock_mail:
+            r = self.client.post(
+                '/api/billing/staff/grant-subscription/',
+                {
+                    'user_id': str(self.user.id),
+                    'plan_id': str(self.plan.id),
+                    'months_valid': 3,
+                    'clear_gateway': True,
+                    'note': 'Pilot access',
+                },
+                format='json',
+            )
         self.assertEqual(r.status_code, status.HTTP_200_OK, getattr(r, 'data', r.content))
         sub = Subscription.objects.get(user=self.user)
         self.assertEqual(sub.plan_id, self.plan.id)
@@ -450,6 +451,8 @@ class StaffGrantSubscriptionTests(APITestCase):
         self.assertTrue(
             InAppNotification.objects.filter(user=self.user, link='/billing').exists()
         )
+        mock_mail.assert_called_once()
+        self.assertEqual(mock_mail.call_args[0][3], [self.user.email])
 
 
 @override_settings(

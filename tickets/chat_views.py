@@ -27,6 +27,8 @@ from .scoping import user_can_access_ticket
 from .outcome_helpers import log_agent_confidence_snapshot, touch_first_ai_at
 from .user_email_notify import dispatch_ticket_comment_email
 from .chat_models import Conversation, ChatMessage, QuickReply
+from .chat_context import enrich_agent_chat_payload
+from .chat_intent import user_message_indicates_resolution_success
 from .chat_serializers import (
     ConversationSerializer, ChatMessageSerializer, QuickReplySerializer
 )
@@ -588,13 +590,15 @@ def get_suggested_questions(request, ticket_id):
     })
 
 
-def _build_resolution_state(ticket, conversation):
+def _build_resolution_state(ticket, conversation, *, current_message: str = ""):
     """Build resolution/feedback state so the agent can adapt actions and response."""
     state = {
         'ticket_status': getattr(ticket, 'status', 'open'),
         'conversation_resolved': getattr(conversation, 'resolved', False),
         'resolution_applied': getattr(conversation, 'resolution_applied', False),
     }
+    if current_message and user_message_indicates_resolution_success(current_message):
+        state['user_reported_success'] = True
     resolution = TicketResolution.objects.filter(ticket=ticket).first()
     if resolution:
         state['resolution_confirmed'] = resolution.resolution_confirmed
@@ -623,34 +627,6 @@ def _build_resolution_state(ticket, conversation):
     return state
 
 
-def _conversation_guidance_for_agent(conversation):
-    """
-    Short anchor for the remote model: the assistant turn immediately before the latest user message.
-    Improves multi-topic threads without keyword rules—pairs with agent-side coherence instructions.
-    """
-    last_user = (
-        conversation.messages.filter(sender_type="user").order_by("-created_at").first()
-    )
-    if not last_user:
-        return None
-    last_ai = (
-        conversation.messages.filter(sender_type="ai", created_at__lt=last_user.created_at)
-        .order_by("-created_at")
-        .first()
-    )
-    if not last_ai or not (last_ai.text or "").strip():
-        return None
-    one_line = " ".join((last_ai.text or "").strip().split())
-    if len(one_line) > 400:
-        one_line = one_line[:397] + "..."
-    return (
-        'The assistant\'s most recent reply before this user message (short follow-ups refer here unless '
-        'the user clearly switches topic): "'
-        + one_line
-        + '"'
-    )
-
-
 def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None):
     """
     Internal function to get AI response for a chat message.
@@ -659,28 +635,9 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
     """
     if billing_user is None:
         billing_user = get_billing_user_for_ticket(ticket)
-    # Conversation context (industry pattern):
-    # - rolling summary + last few messages (to avoid stale context and reduce prompt size)
-    # IMPORTANT: We want the *most recent* messages, not the oldest ones.
-    recent_messages = list(conversation.messages.order_by('-created_at')[:8])
-    recent_messages.reverse()
-    conversation_history = []
-    if (conversation.summary or "").strip():
-        conversation_history.append(
-            {
-                "role": "assistant",
-                "text": f"Conversation summary so far: {(conversation.summary or '').strip()}",
-            }
-        )
-    for msg in recent_messages:
-        role = 'user' if msg.sender_type == 'user' else 'assistant'
-        conversation_history.append({'role': role, 'text': msg.text or ''})
-
-    resolution_state = _build_resolution_state(ticket, conversation)
-    conversation_guidance = _conversation_guidance_for_agent(conversation)
-    agent_data = ticket.agent_response if ticket.agent_processed else None
-
-    payload = {
+    # Conversation context for the agent (retrieval query vs latest message are separate).
+    resolution_state = _build_resolution_state(ticket, conversation, current_message=message)
+    base_payload = {
         'ticket_id': ticket.ticket_id,
         'issue_type': ticket.issue_type,
         'description': ticket.description or '',
@@ -691,48 +648,23 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
             'name': user.username,
             'department': getattr(user, 'department', ''),
         },
-        'conversation_history': conversation_history,
         'resolution_state': resolution_state,
     }
     if ticket.screenshot:
-        payload['screenshot'] = ticket.screenshot
-    if conversation_guidance:
-        payload['conversation_guidance'] = conversation_guidance
+        base_payload['screenshot'] = ticket.screenshot
+    payload = enrich_agent_chat_payload(
+        base_payload,
+        ticket=ticket,
+        conversation=conversation,
+        latest_message=message,
+    )
+    is_chat_follow_up = bool(payload.get('is_chat_follow_up'))
+    agent_data = ticket.agent_response if ticket.agent_processed else None
     
     # Try to get response from AI agent
     agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
     
     try:
-        def _tokenize_for_overlap(text):
-            low = (text or "").lower()
-            out = []
-            cur = []
-            for ch in low:
-                if ch.isalnum() or ch in ("'", "-"):
-                    cur.append(ch)
-                else:
-                    if cur:
-                        out.append("".join(cur))
-                        cur = []
-            if cur:
-                out.append("".join(cur))
-            stop = {
-                "the", "and", "for", "with", "that", "this", "from", "have", "has", "had",
-                "you", "your", "yours", "are", "was", "were", "will", "would", "should", "could",
-                "can", "cant", "can't", "dont", "don't", "does", "did", "not", "yes", "no",
-                "please", "help", "thanks", "thank", "hi", "hello", "it", "its", "it's",
-                "a", "an", "to", "of", "in", "on", "at", "as", "is", "be", "by", "or",
-            }
-            toks = {t for t in out if len(t) >= 4 and t not in stop}
-            return toks
-
-        def _jaccard(a, b):
-            if not a or not b:
-                return 0.0
-            inter = len(a & b)
-            union = len(a | b)
-            return inter / union if union else 0.0
-
         def _assistant_text_for_validation(agent_json):
             if not isinstance(agent_json, dict):
                 return ""
@@ -759,18 +691,10 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
 
         data = _call_agent(payload, 25)
 
-        # Scalable guardrail:
-        # 1) Cheap overlap heuristic
-        # 2) If suspicious, call agent /tickets/validate/ (LLM self-check)
-        # 3) Retry /analyze/ once with short correction guidance if validator says misaligned
-        user_tokens = _tokenize_for_overlap(message)
+        # Alignment guardrail: on every chat follow-up, verify the draft answers the latest message.
         assistant_text = _assistant_text_for_validation(data)
-        assistant_tokens = _tokenize_for_overlap(assistant_text)
-        overlap = _jaccard(user_tokens, assistant_tokens)
-
-        response_style = str((data or {}).get("response_style") or "").strip().lower()
-        overlap_guard_enabled = response_style in ("", "guided_steps")
-        if overlap_guard_enabled and len(user_tokens) >= 5 and len(assistant_tokens) >= 10 and overlap < 0.03:
+        should_validate = is_chat_follow_up
+        if should_validate:
             try:
                 existing = payload.get("conversation_guidance") or ""
                 summarize_url = str(agent_url).replace("/tickets/analyze/", "/tickets/validate/")
@@ -781,9 +705,10 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
                         "user_message": message,
                         "assistant_text": assistant_text[:8000],
                         "assistant_json": data if isinstance(data, dict) else None,
+                        "conversation_context": existing[:4000],
                     },
                     headers=get_agent_service_headers(),
-                    timeout=8,
+                    timeout=10,
                 )
                 vresp.raise_for_status()
                 vdata = vresp.json() or {}
@@ -791,22 +716,22 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
                     correction = (vdata.get("correction_guidance") or "").strip()
                     if not correction:
                         correction = (
-                            "Answer the user's latest message directly. If details are missing, ask 1–3 focused "
-                            "clarifying questions. Do not switch to an unrelated troubleshooting template."
+                            "Answer the user's latest message directly in context of the conversation. "
+                            "Do not repeat the original ticket diagnosis or unrelated troubleshooting."
                         )
                     payload_retry = dict(payload)
                     payload_retry["conversation_guidance"] = (
-                        (existing + "\n\n" if existing else "") + "RESPONSE ALIGNMENT FIX: " + correction
+                        (existing + "\n\n" if existing else "")
+                        + "RESPONSE ALIGNMENT FIX: "
+                        + correction
                     )
                     data = _call_agent(payload_retry, 25)
                     logger.warning(
-                        "AI chat response misaligned (overlap=%.3f); validated+retried once. ticket=%s reason=%s",
-                        overlap,
+                        "AI chat response misaligned; validated+retried once. ticket=%s reason=%s",
                         getattr(ticket, "ticket_id", None),
                         str(vdata.get("reason") or "")[:200],
                     )
             except Exception:
-                # Keep the original response if the retry fails for any reason.
                 pass
         
         # Format response for chat - convert full analysis to conversational response

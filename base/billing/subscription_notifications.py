@@ -103,6 +103,38 @@ def _send_billing_email(user, *, subject: str, template: str, context: dict) -> 
         return False
 
 
+def notify_staff_subscription_granted(sub, *, note: str = "") -> bool:
+    """Complimentary/staff grant: email when subscription is assigned outside checkout."""
+    user = sub.user
+    if not user.is_active or not user.email:
+        return False
+    if sub.status not in (sub.Status.ACTIVE, sub.Status.TRIAL):
+        return False
+    if not sub.plan_id:
+        return False
+
+    ctx = _billing_email_context(user, sub)
+    app_name = ctx["app_name"]
+    plan_name = ctx["plan_name"]
+    if sub.status == sub.Status.TRIAL and sub.trial_ends_at:
+        detail = f'Your workspace has been upgraded to "{plan_name}" (trial).'
+    elif sub.current_period_end:
+        detail = f'Your workspace has been upgraded to "{plan_name}".'
+    else:
+        detail = f'Your workspace plan is now "{plan_name}".'
+    note = (note or "").strip()
+    if note:
+        detail = f"{detail} {note}"
+    ctx["welcome_detail"] = detail
+
+    return _send_billing_email(
+        user,
+        subject=f"{app_name}: subscription confirmed",
+        template="subscription_welcome.html",
+        context=ctx,
+    )
+
+
 def notify_subscription_welcome(sub) -> bool:
     """First paid subscription via checkout (Dodo)."""
     user = sub.user
