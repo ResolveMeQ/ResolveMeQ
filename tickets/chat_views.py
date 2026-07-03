@@ -627,6 +627,22 @@ def _build_resolution_state(ticket, conversation, *, current_message: str = ""):
     return state
 
 
+def _sync_ticket_agent_response_from_chat(ticket, agent_json) -> None:
+    """Keep ticket.agent_response in sync with AI chat so the detail panel reflects chat work."""
+    if not isinstance(agent_json, dict) or not agent_json:
+        return
+    try:
+        ticket.agent_response = _json_for_db(agent_json)
+        ticket.agent_processed = True
+        ticket.save(update_fields=["agent_response", "agent_processed", "updated_at"])
+    except Exception as exc:
+        logger.warning(
+            "Could not sync agent_response from chat for ticket %s: %s",
+            getattr(ticket, "ticket_id", None),
+            exc,
+        )
+
+
 def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None):
     """
     Internal function to get AI response for a chat message.
@@ -733,6 +749,8 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
                     )
             except Exception:
                 pass
+
+        _sync_ticket_agent_response_from_chat(ticket, data)
         
         # Format response for chat - convert full analysis to conversational response
         solution = data.get('solution', {})
