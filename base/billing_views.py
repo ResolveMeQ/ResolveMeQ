@@ -165,6 +165,9 @@ class CurrentSubscriptionView(GenericAPIView):
                 sub.status = Subscription.Status.TRIAL
                 sub.trial_ends_at = timezone.now() + timedelta(days=14)
                 sub.save(update_fields=['plan', 'status', 'trial_ends_at', 'updated_at'])
+                from base.billing.subscription_notifications import maybe_notify_trial_started
+
+                maybe_notify_trial_started(sub)
         # Best-effort: sync subscription period/status from gateway on read.
         # This prevents stale `current_period_end` when webhooks are delayed/missed.
         try:
@@ -199,6 +202,9 @@ class CurrentSubscriptionView(GenericAPIView):
                 sub.status = Subscription.Status.TRIAL
                 sub.trial_ends_at = timezone.now() + timedelta(days=14)
                 sub.save(update_fields=['plan', 'status', 'trial_ends_at', 'updated_at'])
+                from base.billing.subscription_notifications import maybe_notify_trial_started
+
+                maybe_notify_trial_started(sub)
         plan_id = request.data.get('plan')
         if plan_id is not None:
             plan = Plan.objects.filter(id=plan_id, is_active=True).first()

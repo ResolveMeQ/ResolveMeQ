@@ -1,5 +1,6 @@
 """
-Subscription lifecycle emails and in-app notifications (subscribe, renew, expiring, expired).
+Subscription lifecycle emails and in-app notifications
+(subscribe, trial start, renew, expiring, expired, payment failed).
 """
 from __future__ import annotations
 
@@ -192,14 +193,102 @@ def notify_subscription_renewed(sub, *, period_end: datetime) -> bool:
     sub.subscription_renewed_notified_period_end = period_end
     sub.subscription_expired_notified_at = None
     sub.subscription_expiring_notified_for_end = None
+    sub.subscription_past_due_notified_for_period_end = None
     sub.save(
         update_fields=[
             "subscription_renewed_notified_period_end",
             "subscription_expired_notified_at",
             "subscription_expiring_notified_for_end",
+            "subscription_past_due_notified_for_period_end",
             "updated_at",
         ]
     )
+    return True
+
+
+def maybe_notify_trial_started(sub) -> bool:
+    """Signup free trial (no Dodo checkout): email + in-app when trial is first assigned."""
+    user = sub.user
+    if not user.is_active or not user.email:
+        return False
+    if sub.subscription_trial_started_notified_at:
+        return False
+    if sub.status != sub.Status.TRIAL:
+        return False
+    if (sub.gateway_subscription_id or "").strip():
+        return False
+    if not sub.trial_ends_at or not sub.plan_id:
+        return False
+
+    ctx = _billing_email_context(user, sub)
+    app_name = ctx["app_name"]
+    days = max(1, (sub.trial_ends_at - timezone.now()).days)
+    ctx["trial_detail"] = (
+        f'Your free trial on "{ctx["plan_name"]}" is now active. '
+        f'You have {days} day{"s" if days != 1 else ""} to explore ResolveMeQ.'
+    )
+
+    _send_billing_email(
+        user,
+        subject=f"{app_name}: your free trial has started",
+        template="subscription_trial_started.html",
+        context=ctx,
+    )
+    from base.models import InAppNotification
+
+    _create_in_app(
+        user,
+        ntype=InAppNotification.Type.SUCCESS,
+        title="Free trial started",
+        message=ctx["trial_detail"],
+    )
+
+    now = timezone.now()
+    sub.subscription_trial_started_notified_at = now
+    sub.save(update_fields=["subscription_trial_started_notified_at", "updated_at"])
+    return True
+
+
+def notify_subscription_past_due(sub) -> bool:
+    """Payment failed / subscription on hold at the gateway (Dodo on_hold / failed)."""
+    user = sub.user
+    if not user.is_active or not user.email:
+        return False
+    if sub.status != sub.Status.PAST_DUE:
+        return False
+    if not (sub.gateway_subscription_id or "").strip():
+        return False
+    period_end = sub.current_period_end
+    if not period_end:
+        logger.debug("Past-due notify skipped: no current_period_end for sub %s", sub.pk)
+        return False
+    if sub.subscription_past_due_notified_for_period_end == period_end:
+        return False
+
+    ctx = _billing_email_context(user, sub)
+    app_name = ctx["app_name"]
+    ctx["past_due_detail"] = (
+        f'We could not process payment for your "{ctx["plan_name"]}" subscription. '
+        "Update your payment method to avoid losing access."
+    )
+
+    _send_billing_email(
+        user,
+        subject=f"{app_name}: payment failed — action required",
+        template="subscription_past_due.html",
+        context=ctx,
+    )
+    from base.models import InAppNotification
+
+    _create_in_app(
+        user,
+        ntype=InAppNotification.Type.WARNING,
+        title="Payment failed",
+        message=ctx["past_due_detail"],
+    )
+
+    sub.subscription_past_due_notified_for_period_end = period_end
+    sub.save(update_fields=["subscription_past_due_notified_for_period_end", "updated_at"])
     return True
 
 
@@ -251,7 +340,8 @@ def notify_subscription_expiring_soon(sub, *, ends_at: datetime, days_remaining:
 
 def handle_subscription_sync_notifications(sub, *, before: SubscriptionSnapshot) -> None:
     """
-    After Dodo subscription webhook sync: welcome on first link, renewal when period extends.
+    After Dodo subscription webhook sync: welcome on first link, renewal when period extends,
+    past-due when payment fails.
     """
     after = snapshot_subscription(sub)
     had_gateway = bool(before.gateway_subscription_id)
@@ -261,7 +351,22 @@ def handle_subscription_sync_notifications(sub, *, before: SubscriptionSnapshot)
         if after.status in (sub.Status.ACTIVE, sub.Status.TRIAL) and after.plan_id:
             if not had_gateway or before.status not in (sub.Status.ACTIVE, sub.Status.TRIAL):
                 notify_subscription_welcome(sub)
-                return
+
+    if (
+        after.status == sub.Status.ACTIVE
+        and before.status == sub.Status.PAST_DUE
+        and has_gateway
+        and sub.subscription_past_due_notified_for_period_end is not None
+    ):
+        sub.subscription_past_due_notified_for_period_end = None
+        sub.save(update_fields=["subscription_past_due_notified_for_period_end", "updated_at"])
+
+    if (
+        after.status == sub.Status.PAST_DUE
+        and before.status != sub.Status.PAST_DUE
+        and has_gateway
+    ):
+        notify_subscription_past_due(sub)
 
     if (
         after.status == sub.Status.ACTIVE

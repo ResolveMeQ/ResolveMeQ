@@ -98,7 +98,6 @@ class UserAdmin(BaseUserAdmin):
         (None, {'fields': ('email', 'password')}),
         ('Personal Info', {'fields': ('first_name','username', 'last_name')}),
         ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'is_verified', 'is_platform_agent', 'secure_code')}),
-        ('Active Bar', {'fields': ('status',)})
     )
 
     add_fieldsets = (
@@ -299,8 +298,10 @@ class SubscriptionAdmin(admin.ModelAdmin):
             {
                 'fields': (
                     'subscription_welcome_notified_at',
+                    'subscription_trial_started_notified_at',
                     'subscription_renewed_notified_period_end',
                     'subscription_expiring_notified_for_end',
+                    'subscription_past_due_notified_for_period_end',
                     'subscription_expired_notified_at',
                 ),
                 'description': 'Timestamps for billing lifecycle emails and in-app notices.',

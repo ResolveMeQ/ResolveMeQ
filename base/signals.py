@@ -46,6 +46,15 @@ def create_trial_subscription(sender, instance, created, **kwargs):
                 status=Subscription.Status.TRIAL,
                 trial_ends_at=timezone.now() + timedelta(days=14),
             )
+            sub = (
+                Subscription.objects.select_related("user", "plan")
+                .filter(user=instance)
+                .first()
+            )
+            if sub:
+                from base.billing.subscription_notifications import maybe_notify_trial_started
+
+                maybe_notify_trial_started(sub)
         except Exception as e:
             logger.error("Error creating trial subscription for user %s: %s", instance.id, e)
 

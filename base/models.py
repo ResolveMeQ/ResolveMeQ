@@ -857,6 +857,16 @@ class Subscription(models.Model):
         blank=True,
         help_text=_('Trial or period end date we sent an expiring-soon reminder for.'),
     )
+    subscription_trial_started_notified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_('When we sent the free-trial-started notice (signup trial only).'),
+    )
+    subscription_past_due_notified_for_period_end = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_('Billing period end we last sent a payment-failed / past-due notice for.'),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

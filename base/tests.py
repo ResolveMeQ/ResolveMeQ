@@ -104,11 +104,30 @@ class ApplyDodoSubscriptionPayloadTests(TestCase):
 
     @patch('base.billing.subscription_notifications.dispatch_send_email_with_template')
     def test_maps_dodo_status_on_hold_to_past_due(self, mock_dispatch):
+        now = timezone.now()
         with transaction.atomic():
-            ok = apply_dodo_subscription_payload(self._payload(status='on_hold'))
+            ok = apply_dodo_subscription_payload(
+                self._payload(
+                    status='active',
+                    next_billing_date=now + timedelta(days=30),
+                )
+            )
+        self.assertTrue(ok)
+        with transaction.atomic():
+            ok = apply_dodo_subscription_payload(
+                self._payload(
+                    status='on_hold',
+                    next_billing_date=now + timedelta(days=30),
+                )
+            )
         self.assertTrue(ok)
         sub = Subscription.objects.get(user=self.user)
         self.assertEqual(sub.status, Subscription.Status.PAST_DUE)
+        self.assertIsNotNone(sub.subscription_past_due_notified_for_period_end)
+        mock_dispatch.assert_called()
+        self.assertTrue(
+            InAppNotification.objects.filter(user=self.user, title='Payment failed').exists()
+        )
 
     def test_returns_false_when_user_cannot_be_resolved(self):
         with transaction.atomic():
@@ -539,3 +558,87 @@ class SubscriptionBillingNotificationTests(TestCase):
         self.assertTrue(
             InAppNotification.objects.filter(user=self.user, title='Subscription no longer active').exists()
         )
+
+    @patch('base.billing.subscription_notifications.dispatch_send_email_with_template')
+    def test_trial_started_email_and_in_app(self, mock_dispatch):
+        trial_plan = Plan.objects.create(
+            name='Trial Notify',
+            slug='trial-notify-test',
+            is_trial=True,
+            max_teams=3,
+            max_members=5,
+        )
+        sub = Subscription.objects.create(
+            user=self.user,
+            plan=trial_plan,
+            status=Subscription.Status.TRIAL,
+            trial_ends_at=timezone.now() + timedelta(days=14),
+        )
+        from base.billing.subscription_notifications import maybe_notify_trial_started
+
+        self.assertTrue(maybe_notify_trial_started(sub))
+        sub.refresh_from_db()
+        self.assertIsNotNone(sub.subscription_trial_started_notified_at)
+        mock_dispatch.assert_called()
+        self.assertTrue(
+            InAppNotification.objects.filter(user=self.user, title='Free trial started').exists()
+        )
+
+    @patch('base.billing.subscription_notifications.dispatch_send_email_with_template')
+    def test_trial_started_dedup(self, mock_dispatch):
+        trial_plan = Plan.objects.create(
+            name='Trial Dedup',
+            slug='trial-dedup-test',
+            is_trial=True,
+            max_teams=3,
+            max_members=5,
+        )
+        sub = Subscription.objects.create(
+            user=self.user,
+            plan=trial_plan,
+            status=Subscription.Status.TRIAL,
+            trial_ends_at=timezone.now() + timedelta(days=14),
+            subscription_trial_started_notified_at=timezone.now(),
+        )
+        from base.billing.subscription_notifications import maybe_notify_trial_started
+
+        self.assertFalse(maybe_notify_trial_started(sub))
+        mock_dispatch.assert_not_called()
+
+    @patch('base.billing.subscription_notifications.dispatch_send_email_with_template')
+    def test_past_due_on_status_transition(self, mock_dispatch):
+        now = timezone.now()
+        sub = self._sub(
+            subscription_welcome_notified_at=now,
+            current_period_end=now + timedelta(days=30),
+        )
+        from base.billing.subscription_notifications import (
+            handle_subscription_sync_notifications,
+            snapshot_subscription,
+        )
+
+        before = snapshot_subscription(sub)
+        sub.status = Subscription.Status.PAST_DUE
+        sub.save(update_fields=['status', 'updated_at'])
+        handle_subscription_sync_notifications(sub, before=before)
+        sub.refresh_from_db()
+        self.assertEqual(sub.subscription_past_due_notified_for_period_end, sub.current_period_end)
+        mock_dispatch.assert_called()
+        self.assertTrue(
+            InAppNotification.objects.filter(user=self.user, title='Payment failed').exists()
+        )
+
+    @patch('base.billing.subscription_notifications.dispatch_send_email_with_template')
+    def test_past_due_dedup_same_period(self, mock_dispatch):
+        now = timezone.now()
+        period_end = now + timedelta(days=30)
+        sub = self._sub(
+            status=Subscription.Status.PAST_DUE,
+            subscription_welcome_notified_at=now,
+            current_period_end=period_end,
+            subscription_past_due_notified_for_period_end=period_end,
+        )
+        from base.billing.subscription_notifications import notify_subscription_past_due
+
+        self.assertFalse(notify_subscription_past_due(sub))
+        mock_dispatch.assert_not_called()
