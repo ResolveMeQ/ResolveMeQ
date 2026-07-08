@@ -1,14 +1,26 @@
 """Live SEO feeds (sitemap, RSS) generated from the database on every request."""
 from __future__ import annotations
 
+import os
 from datetime import date, datetime, timezone as dt_timezone
 from email.utils import format_datetime
 from typing import List, Optional, Tuple
 from xml.sax.saxutils import escape
 
 from django.conf import settings
+from django.core.exceptions import DisallowedHost
 from django.utils import timezone
 from django.utils.text import slugify
+
+
+def _request_host(request) -> str:
+    """Host header without raising DisallowedHost (safe for tests and proxies)."""
+    if request is None:
+        return ""
+    try:
+        return (request.get_host() or "").lower()
+    except DisallowedHost:
+        return (request.META.get("HTTP_HOST") or "").lower()
 
 
 def get_public_site_urls(request) -> Tuple[str, str]:
@@ -23,10 +35,16 @@ def get_public_site_urls(request) -> Tuple[str, str]:
     app_base = (getattr(settings, "PUBLIC_APP_URL", "") or default_app).rstrip("/")
     marketing_base = (getattr(settings, "PUBLIC_MARKETING_URL", "") or default_marketing).rstrip("/")
 
-    host = (request.get_host() or "").lower()
-    if not getattr(settings, "PUBLIC_APP_URL", "") and "localhost" in host:
+    if request is None:
+        return app_base, marketing_base
+
+    # Production/staging: when PUBLIC_* are set in the environment, never derive from Host.
+    if os.getenv("PUBLIC_APP_URL", "").strip() or os.getenv("PUBLIC_MARKETING_URL", "").strip():
+        return app_base, marketing_base
+
+    host = _request_host(request)
+    if "localhost" in host or "127.0.0.1" in host:
         app_base = request.build_absolute_uri("/").rstrip("/")
-    if not getattr(settings, "PUBLIC_MARKETING_URL", "") and "localhost" in host:
         marketing_base = request.build_absolute_uri("/").rstrip("/")
 
     return app_base, marketing_base

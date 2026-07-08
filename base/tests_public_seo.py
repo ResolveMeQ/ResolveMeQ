@@ -21,7 +21,7 @@ class LiveSitemapTest(TestCase):
         self.factory = RequestFactory()
 
     def test_sitemap_includes_blog_url(self):
-        request = self.factory.get("/sitemap.xml", HTTP_HOST="api.resolvemeq.net")
+        request = self.factory.get("/sitemap.xml", HTTP_HOST="testserver")
         response = public_sitemap_xml(request)
         self.assertEqual(response.status_code, 200)
         self.assertIn("application/xml", response["Content-Type"])
@@ -34,7 +34,7 @@ class LiveSitemapTest(TestCase):
         self.assertIn("https://app.resolvemeq.net/knowledge-base", xml)
 
     def test_rss_includes_blog_item(self):
-        request = self.factory.get("/rss.xml", HTTP_HOST="api.resolvemeq.net")
+        request = self.factory.get("/rss.xml", HTTP_HOST="testserver")
         response = public_blog_rss_xml(request)
         self.assertEqual(response.status_code, 200)
         body = response.content.decode()
