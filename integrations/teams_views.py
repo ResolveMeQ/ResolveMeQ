@@ -191,6 +191,40 @@ def _send(ticket_id, activity: dict) -> bool:
     return True
 
 
+def _send_to_user_on_team(user, team, activity: dict) -> bool:
+    if not team:
+        return False
+    resolved = teams_bot.teams_conversation_for_user(user)
+    if not resolved:
+        return False
+    service_url, conversation_id = resolved
+    result = teams_bot.teams_api_post_activity(service_url, conversation_id, activity)
+    return result is not None
+
+
+def notify_workflow_step_active(workflow, step):
+    """Teams DM to team members when a workflow step becomes active."""
+    team = getattr(workflow, "team", None)
+    if not team:
+        return
+    from workflows.notifications import _team_recipients
+
+    template_name = workflow.template.name if workflow.template_id else "Workflow"
+    if workflow.ticket_id:
+        context = f"Linked to ticket #{workflow.ticket_id}."
+    else:
+        context = "Open Workflows in ResolveMeQ to claim it."
+    due_line = ""
+    if getattr(step, "due_at", None):
+        due_line = f" Due by {step.due_at.strftime('%b %d, %Y %H:%M UTC')}."
+    text = (
+        f"New workflow step ready: \"{step.title}\" in {template_name} needs attention. "
+        f"{context}{due_line}"
+    )
+    for user in _team_recipients(team):
+        _send_to_user_on_team(user, team, _text_activity(text))
+
+
 # ---------------------------------------------------------------------------
 # Outbound notifications -- one per Slack counterpart (integrations/views.py)
 # ---------------------------------------------------------------------------

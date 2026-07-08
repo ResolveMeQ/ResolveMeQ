@@ -87,3 +87,11 @@ def notify_ticket_reporter_message(ticket, *, title: str, body: str, actor_name:
     _safe("slack", "reporter_message", slack_inst.notify_ticket_reporter_message,
           ticket, title=title, body=body, actor_name=actor_name)
     _safe("teams", "reporter_message", _teams, ticket, title=title, body=body, actor_name=actor_name)
+
+
+def notify_workflow_step_active(workflow, step):
+    from integrations import slack_installation as slack_inst
+    from integrations.teams_views import notify_workflow_step_active as _teams
+
+    _safe("slack", "workflow_step", slack_inst.notify_workflow_step_active, workflow, step)
+    _safe("teams", "workflow_step", _teams, workflow, step)

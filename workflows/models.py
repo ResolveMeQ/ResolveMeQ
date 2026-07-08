@@ -33,8 +33,9 @@ class WorkflowTemplate(models.Model):
     )
     steps = models.JSONField(
         default=list,
-        help_text='[{"title": "...", "description": "...", "assignee_team": "IT Support"}, ...] '
-                  "in order -- a flat list is enough for v1's strictly-sequential, no-branching shape.",
+        help_text='[{"title": "...", "description": "...", "assignee_team": "IT Support", "due_days": 2}, ...] '
+                  "in order -- a flat list is enough for v1's strictly-sequential, no-branching shape. "
+                  "Optional due_days (default 2) sets step due_at when the step becomes active.",
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -97,6 +98,11 @@ class WorkflowStep(models.Model):
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name="claimed_workflow_steps"
     )
     completed_at = models.DateTimeField(null=True, blank=True)
+    due_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Set when this step becomes active; derived from template due_days.",
+    )
     auto_complete = models.BooleanField(
         default=False,
         help_text="Copied from the template at creation time. If set, this step is marked done "

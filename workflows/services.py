@@ -2,9 +2,28 @@
 Shared workflow instantiation, used by both the manual "start workflow" endpoint
 and the automatic ticket-creation trigger (tickets/services.py).
 """
+from datetime import timedelta
+
 from django.utils import timezone
 
 from .models import Workflow, WorkflowStep, WorkflowTemplate
+
+DEFAULT_STEP_DUE_DAYS = 2
+
+
+def _step_due_days_from_template(workflow, order_index: int) -> int:
+    template = workflow.template
+    if not template:
+        return DEFAULT_STEP_DUE_DAYS
+    steps = template.steps or []
+    if order_index < 0 or order_index >= len(steps):
+        return DEFAULT_STEP_DUE_DAYS
+    raw = steps[order_index].get("due_days", DEFAULT_STEP_DUE_DAYS)
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        days = DEFAULT_STEP_DUE_DAYS
+    return max(0, days)
 
 
 def _resolve_auto_assign(kind, workflow):
@@ -31,7 +50,10 @@ def _activate_next_steps(workflow):
         next_step.status = "active"
         if next_step.auto_assign:
             next_step.claimed_by = _resolve_auto_assign(next_step.auto_assign, workflow)
-        next_step.save(update_fields=["status", "claimed_by"])
+        due_days = _step_due_days_from_template(workflow, next_step.order_index)
+        if due_days > 0:
+            next_step.due_at = timezone.now() + timedelta(days=due_days)
+        next_step.save(update_fields=["status", "claimed_by", "due_at"])
 
         if next_step.auto_complete:
             next_step.status = "done"

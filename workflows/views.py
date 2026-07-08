@@ -15,7 +15,17 @@ from .scoping import user_can_access_workflow, workflows_queryset_for_user
 from .services import _activate_next_steps, start_workflow
 
 
-def _step_to_dict(step):
+def _step_is_overdue(step, now=None):
+    now = now or timezone.now()
+    return (
+        step.status == "active"
+        and step.due_at is not None
+        and step.due_at < now
+    )
+
+
+def _step_to_dict(step, now=None):
+    now = now or timezone.now()
     return {
         "id": step.id,
         "order_index": step.order_index,
@@ -23,6 +33,8 @@ def _step_to_dict(step):
         "description": step.description,
         "assignee_team": step.assignee_team,
         "status": step.status,
+        "due_at": step.due_at,
+        "is_overdue": _step_is_overdue(step, now),
         "claimed_by": step.claimed_by_id and {
             "id": str(step.claimed_by_id),
             "name": step.claimed_by.get_full_name() or step.claimed_by.email or step.claimed_by.username,
@@ -31,8 +43,10 @@ def _step_to_dict(step):
     }
 
 
-def _workflow_to_dict(workflow):
+def _workflow_to_dict(workflow, now=None):
+    now = now or timezone.now()
     steps = list(workflow.steps.all())
+    overdue_count = sum(1 for s in steps if _step_is_overdue(s, now))
     return {
         "id": str(workflow.id),
         "status": workflow.status,
@@ -43,9 +57,11 @@ def _workflow_to_dict(workflow):
             workflow.started_by.get_full_name() or workflow.started_by.email or workflow.started_by.username
         ),
         "created_at": workflow.created_at,
-        "steps": [_step_to_dict(s) for s in steps],
+        "steps": [_step_to_dict(s, now) for s in steps],
         "steps_done": sum(1 for s in steps if s.status == "done"),
         "steps_total": len(steps),
+        "overdue_step_count": overdue_count,
+        "has_overdue": overdue_count > 0,
     }
 
 
@@ -61,7 +77,11 @@ def workflow_list_create(request):
         ticket_id = request.query_params.get("ticket")
         if ticket_id:
             qs = qs.filter(ticket_id=ticket_id)
-        return Response({"workflows": [_workflow_to_dict(w) for w in qs.order_by("-created_at")]})
+        if request.query_params.get("overdue") == "1":
+            now = timezone.now()
+            qs = qs.filter(steps__status="active", steps__due_at__lt=now).distinct()
+        now = timezone.now()
+        return Response({"workflows": [_workflow_to_dict(w, now) for w in qs.order_by("-created_at")]})
 
     template_id = request.data.get("template_id")
     if not template_id:

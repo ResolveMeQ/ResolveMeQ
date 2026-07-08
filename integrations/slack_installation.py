@@ -178,6 +178,12 @@ def get_installation_for_ticket(ticket) -> SlackToken | None:
     team = getattr(ticket, "team", None)
     if team is None:
         return legacy_installation_fallback()
+    return get_installation_for_team(team)
+
+
+def get_installation_for_team(team) -> SlackToken | None:
+    if team is None:
+        return legacy_installation_fallback()
     inst = (
         SlackToken.objects.filter(resolvemeq_team=team, is_active=True)
         .select_related("resolvemeq_team", "installed_by")
@@ -399,10 +405,49 @@ def post_dm_for_ticket(ticket, *, text: str, blocks=None, thread_ts: str | None 
     inst, channel = install_and_dm_for_ticket(ticket)
     if not inst or not channel:
         return False
+    use_thread = (thread_ts or getattr(ticket, "slack_thread_ts", None) or "").strip()
+    ok, message_ts = _post_slack_dm(
+        inst, channel, text=text, blocks=blocks, thread_ts=use_thread or None
+    )
+    if ok and not use_thread and message_ts:
+        persist_slack_thread_ts(ticket, message_ts)
+    return ok
+
+
+def _open_dm_channel(inst, slack_user_or_channel: str) -> str | None:
+    slack_user_or_channel = _normalize_slack_channel_id(slack_user_or_channel)
+    if not inst or not slack_user_or_channel:
+        return None
+    if slack_user_or_channel.startswith(("D", "C", "G")):
+        return slack_user_or_channel
+    dm_resp = slack_api_post(inst, "conversations.open", {"users": slack_user_or_channel})
+    if not dm_resp:
+        return slack_user_or_channel
+    try:
+        dm_data = dm_resp.json()
+    except Exception:
+        dm_data = {}
+    if dm_data.get("ok") and isinstance(dm_data.get("channel"), dict):
+        dm_channel_id = (dm_data["channel"].get("id") or "").strip()
+        if dm_channel_id:
+            return dm_channel_id
+    return slack_user_or_channel
+
+
+def _post_slack_dm(
+    inst: SlackToken | None,
+    channel: str,
+    *,
+    text: str,
+    blocks=None,
+    thread_ts: str | None = None,
+) -> tuple[bool, str | None]:
+    if not inst or not channel:
+        return False, None
     payload: dict[str, Any] = {"channel": channel, "text": text}
     if blocks:
         payload["blocks"] = blocks
-    use_thread = (thread_ts or getattr(ticket, "slack_thread_ts", None) or "").strip()
+    use_thread = (thread_ts or "").strip()
     if use_thread:
         payload["thread_ts"] = use_thread
     resp = slack_api_post(inst, "chat.postMessage", payload)
@@ -411,15 +456,50 @@ def post_dm_for_ticket(ticket, *, text: str, blocks=None, thread_ts: str | None 
     except Exception:
         data = {}
     if data.get("ok"):
-        if not use_thread and data.get("ts"):
-            persist_slack_thread_ts(ticket, data.get("ts"))
-        return True
+        return True, data.get("ts")
     logger.warning(
-        "Slack DM failed for ticket %s: %s",
-        getattr(ticket, "ticket_id", "?"),
+        "Slack DM failed for channel %s: %s",
+        channel,
         data.get("error") or getattr(resp, "text", resp),
     )
-    return False
+    return False, None
+
+
+def post_dm_for_user_on_team(user, team, *, text: str, blocks=None) -> bool:
+    """Post a DM to a ResolveMeQ user when their workspace has Slack connected."""
+    if not user_can_receive_slack_dm(user):
+        return False
+    inst = get_installation_for_team(team)
+    slack_user = slack_dm_channel_for_user(user)
+    channel = _open_dm_channel(inst, slack_user) if slack_user else None
+    if not channel:
+        return False
+    ok, _ = _post_slack_dm(inst, channel, text=text, blocks=blocks)
+    return ok
+
+
+def notify_workflow_step_active(workflow, step) -> None:
+    """DM each team member who can receive Slack when a workflow step becomes active."""
+    team = getattr(workflow, "team", None)
+    if not team:
+        return
+    from workflows.notifications import _team_recipients
+
+    template_name = workflow.template.name if workflow.template_id else "Workflow"
+    if workflow.ticket_id:
+        context = f"Linked to ticket #{workflow.ticket_id}."
+    else:
+        context = "Open Workflows in ResolveMeQ to claim it."
+    due_line = ""
+    if getattr(step, "due_at", None):
+        due_line = f"\nDue by {step.due_at.strftime('%b %d, %Y %H:%M UTC')}."
+    text = (
+        f"*New workflow step ready*\n"
+        f"\"{step.title}\" in *{template_name}* needs attention.\n"
+        f"{context}{due_line}"
+    )
+    for user in _team_recipients(team):
+        post_dm_for_user_on_team(user, team, text=text)
 
 
 def notify_ticket_reporter_message(ticket, *, title: str, body: str, actor_name: str = "") -> bool:

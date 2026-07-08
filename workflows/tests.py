@@ -297,3 +297,51 @@ class WorkflowAutomationTest(TestCase):
         workflow = start_workflow(template=template, ticket=ticket, team=self.team, started_by=self.owner)
         step = workflow.steps.get(order_index=0)
         self.assertEqual(step.claimed_by_id, requester.id)
+
+
+class WorkflowDueDateTest(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="due1", email="due1@example.com", password="pw")
+        self.team = Team.objects.create(name="Due Co", owner=self.owner)
+        self.team.members.add(self.owner)
+        _set_active_team(self.owner, self.team)
+        self.client = APIClient()
+        self.client.force_authenticate(self.owner)
+
+    def test_active_step_gets_due_at_from_template(self):
+        template = WorkflowTemplate.objects.create(
+            name="Due template",
+            trigger_category="",
+            team=None,
+            steps=[{"title": "Step A", "description": "", "assignee_team": "IT", "due_days": 3}],
+        )
+        workflow = start_workflow(template=template, team=self.team, started_by=self.owner)
+        step = workflow.steps.get(order_index=0)
+        self.assertEqual(step.status, "active")
+        self.assertIsNotNone(step.due_at)
+
+    def test_overdue_flag_in_api(self):
+        from django.utils import timezone
+        from datetime import timedelta
+
+        template = WorkflowTemplate.objects.create(
+            name="Overdue template",
+            trigger_category="",
+            team=None,
+            steps=[{"title": "Late step", "description": "", "assignee_team": "IT", "due_days": 1}],
+        )
+        workflow = start_workflow(template=template, team=self.team, started_by=self.owner)
+        step = workflow.steps.get(order_index=0)
+        step.due_at = timezone.now() - timedelta(hours=1)
+        step.save(update_fields=["due_at"])
+
+        response = self.client.get("/api/workflows/")
+        self.assertEqual(response.status_code, 200)
+        wf = next(w for w in response.data["workflows"] if w["id"] == str(workflow.id))
+        self.assertTrue(wf["has_overdue"])
+        self.assertEqual(wf["overdue_step_count"], 1)
+        self.assertTrue(wf["steps"][0]["is_overdue"])
+
+        filtered = self.client.get("/api/workflows/?overdue=1")
+        ids = [w["id"] for w in filtered.data["workflows"]]
+        self.assertIn(str(workflow.id), ids)

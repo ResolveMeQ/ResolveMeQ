@@ -255,9 +255,15 @@ def outcome_metrics(request):
     Outcome metrics for visible tickets: time to first AI, deflection-style rates, per-team breakdown.
     """
     from .outcome_metrics import compute_outcome_metrics
+    from workflows.scoping import workflows_queryset_for_user
 
     base_qs = _tickets_for_user(request)
-    return Response(compute_outcome_metrics(base_qs))
+    payload = compute_outcome_metrics(base_qs)
+    payload["escalated_count"] = base_qs.filter(escalated_at__isnull=False).count()
+    wf_qs = workflows_queryset_for_user(request.user)
+    payload["workflows_completed_count"] = wf_qs.filter(status="completed").count()
+    payload["workflows_in_progress_count"] = wf_qs.filter(status="in_progress").count()
+    return Response(payload)
 
 
 @api_view(['POST'])
