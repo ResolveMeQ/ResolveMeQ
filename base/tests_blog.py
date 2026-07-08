@@ -143,8 +143,9 @@ class SeedStaticBlogPostsTest(TestCase):
         BlogPost.objects.filter(slug="how-ai-transforms-it-support").update(title="Stale title")
         created, updated, skipped = import_static_blog_posts(force=True)
         self.assertEqual(created, 0)
-        self.assertEqual(updated, 1)
-        self.assertEqual(skipped, 4)
+        # --force refreshes every existing slug from seed data, not only changed rows.
+        self.assertEqual(updated, 5)
+        self.assertEqual(skipped, 0)
         post = BlogPost.objects.get(slug="how-ai-transforms-it-support")
         self.assertEqual(post.title, "How AI Is Transforming IT Support in 2025")
 
