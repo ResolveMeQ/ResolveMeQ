@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from base.models import Team, UserPreferences
+from base.models import InAppNotification, Team, UserPreferences
 from tickets.models import Ticket
 from tickets.services import create_ticket_with_reporter
 
@@ -51,6 +51,28 @@ class WorkflowTriggerTest(TestCase):
             self.user, self.team, issue_type="Wifi down", category="wifi",
         )
         self.assertFalse(Workflow.objects.filter(ticket=ticket).exists())
+
+    def test_onboarding_category_matches_onboarding_template_not_provisioning(self):
+        onboarding_template = WorkflowTemplate.objects.create(
+            name="Onboarding", trigger_category="onboarding", team=None,
+            steps=[{"title": "Provision accounts", "description": "", "assignee_team": "IT"}],
+        )
+        ticket = create_ticket_with_reporter(
+            self.user, self.team, issue_type="New hire starting Monday", category="onboarding",
+        )
+        workflow = Workflow.objects.get(ticket=ticket)
+        self.assertEqual(workflow.template_id, onboarding_template.id)
+
+    def test_offboarding_category_matches_offboarding_template(self):
+        offboarding_template = WorkflowTemplate.objects.create(
+            name="Offboarding", trigger_category="offboarding", team=None,
+            steps=[{"title": "Revoke access", "description": "", "assignee_team": "IT"}],
+        )
+        ticket = create_ticket_with_reporter(
+            self.user, self.team, issue_type="Employee leaving", category="offboarding",
+        )
+        workflow = Workflow.objects.get(ticket=ticket)
+        self.assertEqual(workflow.template_id, offboarding_template.id)
 
     def test_team_specific_template_preferred_over_global(self):
         team_template = WorkflowTemplate.objects.create(
@@ -144,3 +166,61 @@ class WorkflowScopingTest(TestCase):
         workflow = start_workflow(template=self.template, ticket=ticket, team=self.team, started_by=self.owner)
         self.assertTrue(user_can_access_workflow(self.owner, workflow))
         self.assertFalse(user_can_access_workflow(self.other_owner, workflow))
+
+
+class WorkflowNotificationTest(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="notify1", email="notify1@example.com", password="pw")
+        self.member = User.objects.create_user(username="notify2", email="notify2@example.com", password="pw")
+        self.team = Team.objects.create(name="Notify Co", owner=self.owner)
+        self.team.members.add(self.owner, self.member)
+        _set_active_team(self.owner, self.team)
+        self.client = APIClient()
+        self.client.force_authenticate(self.owner)
+
+    def test_starting_a_workflow_notifies_team_members(self):
+        template = WorkflowTemplate.objects.create(
+            name="Onboarding", trigger_category="", team=None,
+            steps=[{"title": "Step A", "description": "", "assignee_team": "IT"}],
+        )
+        start_workflow(template=template, team=self.team, started_by=self.owner)
+        self.assertEqual(
+            InAppNotification.objects.filter(user__in=[self.owner, self.member], title="New workflow step").count(),
+            2,
+        )
+
+    def test_completing_a_step_notifies_team_about_the_next_one(self):
+        template = WorkflowTemplate.objects.create(
+            name="Two-step", trigger_category="", team=None,
+            steps=[
+                {"title": "First", "description": "", "assignee_team": "IT"},
+                {"title": "Second", "description": "", "assignee_team": "IT"},
+            ],
+        )
+        workflow = start_workflow(template=template, team=self.team, started_by=self.owner)
+        InAppNotification.objects.all().delete()  # clear the "workflow started" notifications
+        first_step = workflow.steps.get(order_index=0)
+        self.client.post(f"/api/workflows/{workflow.id}/steps/{first_step.id}/complete/")
+        self.assertEqual(
+            InAppNotification.objects.filter(user__in=[self.owner, self.member], title="New workflow step").count(),
+            2,
+        )
+
+    def test_completing_last_step_notifies_ticket_requester_not_team(self):
+        requester = User.objects.create_user(username="req9", email="req9@example.com", password="pw")
+        ticket = Ticket.objects.create(
+            user=requester, team=self.team, issue_type="New laptop", category="provisioning", status="new",
+        )
+        template = WorkflowTemplate.objects.create(
+            name="One-step", trigger_category="", team=None,
+            steps=[{"title": "Only step", "description": "", "assignee_team": "IT"}],
+        )
+        InAppNotification.objects.all().delete()
+        workflow = start_workflow(template=template, ticket=ticket, team=self.team, started_by=self.owner)
+        InAppNotification.objects.all().delete()  # clear the "workflow started" notifications too
+        step = workflow.steps.get(order_index=0)
+        self.client.post(f"/api/workflows/{workflow.id}/steps/{step.id}/complete/")
+        self.assertTrue(
+            InAppNotification.objects.filter(user=requester, title="Your request is complete").exists()
+        )
+        self.assertFalse(InAppNotification.objects.filter(title="New workflow step").exists())

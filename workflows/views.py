@@ -10,6 +10,7 @@ from tickets.models import Ticket
 from tickets.scoping import active_team_id_for_user, user_can_access_ticket
 
 from .models import Workflow, WorkflowStep, WorkflowTemplate
+from .notifications import notify_requester_workflow_completed, notify_team_step_active
 from .scoping import user_can_access_workflow, workflows_queryset_for_user
 from .services import start_workflow
 
@@ -137,8 +138,16 @@ def complete_step(request, workflow_id, step_id):
     if next_step:
         next_step.status = "active"
         next_step.save(update_fields=["status"])
+        try:
+            notify_team_step_active(workflow, next_step)
+        except Exception:
+            pass
     else:
         workflow.status = "completed"
         workflow.save(update_fields=["status"])
+        try:
+            notify_requester_workflow_completed(workflow)
+        except Exception:
+            pass
 
     return Response({"workflow": _workflow_to_dict(workflow)})

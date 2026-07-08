@@ -33,6 +33,8 @@ class Ticket(models.Model):
         ("cloud", "Cloud"),
         ("storage", "Storage"),
         ("provisioning", "Provisioning"),
+        ("onboarding", "Onboarding"),
+        ("offboarding", "Offboarding"),
         ("other", "Other"),
     ]
     ticket_id = models.AutoField(primary_key=True)

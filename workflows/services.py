@@ -18,7 +18,7 @@ def start_workflow(*, template: WorkflowTemplate, ticket=None, team=None, starte
         started_by=started_by,
     )
     steps = template.steps or []
-    WorkflowStep.objects.bulk_create([
+    created_steps = WorkflowStep.objects.bulk_create([
         WorkflowStep(
             workflow=workflow,
             order_index=idx,
@@ -29,6 +29,13 @@ def start_workflow(*, template: WorkflowTemplate, ticket=None, team=None, starte
         )
         for idx, step in enumerate(steps)
     ])
+    if created_steps:
+        try:
+            from .notifications import notify_team_step_active
+
+            notify_team_step_active(workflow, created_steps[0])
+        except Exception:
+            pass
     return workflow
 
 
