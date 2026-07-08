@@ -2,14 +2,57 @@
 Shared workflow instantiation, used by both the manual "start workflow" endpoint
 and the automatic ticket-creation trigger (tickets/services.py).
 """
+from django.utils import timezone
+
 from .models import Workflow, WorkflowStep, WorkflowTemplate
+
+
+def _resolve_auto_assign(kind, workflow):
+    if kind == "started_by":
+        return workflow.started_by
+    if kind == "ticket_reporter" and workflow.ticket_id:
+        return workflow.ticket.user
+    return None
+
+
+def _activate_next_steps(workflow):
+    """
+    Activates the next pending step, resolving any chain of consecutive auto_complete
+    steps immediately, and applying auto_assign to the first real (human-actionable)
+    step it reaches. Returns True if the workflow is now fully completed.
+    """
+    while True:
+        next_step = workflow.steps.filter(status="pending").order_by("order_index").first()
+        if not next_step:
+            workflow.status = "completed"
+            workflow.save(update_fields=["status"])
+            return True
+
+        next_step.status = "active"
+        if next_step.auto_assign:
+            next_step.claimed_by = _resolve_auto_assign(next_step.auto_assign, workflow)
+        next_step.save(update_fields=["status", "claimed_by"])
+
+        if next_step.auto_complete:
+            next_step.status = "done"
+            next_step.completed_at = timezone.now()
+            next_step.save(update_fields=["status", "completed_at"])
+            continue  # keep advancing through the chain
+
+        try:
+            from .notifications import notify_team_step_active
+
+            notify_team_step_active(workflow, next_step)
+        except Exception:
+            pass
+        return False
 
 
 def start_workflow(*, template: WorkflowTemplate, ticket=None, team=None, started_by=None) -> Workflow:
     """
     Instantiate a Workflow + its WorkflowSteps from a template's `steps` JSON.
-    The first step starts `active`; everything after it starts `pending` --
-    that's the entire dependency model for v1 (strictly sequential, no DAG).
+    All steps start `pending`; _activate_next_steps resolves the first active one
+    (and any leading auto_complete chain) right after creation.
     """
     workflow = Workflow.objects.create(
         ticket=ticket,
@@ -18,24 +61,20 @@ def start_workflow(*, template: WorkflowTemplate, ticket=None, team=None, starte
         started_by=started_by,
     )
     steps = template.steps or []
-    created_steps = WorkflowStep.objects.bulk_create([
+    WorkflowStep.objects.bulk_create([
         WorkflowStep(
             workflow=workflow,
             order_index=idx,
             title=step.get("title", ""),
             description=step.get("description", ""),
             assignee_team=step.get("assignee_team", ""),
-            status="active" if idx == 0 else "pending",
+            auto_complete=bool(step.get("auto_complete", False)),
+            auto_assign=step.get("auto_assign", "") or "",
+            status="pending",
         )
         for idx, step in enumerate(steps)
     ])
-    if created_steps:
-        try:
-            from .notifications import notify_team_step_active
-
-            notify_team_step_active(workflow, created_steps[0])
-        except Exception:
-            pass
+    _activate_next_steps(workflow)
     return workflow
 
 

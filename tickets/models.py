@@ -35,6 +35,10 @@ class Ticket(models.Model):
         ("provisioning", "Provisioning"),
         ("onboarding", "Onboarding"),
         ("offboarding", "Offboarding"),
+        ("license_renewal", "License Renewal"),
+        ("office_move", "Office Move"),
+        ("contractor_access", "Contractor Access"),
+        ("hardware_retirement", "Hardware Retirement"),
         ("other", "Other"),
     ]
     ticket_id = models.AutoField(primary_key=True)

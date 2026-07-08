@@ -10,9 +10,9 @@ from tickets.models import Ticket
 from tickets.scoping import active_team_id_for_user, user_can_access_ticket
 
 from .models import Workflow, WorkflowStep, WorkflowTemplate
-from .notifications import notify_requester_workflow_completed, notify_team_step_active
+from .notifications import notify_requester_workflow_completed
 from .scoping import user_can_access_workflow, workflows_queryset_for_user
-from .services import start_workflow
+from .services import _activate_next_steps, start_workflow
 
 
 def _step_to_dict(step):
@@ -134,17 +134,8 @@ def complete_step(request, workflow_id, step_id):
     step.completed_at = timezone.now()
     step.save(update_fields=["status", "completed_at"])
 
-    next_step = workflow.steps.filter(status="pending").order_by("order_index").first()
-    if next_step:
-        next_step.status = "active"
-        next_step.save(update_fields=["status"])
-        try:
-            notify_team_step_active(workflow, next_step)
-        except Exception:
-            pass
-    else:
-        workflow.status = "completed"
-        workflow.save(update_fields=["status"])
+    completed_whole_workflow = _activate_next_steps(workflow)
+    if completed_whole_workflow:
         try:
             notify_requester_workflow_completed(workflow)
         except Exception:

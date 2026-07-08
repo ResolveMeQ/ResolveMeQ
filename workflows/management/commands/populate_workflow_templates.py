@@ -100,6 +100,132 @@ class Command(BaseCommand):
                     },
                 ],
             },
+            {
+                "name": "Software license renewal",
+                "trigger_category": "license_renewal",
+                "steps": [
+                    {
+                        "title": "Confirm renewal terms",
+                        "description": "Verify seat count, term length, and pricing with the vendor.",
+                        "assignee_team": "IT Support",
+                        "auto_assign": "started_by",
+                    },
+                    {
+                        "title": "Get budget approval",
+                        "description": "Confirm the renewal cost is approved before purchasing.",
+                        "assignee_team": "Finance",
+                    },
+                    {
+                        "title": "Renew or purchase license",
+                        "description": "Complete the renewal or purchase with the vendor.",
+                        "assignee_team": "IT Support",
+                    },
+                    {
+                        "title": "Notify affected users",
+                        "description": "Let current users know the renewal is complete and note any changes.",
+                        "assignee_team": "IT Support",
+                    },
+                    {
+                        "title": "Confirm access still works",
+                        "description": "Spot-check that existing users can still log in without interruption.",
+                        "assignee_team": "IT Support",
+                    },
+                ],
+            },
+            {
+                "name": "Office / desk move",
+                "trigger_category": "office_move",
+                "steps": [
+                    {
+                        "title": "Confirm new location/desk",
+                        "description": "Verify the new desk, room, or building with facilities.",
+                        "assignee_team": "Facilities",
+                    },
+                    {
+                        "title": "Update network/phone port",
+                        "description": "Ensure the new location has working network and phone connections.",
+                        "assignee_team": "IT Support",
+                    },
+                    {
+                        "title": "Move equipment",
+                        "description": "Relocate the desk, monitor, and any other hardware.",
+                        "assignee_team": "Facilities",
+                    },
+                    {
+                        "title": "Test connectivity",
+                        "description": "Confirm network, phone, and any peripherals work at the new location.",
+                        "assignee_team": "IT Support",
+                    },
+                    {
+                        "title": "Confirm employee is settled in",
+                        "description": "Check in that everything works and nothing was left behind.",
+                        "assignee_team": "IT Support",
+                    },
+                ],
+            },
+            {
+                "name": "Contractor access setup",
+                "trigger_category": "contractor_access",
+                "steps": [
+                    {
+                        "title": "Verify signed contractor agreement on file",
+                        "description": "Confirm the agreement/NDA is signed before granting any access.",
+                        "assignee_team": "HR",
+                    },
+                    {
+                        "title": "Provision limited-scope accounts",
+                        "description": "Create accounts scoped to only what the contractor needs.",
+                        "assignee_team": "IT Support",
+                    },
+                    {
+                        "title": "Assign temporary equipment",
+                        "description": "Assign a loaner device if the contractor needs one.",
+                        "assignee_team": "IT Support",
+                    },
+                    {
+                        "title": "Set access-expiration reminder",
+                        "description": "Log the contract end date so access gets revoked on time.",
+                        "assignee_team": "IT Support",
+                        "auto_complete": True,
+                    },
+                    {
+                        "title": "Confirm contractor can work",
+                        "description": "Verify the contractor can log in and access what they need.",
+                        "assignee_team": "IT Support",
+                    },
+                ],
+            },
+            {
+                "name": "Hardware retirement & disposal",
+                "trigger_category": "hardware_retirement",
+                "steps": [
+                    {
+                        "title": "Confirm device data wiped",
+                        "description": "Verify all data has been securely wiped before disposal.",
+                        "assignee_team": "IT Support",
+                    },
+                    {
+                        "title": "Deregister from device management",
+                        "description": "Remove the device from MDM/asset tracking.",
+                        "assignee_team": "IT Support",
+                    },
+                    {
+                        "title": "Physically collect device",
+                        "description": "Arrange pickup or drop-off of the retired device.",
+                        "assignee_team": "IT Support",
+                    },
+                    {
+                        "title": "Dispose or recycle per policy",
+                        "description": "Follow the company's e-waste/recycling policy for disposal.",
+                        "assignee_team": "Facilities",
+                    },
+                    {
+                        "title": "Confirm retirement logged",
+                        "description": "Record the device as retired in the asset register.",
+                        "assignee_team": "IT Support",
+                    },
+                ],
+            },
         ]
 
         created_count = 0

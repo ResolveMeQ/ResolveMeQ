@@ -224,3 +224,76 @@ class WorkflowNotificationTest(TestCase):
             InAppNotification.objects.filter(user=requester, title="Your request is complete").exists()
         )
         self.assertFalse(InAppNotification.objects.filter(title="New workflow step").exists())
+
+
+class WorkflowAutomationTest(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="auto1", email="auto1@example.com", password="pw")
+        self.team = Team.objects.create(name="Auto Co", owner=self.owner)
+        self.team.members.add(self.owner)
+        _set_active_team(self.owner, self.team)
+        self.client = APIClient()
+        self.client.force_authenticate(self.owner)
+
+    def test_leading_auto_complete_step_is_skipped_on_start(self):
+        template = WorkflowTemplate.objects.create(
+            name="Leading auto-complete", trigger_category="", team=None,
+            steps=[
+                {"title": "Auto step", "description": "", "assignee_team": "IT", "auto_complete": True},
+                {"title": "Real step", "description": "", "assignee_team": "IT"},
+            ],
+        )
+        workflow = start_workflow(template=template, team=self.team, started_by=self.owner)
+        steps = list(workflow.steps.order_by("order_index"))
+        self.assertEqual(steps[0].status, "done")
+        self.assertEqual(steps[1].status, "active")
+
+    def test_chain_of_auto_complete_steps_all_resolve_immediately(self):
+        template = WorkflowTemplate.objects.create(
+            name="Chain", trigger_category="", team=None,
+            steps=[
+                {"title": "A", "description": "", "assignee_team": "IT", "auto_complete": True},
+                {"title": "B", "description": "", "assignee_team": "IT", "auto_complete": True},
+                {"title": "C", "description": "", "assignee_team": "IT"},
+            ],
+        )
+        workflow = start_workflow(template=template, team=self.team, started_by=self.owner)
+        steps = list(workflow.steps.order_by("order_index"))
+        self.assertEqual(steps[0].status, "done")
+        self.assertEqual(steps[1].status, "done")
+        self.assertEqual(steps[2].status, "active")
+
+    def test_all_auto_complete_steps_completes_the_workflow(self):
+        template = WorkflowTemplate.objects.create(
+            name="All auto", trigger_category="", team=None,
+            steps=[
+                {"title": "A", "description": "", "assignee_team": "IT", "auto_complete": True},
+                {"title": "B", "description": "", "assignee_team": "IT", "auto_complete": True},
+            ],
+        )
+        workflow = start_workflow(template=template, team=self.team, started_by=self.owner)
+        workflow.refresh_from_db()
+        self.assertEqual(workflow.status, "completed")
+
+    def test_auto_assign_started_by_sets_claimed_by_without_a_claim_call(self):
+        template = WorkflowTemplate.objects.create(
+            name="Auto assign", trigger_category="", team=None,
+            steps=[{"title": "Assigned step", "description": "", "assignee_team": "IT", "auto_assign": "started_by"}],
+        )
+        workflow = start_workflow(template=template, team=self.team, started_by=self.owner)
+        step = workflow.steps.get(order_index=0)
+        self.assertEqual(step.status, "active")
+        self.assertEqual(step.claimed_by_id, self.owner.id)
+
+    def test_auto_assign_ticket_reporter(self):
+        requester = User.objects.create_user(username="auto2", email="auto2@example.com", password="pw")
+        ticket = Ticket.objects.create(
+            user=requester, team=self.team, issue_type="x", category="other", status="new",
+        )
+        template = WorkflowTemplate.objects.create(
+            name="Reporter assign", trigger_category="", team=None,
+            steps=[{"title": "Step", "description": "", "assignee_team": "IT", "auto_assign": "ticket_reporter"}],
+        )
+        workflow = start_workflow(template=template, ticket=ticket, team=self.team, started_by=self.owner)
+        step = workflow.steps.get(order_index=0)
+        self.assertEqual(step.claimed_by_id, requester.id)

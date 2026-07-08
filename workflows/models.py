@@ -97,6 +97,24 @@ class WorkflowStep(models.Model):
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name="claimed_workflow_steps"
     )
     completed_at = models.DateTimeField(null=True, blank=True)
+    auto_complete = models.BooleanField(
+        default=False,
+        help_text="Copied from the template at creation time. If set, this step is marked done "
+                   "the instant it becomes active -- no human interaction (e.g. a pure log/notify "
+                   "checkpoint). Not an external action -- just workflow bookkeeping.",
+    )
+    AUTO_ASSIGN_CHOICES = [
+        ("", "None"),
+        ("started_by", "Whoever started the workflow"),
+        ("ticket_reporter", "The linked ticket's reporter"),
+    ]
+    auto_assign = models.CharField(
+        max_length=20,
+        choices=AUTO_ASSIGN_CHOICES,
+        blank=True,
+        help_text="Copied from the template at creation time. If set, claimed_by is resolved "
+                   "automatically when this step becomes active, skipping the manual Claim click.",
+    )
 
     class Meta:
         ordering = ["order_index"]
