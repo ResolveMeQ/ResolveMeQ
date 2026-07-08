@@ -349,3 +349,23 @@ def send_subscription_expiring_soon_notifications() -> None:
             )
 
     logger.info("Subscription expiring-soon notices finished: sent %s", sent)
+
+
+@shared_task(name="base.tasks.generate_daily_blog_post")
+def generate_daily_blog_post(force: bool = False) -> dict:
+    """
+    Celery Beat: ask the AI agent for one new marketing blog post and publish it.
+    Skips when an AI post already exists for today unless ``force`` is True.
+    """
+    from base.blog_generation import generate_daily_blog_post as _generate
+
+    try:
+        post = _generate(force=force)
+    except Exception as exc:
+        logger.exception("Daily blog generation failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+    if post is None:
+        return {"ok": True, "skipped": True, "reason": "already_exists_for_today"}
+    return {"ok": True, "slug": post.slug, "id": post.pk}
+

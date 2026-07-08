@@ -7,6 +7,7 @@ from drf_yasg import openapi
 from django.conf import settings
 from django.conf.urls.static import static
 from base.views import NewsletterSubscribeView, ContactRequestView
+from base.blog_views import BlogPostListView, BlogPostDetailView
 from knowledge_base.views import public_sitemap_xml, public_robots_txt
 
 schema_view = get_schema_view(
@@ -33,6 +34,8 @@ urlpatterns = [
    # Marketing endpoints (public, no auth required)
    path("api/subscribe", NewsletterSubscribeView.as_view(), name="newsletter_subscribe"),
    path("api/contact", ContactRequestView.as_view(), name="contact_request"),
+   path("api/blog/", BlogPostListView.as_view(), name="blog_list"),
+   path("api/blog/<slug:slug>/", BlogPostDetailView.as_view(), name="blog_detail"),
    
    # Application endpoints
    path("api/monitoring/", include("monitoring.urls")),

@@ -1114,6 +1114,46 @@ class ContactRequest(models.Model):
         return f"{self.email} ({self.company_size})"
 
 
+class BlogPost(models.Model):
+    """
+    Public marketing journal articles (ResolveMeQ blog).
+    AI-generated posts are created daily via Celery; legacy posts can be seeded from static data.
+    """
+
+    slug = models.SlugField(_("slug"), max_length=220, unique=True)
+    title = models.CharField(_("title"), max_length=300)
+    excerpt = models.TextField(_("excerpt"), max_length=2000)
+    body = models.TextField(_("body"), help_text=_("Markdown-ish body with ## and ### headings."))
+    category = models.CharField(_("category"), max_length=100)
+    read_time_minutes = models.PositiveSmallIntegerField(_("read time (minutes)"), default=10)
+    image_url = models.URLField(
+        _("hero image URL"),
+        max_length=500,
+        blank=True,
+        null=True,
+        help_text=_("Optional public https URL for hero/OG image; leave empty when none."),
+    )
+    author_name = models.CharField(_("author name"), max_length=120, blank=True, default="")
+    published_at = models.DateField(_("published date"))
+    is_published = models.BooleanField(_("published"), default=True)
+    is_ai_generated = models.BooleanField(_("AI generated"), default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-published_at", "-created_at"]
+        verbose_name = _("Blog post")
+        verbose_name_plural = _("Blog posts")
+
+    def __str__(self):
+        return self.title
+
+    @property
+    def read_time_label(self) -> str:
+        minutes = max(1, int(self.read_time_minutes or 1))
+        return f"{minutes} min read"
+
+
 class SupportContactSubmission(models.Model):
     """
     Logged-in portal user reached out via Contact support (e.g. Billing page).

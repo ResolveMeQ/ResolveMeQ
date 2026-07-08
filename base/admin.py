@@ -18,6 +18,7 @@ from base.models import (
     PlanGatewayProduct, BillingWebhookDelivery,
     InAppNotification, NewsletterSubscription, ContactRequest,
     SupportContactSubmission, AgentUsageMonthly, SubscriptionGrantLog,
+    BlogPost,
 )
 
 User = get_user_model()
@@ -431,6 +432,22 @@ class ContactRequestAdmin(admin.ModelAdmin):
             'fields': ('id', 'requested_at', 'ip_address'),
             'classes': ('collapse',)
         }),
+    )
+
+
+@admin.register(BlogPost)
+class BlogPostAdmin(admin.ModelAdmin):
+    list_display = ["title", "slug", "category", "published_at", "is_published", "is_ai_generated"]
+    list_filter = ["is_published", "is_ai_generated", "category", "published_at"]
+    search_fields = ["title", "slug", "excerpt", "body"]
+    prepopulated_fields = {"slug": ("title",)}
+    readonly_fields = ["created_at", "updated_at"]
+    ordering = ["-published_at", "-created_at"]
+    fieldsets = (
+        (None, {"fields": ("title", "slug", "excerpt", "body", "category")}),
+        ("Media & byline", {"fields": ("image_url", "author_name", "read_time_minutes")}),
+        ("Publishing", {"fields": ("published_at", "is_published", "is_ai_generated")}),
+        ("System", {"fields": ("created_at", "updated_at"), "classes": ("collapse",)}),
     )
 
 

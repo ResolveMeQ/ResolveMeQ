@@ -421,6 +421,19 @@ if ENABLE_SUBSCRIPTION_EXPIRING_SOON_SCHEDULE:
         "schedule": crontab(hour=SUBSCRIPTION_EXPIRING_SOON_HOUR_UTC, minute=0),
     }
 
+# Daily AI marketing blog post (requires Celery worker + beat + resolvemeq-agent).
+BLOG_GENERATION_HOUR_UTC = int(os.getenv("BLOG_GENERATION_HOUR_UTC", "6").strip() or "6")
+BLOG_GENERATION_MINUTE_UTC = int(os.getenv("BLOG_GENERATION_MINUTE_UTC", "30").strip() or "30")
+ENABLE_DAILY_BLOG_GENERATION = os.getenv(
+    "ENABLE_DAILY_BLOG_GENERATION", "false"
+).strip().lower() in ("1", "true", "yes", "")
+BLOG_AUTHOR_NAME = os.getenv("BLOG_AUTHOR_NAME", "Nyuydine Bill").strip()
+if ENABLE_DAILY_BLOG_GENERATION:
+    CELERY_BEAT_SCHEDULE["daily-ai-blog-post"] = {
+        "task": "base.tasks.generate_daily_blog_post",
+        "schedule": crontab(hour=BLOG_GENERATION_HOUR_UTC, minute=BLOG_GENERATION_MINUTE_UTC),
+    }
+
 # Optional: token for GET /api/monitoring/health/complete/ (uptime checks without admin JWT)
 MONITORING_HEALTH_SECRET = os.getenv("MONITORING_HEALTH_SECRET", "").strip()
 
