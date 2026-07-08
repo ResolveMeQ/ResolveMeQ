@@ -10,7 +10,6 @@ from tickets.models import Ticket
 from tickets.scoping import active_team_id_for_user, user_can_access_ticket
 
 from .models import Workflow, WorkflowStep, WorkflowTemplate
-from .notifications import notify_requester_workflow_completed
 from .scoping import user_can_access_workflow, workflows_queryset_for_user
 from .services import _activate_next_steps, start_workflow
 
@@ -32,6 +31,7 @@ def _step_to_dict(step, now=None):
         "title": step.title,
         "description": step.description,
         "assignee_team": step.assignee_team,
+        "step_type": step.step_type,
         "status": step.status,
         "due_at": step.due_at,
         "is_overdue": _step_is_overdue(step, now),
@@ -155,10 +155,5 @@ def complete_step(request, workflow_id, step_id):
     step.save(update_fields=["status", "completed_at"])
 
     completed_whole_workflow = _activate_next_steps(workflow)
-    if completed_whole_workflow:
-        try:
-            notify_requester_workflow_completed(workflow)
-        except Exception:
-            pass
 
     return Response({"workflow": _workflow_to_dict(workflow)})

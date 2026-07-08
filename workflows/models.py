@@ -121,6 +121,17 @@ class WorkflowStep(models.Model):
         help_text="Copied from the template at creation time. If set, claimed_by is resolved "
                    "automatically when this step becomes active, skipping the manual Claim click.",
     )
+    STEP_TYPE_CHOICES = [
+        ("manual", "Manual"),
+        ("approval", "Approval"),
+        ("auto_check", "Auto check"),
+    ]
+    step_type = models.CharField(
+        max_length=20,
+        choices=STEP_TYPE_CHOICES,
+        default="manual",
+        help_text="Copied from template at creation. Approval steps use an Approve action in UI.",
+    )
 
     class Meta:
         ordering = ["order_index"]

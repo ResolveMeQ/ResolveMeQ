@@ -85,8 +85,8 @@ Honest inventory — **built**, **partial**, **missing**:
 | Multi-turn ticket chat | Built | UX gap: chat before analysis finishes |
 | Autonomous agent actions | Partial | Engine exists; most paths still human-in-loop |
 | Escalation queue + SLA display | Built | Platform agents, claim, priority |
-| Workflows v1 | Built | Sequential only; 8 seeded templates; in-app notify only |
-| Workflow template admin UI | Missing | Seed command only |
+| Workflows v1 | Built | Sequential; templates; Slack/Teams notify; step due dates |
+| Workflow template admin UI | Built | Team owner CRUD at `/workflows/templates` |
 | Rules / trigger engine | Missing | `automation/` app is stub |
 | Slack integration | Built | OAuth, slash, modals, DMs |
 | Microsoft Teams | Partial | Backend + tests; Settings UI hidden |
@@ -305,12 +305,12 @@ Update at each release. Status: `Not started` | `In progress` | `Shipped` | **Co
 
 | ID | Feature | Status | Competitive Complete | Product sign-off | Release |
 |----|---------|--------|----------------------|------------------|---------|
-| P1-1 | Template admin UI | Not started | ☐ | ☐ | |
-| P1-2 | Step types | Not started | ☐ | ☐ | |
+| P1-1 | Template admin UI | Shipped | ☐ | ☐ | Jul 2026 |
+| P1-2 | Step types | Shipped | ☐ | ☐ | Jul 2026 |
 | P1-3 | Simple branching | Not started | ☐ | ☐ | |
 | P1-4 | Team assignee routing | Not started | ☐ | ☐ | |
 | P1-5 | Workflow SLA | Not started | ☐ | ☐ | |
-| P1-6 | Workflow ↔ ticket sync | Not started | ☐ | ☐ | |
+| P1-6 | Workflow ↔ ticket sync | Shipped | ☐ | ☐ | Jul 2026 |
 | P1-7 | Onboarding playbook SKU | Not started | ☐ | ☐ | |
 
 ### Phase 2 — Rules + Connectors

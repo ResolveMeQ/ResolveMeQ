@@ -34,6 +34,21 @@ def _resolve_auto_assign(kind, workflow):
     return None
 
 
+def finalize_workflow(workflow):
+    """Customer notifications and ticket sync when a workflow finishes."""
+    try:
+        from .notifications import notify_requester_workflow_completed
+
+        notify_requester_workflow_completed(workflow)
+    except Exception:
+        pass
+    if workflow.ticket_id:
+        ticket = workflow.ticket
+        if ticket.status not in ("resolved", "closed"):
+            ticket.status = "resolved"
+            ticket.save(update_fields=["status", "updated_at"])
+
+
 def _activate_next_steps(workflow):
     """
     Activates the next pending step, resolving any chain of consecutive auto_complete
@@ -45,6 +60,7 @@ def _activate_next_steps(workflow):
         if not next_step:
             workflow.status = "completed"
             workflow.save(update_fields=["status"])
+            finalize_workflow(workflow)
             return True
 
         next_step.status = "active"
@@ -92,6 +108,7 @@ def start_workflow(*, template: WorkflowTemplate, ticket=None, team=None, starte
             assignee_team=step.get("assignee_team", ""),
             auto_complete=bool(step.get("auto_complete", False)),
             auto_assign=step.get("auto_assign", "") or "",
+            step_type=(step.get("step_type") or "manual"),
             status="pending",
         )
         for idx, step in enumerate(steps)

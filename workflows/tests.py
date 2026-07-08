@@ -345,3 +345,71 @@ class WorkflowDueDateTest(TestCase):
         filtered = self.client.get("/api/workflows/?overdue=1")
         ids = [w["id"] for w in filtered.data["workflows"]]
         self.assertIn(str(workflow.id), ids)
+
+
+class WorkflowTemplateAdminTest(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="tpl1", email="tpl1@example.com", password="pw")
+        self.member = User.objects.create_user(username="tpl2", email="tpl2@example.com", password="pw")
+        self.team = Team.objects.create(name="Tpl Co", owner=self.owner)
+        self.team.members.add(self.owner, self.member)
+        _set_active_team(self.owner, self.team)
+        self.client = APIClient()
+        self.client.force_authenticate(self.owner)
+
+    def test_owner_can_create_team_template(self):
+        response = self.client.post(
+            "/api/workflows/templates/manage/",
+            {
+                "name": "Contractor offboarding",
+                "trigger_category": "offboarding",
+                "steps": [
+                    {
+                        "title": "Revoke access",
+                        "description": "Remove accounts",
+                        "assignee_team": "IT",
+                        "step_type": "manual",
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["template"]["name"], "Contractor offboarding")
+        self.assertTrue(WorkflowTemplate.objects.filter(name="Contractor offboarding", team=self.team).exists())
+
+    def test_member_cannot_create_template(self):
+        client = APIClient()
+        client.force_authenticate(self.member)
+        _set_active_team(self.member, self.team)
+        response = client.post(
+            "/api/workflows/templates/manage/",
+            {"name": "Nope", "steps": [{"title": "Only step"}]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+
+class WorkflowTicketSyncTest(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="sync1", email="sync1@example.com", password="pw")
+        self.requester = User.objects.create_user(username="sync2", email="sync2@example.com", password="pw")
+        self.team = Team.objects.create(name="Sync Co", owner=self.owner)
+        self.team.members.add(self.owner)
+        _set_active_team(self.owner, self.team)
+        self.client = APIClient()
+        self.client.force_authenticate(self.owner)
+
+    def test_completing_workflow_resolves_linked_ticket(self):
+        ticket = Ticket.objects.create(
+            user=self.requester, team=self.team, issue_type="Laptop", category="provisioning", status="new",
+        )
+        template = WorkflowTemplate.objects.create(
+            name="One-step", trigger_category="", team=None,
+            steps=[{"title": "Only step", "description": "", "assignee_team": "IT"}],
+        )
+        workflow = start_workflow(template=template, ticket=ticket, team=self.team, started_by=self.owner)
+        step = workflow.steps.get(order_index=0)
+        self.client.post(f"/api/workflows/{workflow.id}/steps/{step.id}/complete/")
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.status, "resolved")
