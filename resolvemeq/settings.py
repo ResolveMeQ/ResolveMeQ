@@ -422,12 +422,12 @@ if ENABLE_SUBSCRIPTION_EXPIRING_SOON_SCHEDULE:
     }
 
 # Daily AI marketing blog post (requires Celery worker + beat + resolvemeq-agent).
-BLOG_GENERATION_HOUR_UTC = int(os.getenv("BLOG_GENERATION_HOUR_UTC", "6").strip() or "6")
-BLOG_GENERATION_MINUTE_UTC = int(os.getenv("BLOG_GENERATION_MINUTE_UTC", "30").strip() or "30")
-ENABLE_DAILY_BLOG_GENERATION = os.getenv(
-    "ENABLE_DAILY_BLOG_GENERATION", "false"
-).strip().lower() in ("1", "true", "yes", "")
-BLOG_AUTHOR_NAME = os.getenv("BLOG_AUTHOR_NAME", "Nyuydine Bill").strip()
+# Hardcoded on for now: Compose previously omitted these env vars, so Beat never
+# registered the job even when .env had ENABLE_DAILY_BLOG_GENERATION=true.
+BLOG_GENERATION_HOUR_UTC = 6
+BLOG_GENERATION_MINUTE_UTC = 30
+ENABLE_DAILY_BLOG_GENERATION = True
+BLOG_AUTHOR_NAME = "Nyuydine Bill"
 PUBLIC_MARKETING_URL = os.getenv("PUBLIC_MARKETING_URL", "https://resolvemeq.net").strip().rstrip("/")
 PUBLIC_APP_URL = os.getenv("PUBLIC_APP_URL", "https://app.resolvemeq.net").strip().rstrip("/")
 ENABLE_SITEMAP_PING = os.getenv("ENABLE_SITEMAP_PING", "true").strip().lower() in (
