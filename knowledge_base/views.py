@@ -14,6 +14,7 @@ from rest_framework.decorators import action, api_view, permission_classes, pars
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from base.permissions import IsAuthenticatedOrAgent
+from base.public_seo import get_public_site_urls as _get_public_urls
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from .models import (
     KnowledgeBaseArticle,
@@ -144,29 +145,6 @@ def _notify_mentions(*, target_type, target_id, body_text, actor, link, context_
                 logger.warning("KB mention email failed for %s: %s", getattr(u, "email", None), exc)
     except Exception as exc:
         logger.warning("KB mention notify failed: %s", exc)
-
-
-def _get_public_urls(request):
-    """
-    Resolve canonical public domains.
-    Defaults match production split-domain setup:
-    - landing/marketing: resolvemeq.net
-    - app/community: app.resolvemeq.net
-    """
-    default_app = "https://app.resolvemeq.net"
-    default_marketing = "https://resolvemeq.net"
-
-    app_base = (getattr(settings, "PUBLIC_APP_URL", "") or default_app).rstrip("/")
-    marketing_base = (getattr(settings, "PUBLIC_MARKETING_URL", "") or default_marketing).rstrip("/")
-
-    # In local/dev keep current host when explicit env values are absent.
-    host = request.get_host() or ""
-    if not getattr(settings, "PUBLIC_APP_URL", "") and "localhost" in host:
-        app_base = request.build_absolute_uri("/").rstrip("/")
-    if not getattr(settings, "PUBLIC_MARKETING_URL", "") and "localhost" in host:
-        marketing_base = request.build_absolute_uri("/").rstrip("/")
-
-    return app_base, marketing_base
 
 
 def _bool_from_input(value):
@@ -1039,68 +1017,3 @@ def community_question_public(request, question_id, slug=None):
     app_base, _ = _get_public_urls(request)
     data["public_url"] = f"{app_base}/community/q/{safe_slug}-{question.id}"
     return Response(data)
-
-
-@api_view(["GET"])
-@permission_classes([AllowAny])
-def public_sitemap_xml(request):
-    app_base, marketing_base = _get_public_urls(request)
-
-    question_items = KBQuestion.objects.filter(is_published=True).order_by("-updated_at")[:5000]
-    article_items = KnowledgeBaseArticle.objects.filter(is_published=True).order_by("-updated_at")[:5000]
-
-    lines = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-    ]
-
-    lines.append(f"<url><loc>{marketing_base}</loc></url>")
-    lines.append(f"<url><loc>{app_base}/knowledge-base?view=community</loc></url>")
-    lines.append(f"<url><loc>{app_base}/knowledge-base</loc></url>")
-
-    for q in question_items:
-        slug = slugify(q.title)[:120] or f"question-{q.id}"
-        loc = f"{app_base}/community/q/{slug}-{q.id}"
-        lastmod = q.updated_at.date().isoformat() if q.updated_at else None
-        if lastmod:
-            lines.append(f"<url><loc>{loc}</loc><lastmod>{lastmod}</lastmod></url>")
-        else:
-            lines.append(f"<url><loc>{loc}</loc></url>")
-
-    for a in article_items:
-        article_slug = slugify(a.title)[:120] or "article"
-        loc = f"{app_base}/knowledge-base/article/{article_slug}~{a.kb_id}"
-        lastmod = a.updated_at.date().isoformat() if a.updated_at else None
-        if lastmod:
-            lines.append(f"<url><loc>{loc}</loc><lastmod>{lastmod}</lastmod></url>")
-        else:
-            lines.append(f"<url><loc>{loc}</loc></url>")
-
-    lines.append("</urlset>")
-    return HttpResponse("\n".join(lines), content_type="application/xml")
-
-
-@api_view(["GET"])
-@permission_classes([AllowAny])
-def public_robots_txt(request):
-    host = (request.get_host() or "").lower()
-    if host.startswith("api.resolvemeq.net"):
-        body = "\n".join(
-            [
-                "User-agent: *",
-                "Disallow: /",
-            ]
-        )
-        return HttpResponse(body, content_type="text/plain")
-
-    app_base, _ = _get_public_urls(request)
-    body = "\n".join(
-        [
-            "User-agent: *",
-            "Allow: /knowledge-base",
-            "Allow: /community/",
-            "Disallow: /api/",
-            f"Sitemap: {app_base}/sitemap.xml",
-        ]
-    )
-    return HttpResponse(body, content_type="text/plain")

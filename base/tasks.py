@@ -367,5 +367,13 @@ def generate_daily_blog_post(force: bool = False) -> dict:
 
     if post is None:
         return {"ok": True, "skipped": True, "reason": "already_exists_for_today"}
+
+    from base.sitemap_notify import notify_search_engines_sitemap_updated
+
+    try:
+        notify_search_engines_sitemap_updated()
+    except Exception as exc:
+        logger.warning("Sitemap notify after blog post failed: %s", exc)
+
     return {"ok": True, "slug": post.slug, "id": post.pk}
 

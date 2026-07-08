@@ -428,6 +428,14 @@ ENABLE_DAILY_BLOG_GENERATION = os.getenv(
     "ENABLE_DAILY_BLOG_GENERATION", "false"
 ).strip().lower() in ("1", "true", "yes", "")
 BLOG_AUTHOR_NAME = os.getenv("BLOG_AUTHOR_NAME", "Nyuydine Bill").strip()
+PUBLIC_MARKETING_URL = os.getenv("PUBLIC_MARKETING_URL", "https://resolvemeq.net").strip().rstrip("/")
+PUBLIC_APP_URL = os.getenv("PUBLIC_APP_URL", "https://app.resolvemeq.net").strip().rstrip("/")
+ENABLE_SITEMAP_PING = os.getenv("ENABLE_SITEMAP_PING", "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "",
+)
 if ENABLE_DAILY_BLOG_GENERATION:
     CELERY_BEAT_SCHEDULE["daily-ai-blog-post"] = {
         "task": "base.tasks.generate_daily_blog_post",
