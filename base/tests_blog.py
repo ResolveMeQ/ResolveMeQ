@@ -115,3 +115,56 @@ class BlogGenerationTest(TestCase):
         }
         post = generate_daily_blog_post(force=True)
         self.assertEqual(post.slug, "duplicate-slug-2")
+
+
+class SeedStaticBlogPostsTest(TestCase):
+    def test_seed_imports_five_posts(self):
+        from base.blog_seed_data import STATIC_BLOG_POSTS, import_static_blog_posts
+
+        created, updated, skipped = import_static_blog_posts()
+        self.assertEqual(created, len(STATIC_BLOG_POSTS))
+        self.assertEqual(updated, 0)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(BlogPost.objects.filter(is_ai_generated=False).count(), 5)
+
+    def test_seed_skips_existing_slugs(self):
+        from base.blog_seed_data import import_static_blog_posts
+
+        import_static_blog_posts()
+        created, updated, skipped = import_static_blog_posts()
+        self.assertEqual(created, 0)
+        self.assertEqual(updated, 0)
+        self.assertEqual(skipped, 5)
+
+    def test_seed_force_updates(self):
+        from base.blog_seed_data import import_static_blog_posts
+
+        import_static_blog_posts()
+        BlogPost.objects.filter(slug="how-ai-transforms-it-support").update(title="Stale title")
+        created, updated, skipped = import_static_blog_posts(force=True)
+        self.assertEqual(created, 0)
+        self.assertEqual(updated, 1)
+        self.assertEqual(skipped, 4)
+        post = BlogPost.objects.get(slug="how-ai-transforms-it-support")
+        self.assertEqual(post.title, "How AI Is Transforming IT Support in 2025")
+
+
+class BlogProseHumanizeTest(TestCase):
+    def test_humanize_strips_em_dashes_from_draft(self):
+        from base.blog_generation import create_blog_post_from_draft
+        from django.utils import timezone
+
+        draft = {
+            "title": "Fix the queue — without burning out",
+            "slug": "fix-the-queue",
+            "excerpt": "A desk lead view — practical steps.",
+            "category": "Best Practices",
+            "body": "Start small — pick one queue and measure rework.",
+            "read_time_minutes": 8,
+            "image_url": None,
+        }
+        post = create_blog_post_from_draft(draft, target_date=timezone.now().date(), is_ai_generated=True)
+        self.assertNotIn("—", post.title)
+        self.assertNotIn("—", post.excerpt)
+        self.assertNotIn("—", post.body)
+        self.assertIn(",", post.title)

@@ -59,6 +59,16 @@ def _estimate_read_minutes(body: str) -> int:
     return max(5, min(25, round(words / 200) or 5))
 
 
+def _humanize_prose(text: str) -> str:
+    """Strip em/en dashes from published copy (safety net after agent post-processing)."""
+    if not text:
+        return text
+    cleaned = re.sub(r"\s*[—–]\s*", ", ", text)
+    cleaned = re.sub(r",\s*,+", ", ", cleaned)
+    cleaned = re.sub(r"\s+\.", ".", cleaned)
+    return cleaned.strip()
+
+
 def _normalize_image_url(value: Any) -> Optional[str]:
     if value is None:
         return None
@@ -106,9 +116,9 @@ def fetch_blog_draft_from_agent(*, target_date: date, recent_posts: List[Dict[st
 
 def create_blog_post_from_draft(draft: Dict[str, Any], *, target_date: date, is_ai_generated: bool = True) -> BlogPost:
     """Validate agent draft and persist a published BlogPost."""
-    title = str(draft.get("title") or "").strip()
-    body = str(draft.get("body") or "").strip()
-    excerpt = str(draft.get("excerpt") or "").strip()
+    title = _humanize_prose(str(draft.get("title") or "").strip())
+    body = _humanize_prose(str(draft.get("body") or "").strip())
+    excerpt = _humanize_prose(str(draft.get("excerpt") or "").strip())
     category = str(draft.get("category") or "").strip() or "Best Practices"
     if not title or not body or not excerpt:
         raise ValueError("Draft missing title, body, or excerpt")
