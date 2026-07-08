@@ -75,4 +75,12 @@ def create_ticket_with_reporter(
         )
     except Exception as exc:
         logger.warning("Failed to create ticket-created notification: %s", exc)
+
+    try:
+        from workflows.services import maybe_start_workflow_for_ticket
+
+        maybe_start_workflow_for_ticket(ticket)
+    except Exception as exc:
+        logger.warning("Failed to start workflow for ticket %s: %s", ticket.ticket_id, exc)
+
     return ticket

@@ -49,6 +49,7 @@ urlpatterns = [
    path("api/teams/", include("base.teams_urls")),
    path("api/billing/", include("base.billing_urls")),
    path("api/integrations/", include("integrations.urls")),
+   path("api/workflows/", include("workflows.urls")),
    path("sitemap.xml", public_sitemap_xml, name="public-sitemap-xml"),
    path("rss.xml", public_blog_rss_xml, name="public-blog-rss-xml"),
    path("robots.txt", public_robots_txt, name="public-robots-txt"),

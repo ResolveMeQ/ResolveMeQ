@@ -1,0 +1,105 @@
+import uuid
+
+from django.contrib.auth import get_user_model
+from django.db import models
+
+User = get_user_model()
+
+
+class WorkflowTemplate(models.Model):
+    """
+    A fixed, admin-authored/seeded sequence of steps. Never LLM-generated --
+    templates are the curated alternative to freely inventing a multi-step
+    process per ticket (same reasoning as excluding security_incident from
+    remediation_script generation: curated beats free-form once the blast
+    radius spans more than one person).
+    """
+
+    name = models.CharField(max_length=200)
+    trigger_category = models.CharField(
+        max_length=30,
+        blank=True,
+        help_text="Matches Ticket.category to auto-start this template on ticket creation. "
+                   "Blank means this template is only ever started manually (standalone).",
+    )
+    team = models.ForeignKey(
+        "base.Team",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="workflow_templates",
+        help_text="Null means a global template available to every team (platform-seeded baseline), "
+                   "same convention as KnowledgeBaseArticle.team.",
+    )
+    steps = models.JSONField(
+        default=list,
+        help_text='[{"title": "...", "description": "...", "assignee_team": "IT Support"}, ...] '
+                  "in order -- a flat list is enough for v1's strictly-sequential, no-branching shape.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+
+class Workflow(models.Model):
+    STATUS_CHOICES = [
+        ("in_progress", "In Progress"),
+        ("completed", "Completed"),
+        ("cancelled", "Cancelled"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ticket = models.ForeignKey(
+        "tickets.Ticket",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="workflows",
+        help_text="Null for a standalone workflow (started with no ticket).",
+    )
+    template = models.ForeignKey(
+        WorkflowTemplate, on_delete=models.SET_NULL, null=True, blank=True, related_name="workflows"
+    )
+    team = models.ForeignKey(
+        "base.Team", on_delete=models.SET_NULL, null=True, blank=True, related_name="workflows"
+    )
+    started_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="started_workflows"
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="in_progress")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.template.name if self.template_id else 'Workflow'} ({self.status})"
+
+
+class WorkflowStep(models.Model):
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("active", "Active"),
+        ("done", "Done"),
+        ("skipped", "Skipped"),
+    ]
+
+    workflow = models.ForeignKey(Workflow, on_delete=models.CASCADE, related_name="steps")
+    order_index = models.PositiveIntegerField()
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    assignee_team = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Descriptive label only in v1 (e.g. 'IT Support') -- not a queryable FK, "
+                  "so it doesn't drive notification routing yet.",
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    claimed_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="claimed_workflow_steps"
+    )
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["order_index"]
+
+    def __str__(self):
+        return f"{self.title} ({self.status})"

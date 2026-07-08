@@ -100,6 +100,7 @@ INSTALLED_APPS = [
     "knowledge_base",
     "automation",
     "integrations",
+    "workflows",
     'base',
     'monitoring',
 ]

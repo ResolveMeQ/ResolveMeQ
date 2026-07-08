@@ -32,6 +32,7 @@ class Ticket(models.Model):
         ("security", "Security"),
         ("cloud", "Cloud"),
         ("storage", "Storage"),
+        ("provisioning", "Provisioning"),
         ("other", "Other"),
     ]
     ticket_id = models.AutoField(primary_key=True)
