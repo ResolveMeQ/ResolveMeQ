@@ -32,6 +32,22 @@ def notify_team_step_active(workflow, step):
         pass
 
 
+def notify_workflow_sla_breach(workflow):
+    """In-app alert when the whole workflow passes its SLA deadline."""
+    if not workflow.team_id:
+        return
+    link = f"/tickets/{workflow.ticket_id}" if workflow.ticket_id else "/workflows"
+    name = workflow.template.name if workflow.template_id else "Workflow"
+    for user in _team_recipients(workflow.team):
+        InAppNotification.objects.create(
+            user=user,
+            type=InAppNotification.Type.WARNING,
+            title="Workflow SLA breached",
+            message=f"\"{name}\" is past its deadline — check overdue steps.",
+            link=link,
+        )
+
+
 def notify_requester_workflow_completed(workflow):
     """Customer-facing: only fires for ticket-linked workflows, once the whole thing is done."""
     if not workflow.ticket_id:

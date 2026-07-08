@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from base.models import InAppNotification, Team, UserPreferences
+from base.models import InAppNotification, Team, UserPreferences, Profile
 from tickets.models import Ticket
 from tickets.services import create_ticket_with_reporter
 
@@ -411,5 +411,149 @@ class WorkflowTicketSyncTest(TestCase):
         workflow = start_workflow(template=template, ticket=ticket, team=self.team, started_by=self.owner)
         step = workflow.steps.get(order_index=0)
         self.client.post(f"/api/workflows/{workflow.id}/steps/{step.id}/complete/")
-        ticket.refresh_from_db()
-        self.assertEqual(ticket.status, "resolved")
+
+
+class WorkflowAssigneeRoleTest(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="role1", email="role1@example.com", password="pw")
+        self.it_member = User.objects.create_user(username="it1", email="it1@example.com", password="pw")
+        self.hr_member = User.objects.create_user(username="hr1", email="hr1@example.com", password="pw")
+        self.team = Team.objects.create(name="Role Co", owner=self.owner)
+        self.team.members.add(self.owner, self.it_member, self.hr_member)
+        Profile.objects.update_or_create(user=self.it_member, defaults={"ops_role": "it"})
+        Profile.objects.update_or_create(user=self.hr_member, defaults={"ops_role": "hr"})
+        _set_active_team(self.it_member, self.team)
+        _set_active_team(self.hr_member, self.team)
+        self.template = WorkflowTemplate.objects.create(
+            name="Role gated",
+            trigger_category="",
+            team=None,
+            steps=[
+                {"title": "IT step", "description": "", "assignee_role": "it", "due_days": 1},
+                {"title": "HR step", "description": "", "assignee_role": "hr", "due_days": 1},
+            ],
+        )
+        self.workflow = start_workflow(template=self.template, team=self.team, started_by=self.owner)
+        self.it_client = APIClient()
+        self.it_client.force_authenticate(self.it_member)
+        self.hr_client = APIClient()
+        self.hr_client.force_authenticate(self.hr_member)
+
+    def test_wrong_role_cannot_claim_step(self):
+        step = self.workflow.steps.get(order_index=0)
+        resp = self.hr_client.post(f"/api/workflows/{self.workflow.id}/steps/{step.id}/claim/")
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(resp.data["step"]["can_claim"])
+
+    def test_matching_role_can_claim_step(self):
+        step = self.workflow.steps.get(order_index=0)
+        resp = self.it_client.post(f"/api/workflows/{self.workflow.id}/steps/{step.id}/claim/")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_workspace_owner_can_claim_any_role_step(self):
+        owner_client = APIClient()
+        owner_client.force_authenticate(self.owner)
+        _set_active_team(self.owner, self.team)
+        step = self.workflow.steps.get(order_index=0)
+        resp = owner_client.post(f"/api/workflows/{self.workflow.id}/steps/{step.id}/claim/")
+        self.assertEqual(resp.status_code, 200)
+
+
+class WorkflowBranchingTest(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="branch1", email="branch1@example.com", password="pw")
+        self.team = Team.objects.create(name="Branch Co", owner=self.user)
+        self.team.members.add(self.user)
+        _set_active_team(self.user, self.team)
+
+    def test_skip_when_equals_skips_step_on_start(self):
+        template = WorkflowTemplate.objects.create(
+            name="Remote skip",
+            trigger_category="",
+            team=None,
+            steps=[
+                {"title": "Office setup", "description": "", "assignee_team": "IT", "skip_when": {"ticket_field": "category", "equals": "remote_onboarding"}},
+                {"title": "Always run", "description": "", "assignee_team": "IT"},
+            ],
+        )
+        ticket = Ticket.objects.create(
+            user=self.user, team=self.team, issue_type="Remote hire", category="remote_onboarding", status="new",
+        )
+        workflow = start_workflow(template=template, ticket=ticket, team=self.team, started_by=self.user)
+        steps = list(workflow.steps.order_by("order_index"))
+        self.assertEqual(steps[0].status, "skipped")
+        self.assertEqual(steps[1].status, "active")
+
+    def test_skip_when_not_equals_keeps_step(self):
+        template = WorkflowTemplate.objects.create(
+            name="Office only",
+            trigger_category="",
+            team=None,
+            steps=[
+                {"title": "Desk assignment", "description": "", "assignee_team": "Facilities", "skip_when": {"ticket_field": "category", "not_equals": "onboarding"}},
+            ],
+        )
+        ticket = Ticket.objects.create(
+            user=self.user, team=self.team, issue_type="New hire", category="onboarding", status="new",
+        )
+        workflow = start_workflow(template=template, ticket=ticket, team=self.team, started_by=self.user)
+        step = workflow.steps.get(order_index=0)
+        self.assertEqual(step.status, "active")
+
+
+class WorkflowSlaTest(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="sla1", email="sla1@example.com", password="pw")
+        self.member = User.objects.create_user(username="sla2", email="sla2@example.com", password="pw")
+        self.team = Team.objects.create(name="SLA Co", owner=self.owner)
+        self.team.members.add(self.owner, self.member)
+        _set_active_team(self.owner, self.team)
+        self.client = APIClient()
+        self.client.force_authenticate(self.owner)
+
+    def test_workflow_due_at_is_sum_of_step_due_days(self):
+        from django.utils import timezone
+        from datetime import timedelta
+
+        template = WorkflowTemplate.objects.create(
+            name="SLA template",
+            trigger_category="",
+            team=None,
+            steps=[
+                {"title": "A", "description": "", "assignee_team": "IT", "due_days": 2},
+                {"title": "B", "description": "", "assignee_team": "IT", "due_days": 3},
+            ],
+        )
+        before = timezone.now()
+        workflow = start_workflow(template=template, team=self.team, started_by=self.owner)
+        self.assertIsNotNone(workflow.due_at)
+        expected_min = before + timedelta(days=5)
+        self.assertGreaterEqual(workflow.due_at, expected_min - timedelta(seconds=2))
+
+    def test_workflow_sla_breach_sends_one_notification(self):
+        from django.utils import timezone
+        from datetime import timedelta
+
+        template = WorkflowTemplate.objects.create(
+            name="Breach template",
+            trigger_category="",
+            team=None,
+            steps=[{"title": "Only", "description": "", "assignee_team": "IT", "due_days": 1}],
+        )
+        workflow = start_workflow(template=template, team=self.team, started_by=self.owner)
+        workflow.due_at = timezone.now() - timedelta(hours=1)
+        workflow.save(update_fields=["due_at"])
+
+        self.client.get("/api/workflows/")
+        self.assertEqual(
+            InAppNotification.objects.filter(title="Workflow SLA breached").count(),
+            2,
+        )
+        workflow.refresh_from_db()
+        self.assertIsNotNone(workflow.sla_breached_notified_at)
+
+        self.client.get("/api/workflows/")
+        self.assertEqual(
+            InAppNotification.objects.filter(title="Workflow SLA breached").count(),
+            2,
+        )

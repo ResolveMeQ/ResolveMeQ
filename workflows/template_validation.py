@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from .assignee_roles import VALID_ASSIGNEE_ROLE_SLUGS
+
 VALID_STEP_TYPES = frozenset({"manual", "approval", "auto_check"})
 VALID_AUTO_ASSIGN = frozenset({"", "started_by", "ticket_reporter"})
 
@@ -31,14 +33,23 @@ def normalize_template_steps(raw_steps: Any) -> List[Dict[str, Any]]:
             due_days = max(0, int(due_days_raw))
         except (TypeError, ValueError):
             due_days = 2
+        assignee_role = (step.get("assignee_role") or "").strip()
+        if assignee_role not in VALID_ASSIGNEE_ROLE_SLUGS:
+            raise ValueError(f"step {idx + 1} has invalid assignee_role")
+        skip_when = step.get("skip_when")
+        if skip_when is not None and not isinstance(skip_when, dict):
+            raise ValueError(f"step {idx + 1} skip_when must be an object")
         normalized = {
             "title": title[:200],
             "description": (step.get("description") or "").strip(),
             "assignee_team": (step.get("assignee_team") or "").strip()[:100],
+            "assignee_role": assignee_role,
             "step_type": step_type,
             "due_days": due_days,
             "auto_complete": bool(step.get("auto_complete", False)),
             "auto_assign": auto_assign,
         }
+        if skip_when:
+            normalized["skip_when"] = skip_when
         out.append(normalized)
     return out

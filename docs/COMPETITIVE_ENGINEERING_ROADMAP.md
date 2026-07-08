@@ -307,9 +307,9 @@ Update at each release. Status: `Not started` | `In progress` | `Shipped` | **Co
 |----|---------|--------|----------------------|------------------|---------|
 | P1-1 | Template admin UI | Shipped | ☐ | ☐ | Jul 2026 |
 | P1-2 | Step types | Shipped | ☐ | ☐ | Jul 2026 |
-| P1-3 | Simple branching | Not started | ☐ | ☐ | |
-| P1-4 | Team assignee routing | Not started | ☐ | ☐ | |
-| P1-5 | Workflow SLA | Not started | ☐ | ☐ | |
+| P1-3 | Simple branching | Shipped | ☐ | ☐ | Jul 2026 |
+| P1-4 | Team assignee routing | Shipped | ☐ | ☐ | Jul 2026 |
+| P1-5 | Workflow SLA | Shipped | ☐ | ☐ | Jul 2026 |
 | P1-6 | Workflow ↔ ticket sync | Shipped | ☐ | ☐ | Jul 2026 |
 | P1-7 | Onboarding playbook SKU | Not started | ☐ | ☐ | |
 

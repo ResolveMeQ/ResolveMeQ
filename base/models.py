@@ -342,6 +342,21 @@ Profile model that extends the User model with additional fields.
         help_text=_("Cached 1:1 conversation id for this user, avoids re-creating it on every notify"),
     )
 
+    OPS_ROLE_CHOICES = [
+        ("", "General"),
+        ("it", "IT Support"),
+        ("hr", "HR"),
+        ("facilities", "Facilities"),
+        ("security", "Security"),
+    ]
+    ops_role = models.CharField(
+        max_length=20,
+        choices=OPS_ROLE_CHOICES,
+        blank=True,
+        default="",
+        help_text=_("Workflow step claim routing — which playbook steps this user can claim."),
+    )
+
     def __str__(self):
         return self.user.username
 

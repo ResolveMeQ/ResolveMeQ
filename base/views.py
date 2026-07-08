@@ -712,11 +712,25 @@ class MentionSuggestionsView(GenericAPIView):
         return Response(out)
 
 
-class UserDetailView(generics.RetrieveAPIView):
-    """Get user details"""
+class UserDetailView(generics.RetrieveUpdateAPIView):
+    """Get or update user details (team owner may set member ops_role)."""
     queryset = User.objects.all()
     serializer_class = UserManagementSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def perform_update(self, serializer):
+        target = self.get_object()
+        actor = self.request.user
+        if target.pk != actor.pk:
+            if "profile" in serializer.validated_data and "ops_role" in serializer.validated_data.get("profile", {}):
+                from base.models import Team
+
+                owns_member = Team.objects.filter(owner=actor, members=target).exists()
+                if not owns_member:
+                    from rest_framework.exceptions import PermissionDenied
+
+                    raise PermissionDenied("Only a workspace owner can set a member's ops role.")
+        serializer.save()
 
 
 class UserCreateView(generics.CreateAPIView):

@@ -263,7 +263,8 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'thumbnail_url',
             'bio',
             'location',
-            'city'
+            'city',
+            'ops_role',
         ]
 
     def get_is_platform_agent(self, obj):
@@ -333,6 +334,7 @@ class UserManagementSerializer(serializers.ModelSerializer):
     """
     profile_location = serializers.CharField(source='profile.location', required=False, allow_blank=True)
     profile_city = serializers.CharField(source='profile.city', required=False, allow_blank=True)
+    profile_ops_role = serializers.CharField(source='profile.ops_role', required=False, allow_blank=True)
     full_name = serializers.SerializerMethodField()
     
     class Meta:
@@ -350,7 +352,8 @@ class UserManagementSerializer(serializers.ModelSerializer):
             'date_joined',
             'last_login',
             'profile_location',
-            'profile_city'
+            'profile_city',
+            'profile_ops_role',
         ]
         read_only_fields = ['id', 'date_joined', 'last_login']
     
@@ -359,6 +362,14 @@ class UserManagementSerializer(serializers.ModelSerializer):
         from integrations.slack_installation import display_name_for_user
 
         return display_name_for_user(obj)
+
+    def validate_profile_ops_role(self, value):
+        from workflows.assignee_roles import VALID_ASSIGNEE_ROLE_SLUGS
+
+        slug = (value or "").strip()
+        if slug not in VALID_ASSIGNEE_ROLE_SLUGS:
+            raise serializers.ValidationError("Invalid ops role.")
+        return slug
     
     def update(self, instance, validated_data):
         """Handle updates including nested profile data."""

@@ -6,6 +6,8 @@ from datetime import timedelta
 
 from django.utils import timezone
 
+from .assignee_roles import role_label
+from .branching import should_skip_step
 from .models import Workflow, WorkflowStep, WorkflowTemplate
 
 DEFAULT_STEP_DUE_DAYS = 2
@@ -24,6 +26,50 @@ def _step_due_days_from_template(workflow, order_index: int) -> int:
     except (TypeError, ValueError):
         days = DEFAULT_STEP_DUE_DAYS
     return max(0, days)
+
+
+def _workflow_sla_days(template: WorkflowTemplate) -> int:
+    steps = template.steps or []
+    if not steps:
+        return 7
+    total = 0
+    for idx, step in enumerate(steps):
+        raw = step.get("due_days", DEFAULT_STEP_DUE_DAYS)
+        try:
+            total += max(0, int(raw))
+        except (TypeError, ValueError):
+            total += DEFAULT_STEP_DUE_DAYS
+    return max(total, 1)
+
+
+def _apply_branching_skips(workflow, ticket):
+    template = workflow.template
+    if not template or not ticket:
+        return
+    steps_def = template.steps or []
+    for step in workflow.steps.order_by("order_index"):
+        if step.order_index >= len(steps_def):
+            continue
+        if should_skip_step(steps_def[step.order_index], ticket):
+            step.status = "skipped"
+            step.save(update_fields=["status"])
+
+
+def maybe_notify_workflow_sla_breach(workflow):
+    if workflow.status != "in_progress" or not workflow.due_at:
+        return
+    if workflow.due_at >= timezone.now():
+        return
+    if workflow.sla_breached_notified_at:
+        return
+    try:
+        from .notifications import notify_workflow_sla_breach
+
+        notify_workflow_sla_breach(workflow)
+        workflow.sla_breached_notified_at = timezone.now()
+        workflow.save(update_fields=["sla_breached_notified_at"])
+    except Exception:
+        pass
 
 
 def _resolve_auto_assign(kind, workflow):
@@ -98,6 +144,9 @@ def start_workflow(*, template: WorkflowTemplate, ticket=None, team=None, starte
         team=team,
         started_by=started_by,
     )
+    sla_days = _workflow_sla_days(template)
+    workflow.due_at = timezone.now() + timedelta(days=sla_days)
+    workflow.save(update_fields=["due_at"])
     steps = template.steps or []
     WorkflowStep.objects.bulk_create([
         WorkflowStep(
@@ -105,7 +154,8 @@ def start_workflow(*, template: WorkflowTemplate, ticket=None, team=None, starte
             order_index=idx,
             title=step.get("title", ""),
             description=step.get("description", ""),
-            assignee_team=step.get("assignee_team", ""),
+            assignee_team=(step.get("assignee_team") or "").strip() or role_label(step.get("assignee_role", "")),
+            assignee_role=(step.get("assignee_role") or "").strip(),
             auto_complete=bool(step.get("auto_complete", False)),
             auto_assign=step.get("auto_assign", "") or "",
             step_type=(step.get("step_type") or "manual"),
@@ -113,7 +163,9 @@ def start_workflow(*, template: WorkflowTemplate, ticket=None, team=None, starte
         )
         for idx, step in enumerate(steps)
     ])
+    _apply_branching_skips(workflow, ticket)
     _activate_next_steps(workflow)
+    maybe_notify_workflow_sla_breach(workflow)
     return workflow
 
 

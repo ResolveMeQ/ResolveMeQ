@@ -69,6 +69,12 @@ class Workflow(models.Model):
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name="started_workflows"
     )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="in_progress")
+    due_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Workflow-level SLA deadline (sum of template step due_days at start).",
+    )
+    sla_breached_notified_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -90,8 +96,21 @@ class WorkflowStep(models.Model):
     assignee_team = models.CharField(
         max_length=100,
         blank=True,
-        help_text="Descriptive label only in v1 (e.g. 'IT Support') -- not a queryable FK, "
-                  "so it doesn't drive notification routing yet.",
+        help_text="Display label for the assignee group (e.g. 'IT Support').",
+    )
+    ASSIGNEE_ROLE_CHOICES = [
+        ("", "Anyone"),
+        ("it", "IT Support"),
+        ("hr", "HR"),
+        ("facilities", "Facilities"),
+        ("security", "Security"),
+    ]
+    assignee_role = models.CharField(
+        max_length=20,
+        choices=ASSIGNEE_ROLE_CHOICES,
+        blank=True,
+        default="",
+        help_text="Only members with matching Profile.ops_role (or workspace owner) can claim.",
     )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     claimed_by = models.ForeignKey(

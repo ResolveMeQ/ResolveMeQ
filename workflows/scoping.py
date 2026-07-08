@@ -14,6 +14,33 @@ from tickets.scoping import active_team_id_for_user, user_can_access_ticket
 from .models import Workflow
 
 
+def _user_ops_role(user) -> str:
+    if not user:
+        return ""
+    profile = getattr(user, "profile", None)
+    return (getattr(profile, "ops_role", None) or "").strip() if profile else ""
+
+
+def _is_workspace_owner(user, workflow) -> bool:
+    team = getattr(workflow, "team", None)
+    return bool(team and team.owner_id == user.pk)
+
+
+def user_can_claim_step(user, step) -> bool:
+    """Role-gated claim: empty assignee_role = any workspace member with workflow access."""
+    if not user or not user.is_authenticated:
+        return False
+    workflow = step.workflow
+    if not user_can_access_workflow(user, workflow):
+        return False
+    if _is_workspace_owner(user, workflow):
+        return True
+    required = (step.assignee_role or "").strip()
+    if not required:
+        return True
+    return _user_ops_role(user) == required
+
+
 def user_can_access_workflow(user, workflow):
     if not user or not user.is_authenticated:
         return False
