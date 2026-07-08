@@ -263,6 +263,21 @@ def _send_chat_message_impl(request, ticket_id):
             agent_response_data=ai_response
         )
 
+        rs = (ai_response.get('metadata') or {}).get('remediation_script')
+        if isinstance(rs, dict) and rs.get('script'):
+            try:
+                TicketInteraction.objects.create(
+                    ticket=ticket,
+                    user=request.user,
+                    interaction_type='agent_response',
+                    content=(
+                        f"Remediation script shown ({rs.get('platform', 'unknown')}): "
+                        f"{rs.get('summary', '')}"
+                    ),
+                )
+            except Exception:
+                logger.warning("Could not log remediation_script TicketInteraction for ticket %s", ticket.ticket_id)
+
         # Keep a rolling summary to stabilize long chats (best-effort; throttled).
         _maybe_update_conversation_summary(ticket, conversation)
 
@@ -668,6 +683,8 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
     }
     if ticket.screenshot:
         base_payload['screenshot'] = ticket.screenshot
+    if ticket.reported_platform:
+        base_payload['reported_platform'] = ticket.reported_platform
     payload = enrich_agent_chat_payload(
         base_payload,
         ticket=ticket,
@@ -791,6 +808,7 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
                     data.get('quick_replies'), data, ticket, resolution_state
                 ),
                 'kb_article_citations': data.get('kb_article_citations') or [],
+                'remediation_script': solution.get('remediation_script') if isinstance(solution, dict) else None,
             }
             return {
                 'text': chat_text,
@@ -844,6 +862,7 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
                 data.get('quick_replies'), data, ticket, resolution_state
             ),
             'kb_article_citations': data.get('kb_article_citations') or [],
+            'remediation_script': solution.get('remediation_script') if isinstance(solution, dict) else None,
         }
         if steps_list:
             metadata['steps'] = steps_list

@@ -518,6 +518,7 @@ def create_ticket(request):
                 description=v.get("description"),
                 category=v.get("category", "other"),
                 screenshot=uploaded_screenshot_url or v.get("screenshot"),
+                reported_platform=v.get("reported_platform"),
                 tags=v.get("tags") or [],
                 assigned_to=v.get("assigned_to"),
                 status=data.get("status", "new"),

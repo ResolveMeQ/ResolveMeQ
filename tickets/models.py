@@ -48,6 +48,19 @@ class Ticket(models.Model):
     status = models.CharField(max_length=50)
     description = models.TextField(blank=True, null=True)  # <-- Add this line
     screenshot = models.URLField(blank=True, null=True)  # Optional screenshot URL
+    PLATFORM_CHOICES = [
+        ("windows", "Windows"),
+        ("macos", "macOS"),
+        ("linux", "Linux"),
+    ]
+    reported_platform = models.CharField(
+        max_length=10,
+        choices=PLATFORM_CHOICES,
+        blank=True,
+        null=True,
+        help_text="Reporter's OS if known from the browser (navigator.userAgentData/platform); "
+                   "lets the AI generate an accurate remediation_script instead of asking or guessing.",
+    )
     assigned_to = models.ForeignKey(
         User,
         related_name="assigned_tickets",

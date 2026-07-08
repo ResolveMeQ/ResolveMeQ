@@ -45,6 +45,7 @@ class TicketSerializer(serializers.ModelSerializer):
         model = Ticket
         fields = [
             'ticket_id', 'team', 'team_name', 'user', 'issue_type', 'status', 'description', 'screenshot',
+            'reported_platform',
             'assigned_to', 'assigned_to_name', 'category', 'tags', 'created_at', 'updated_at',
             'agent_response', 'agent_processed',
             'first_ai_at', 'escalated_at', 'awaiting_response_from', 'last_message_at', 'last_message_by',

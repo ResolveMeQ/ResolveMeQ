@@ -73,6 +73,8 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False, bill
         }
         if ticket.screenshot:
             payload["screenshot"] = ticket.screenshot
+        if ticket.reported_platform:
+            payload["reported_platform"] = ticket.reported_platform
 
         # Send to agent
         agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
@@ -224,6 +226,8 @@ def process_ticket_with_agent_sync(ticket, billing_user, force=False, billing_pr
         }
         if ticket.screenshot:
             payload["screenshot"] = ticket.screenshot
+        if ticket.reported_platform:
+            payload["reported_platform"] = ticket.reported_platform
 
         agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
         headers = get_agent_service_headers()
