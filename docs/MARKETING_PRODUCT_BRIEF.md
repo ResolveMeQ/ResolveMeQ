@@ -126,7 +126,7 @@ High-level:
 | Microsoft 365 | Live — read connector |
 | Jira Cloud | Live — escalate sync |
 | Outbound webhooks | Live — automation actions |
-| Partner public API | Live — scoped REST (`docs/PUBLIC_API.md`) |
+| Public partner API | Live — scoped REST; user guide at [resolvemeq.net/docs/partner-api](https://resolvemeq.net/docs/partner-api) |
 
 ServiceNow full replacement is **not** positioned — partner/sync and public API only.
 

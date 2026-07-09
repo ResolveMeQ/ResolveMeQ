@@ -2,6 +2,8 @@
 
 Documented REST surface for partners building ticket intake, workflow visibility, and automation integrations without a custom fork.
 
+**Public user guide:** [resolvemeq.net/docs/partner-api](https://resolvemeq.net/docs/partner-api) (canonical for partners and search engines).
+
 ## Authentication
 
 Create a partner API key in **Settings → Integrations → Partner API** (workspace owner only).
