@@ -133,20 +133,10 @@ def _activate_next_steps(workflow):
                 pass
             continue  # keep advancing through the chain
 
-        if next_step.step_type == "auto_check":
-            from .auto_checks import run_auto_check
+        from .connector_autocomplete import try_auto_complete_connector_step
 
-            passed, _msg = run_auto_check(next_step, workflow)
-            if passed:
-                next_step.status = "done"
-                next_step.completed_at = timezone.now()
-                next_step.save(update_fields=["status", "completed_at"])
-                try:
-                    from automation.hooks import on_workflow_step_completed
-                    on_workflow_step_completed(workflow, next_step)
-                except Exception:
-                    pass
-                continue
+        if try_auto_complete_connector_step(workflow, next_step):
+            continue
 
         try:
             from .notifications import notify_team_step_active

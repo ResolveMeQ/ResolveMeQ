@@ -67,6 +67,11 @@ def _step_to_dict(step, now=None, user=None):
         "kb_articles": _kb_articles_for_step(step.workflow, step.order_index),
         "auto_check": get_auto_check_config(step.workflow, step),
         "auto_check_result": latest_check_result(step),
+        "auto_verified": (
+            step.status == "done"
+            and step.step_type == "auto_check"
+            and (latest_check_result(step) or {}).get("status") == "success"
+        ),
         "claimed_by": step.claimed_by_id and {
             "id": str(step.claimed_by_id),
             "name": step.claimed_by.get_full_name() or step.claimed_by.email or step.claimed_by.username,

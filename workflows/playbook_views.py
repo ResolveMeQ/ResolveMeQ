@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from .connector_autocomplete import count_connector_auto_steps
 from .kb_links import resolve_kb_articles_by_titles
 from .models import WorkflowTemplate
 from .playbook_metrics import compute_onboarding_playbook_metrics
@@ -55,6 +56,7 @@ def employee_onboarding_playbook(request):
         })
 
     sla_days = sum(int(s.get("due_days") or 2) for s in steps)
+    connector_auto_steps = count_connector_auto_steps(steps)
 
     return Response({
         "playbook": {
@@ -66,6 +68,7 @@ def employee_onboarding_playbook(request):
             "template_id": template.id if template else None,
             "template_installed": template is not None,
             "step_count": len(steps),
+            "connector_auto_steps": connector_auto_steps,
             "workflow_sla_days": sla_days,
             "steps": step_previews,
             "kb_articles": kb_articles,
