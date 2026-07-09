@@ -164,6 +164,100 @@ def run_auto_check(step, workflow) -> Tuple[bool, str]:
             )
             return False, str(exc)
 
+    if connector == "google_workspace":
+        from integrations.connectors.google_workspace import get_active_installation, run_google_check
+
+        installation = get_active_installation(team_id)
+        if not installation:
+            _log_check(
+                team_id=team_id,
+                workflow=workflow,
+                step=step,
+                connector="google_workspace",
+                check_type=check_type,
+                status="skipped",
+                message="Google Workspace is not connected for this workspace.",
+            )
+            return False, "Connect Google Workspace in Settings → Integrations to run this check."
+        try:
+            passed, msg, detail = run_google_check(
+                installation,
+                check_type,
+                email=email,
+                sku_id=(cfg.get("sku_id") or ""),
+            )
+            _log_check(
+                team_id=team_id,
+                workflow=workflow,
+                step=step,
+                connector="google_workspace",
+                check_type=check_type,
+                status="success" if passed else "failed",
+                message=msg,
+                detail=detail,
+            )
+            return passed, msg
+        except Exception as exc:
+            logger.warning("Google auto_check failed: %s", exc)
+            _log_check(
+                team_id=team_id,
+                workflow=workflow,
+                step=step,
+                connector="google_workspace",
+                check_type=check_type,
+                status="error",
+                message=str(exc),
+                detail={"email": email},
+            )
+            return False, str(exc)
+
+    if connector == "microsoft365":
+        from integrations.connectors.microsoft365 import get_active_installation, run_microsoft_check
+
+        installation = get_active_installation(team_id)
+        if not installation:
+            _log_check(
+                team_id=team_id,
+                workflow=workflow,
+                step=step,
+                connector="microsoft365",
+                check_type=check_type,
+                status="skipped",
+                message="Microsoft 365 is not connected for this workspace.",
+            )
+            return False, "Connect Microsoft 365 in Settings → Integrations to run this check."
+        try:
+            passed, msg, detail = run_microsoft_check(
+                installation,
+                check_type,
+                email=email,
+                sku_id=(cfg.get("sku_id") or ""),
+            )
+            _log_check(
+                team_id=team_id,
+                workflow=workflow,
+                step=step,
+                connector="microsoft365",
+                check_type=check_type,
+                status="success" if passed else "failed",
+                message=msg,
+                detail=detail,
+            )
+            return passed, msg
+        except Exception as exc:
+            logger.warning("Microsoft auto_check failed: %s", exc)
+            _log_check(
+                team_id=team_id,
+                workflow=workflow,
+                step=step,
+                connector="microsoft365",
+                check_type=check_type,
+                status="error",
+                message=str(exc),
+                detail={"email": email},
+            )
+            return False, str(exc)
+
     _log_check(
         team_id=team_id,
         workflow=workflow,

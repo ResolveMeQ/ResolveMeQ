@@ -324,7 +324,7 @@ Update at each release. Status: `Not started` | `In progress` | `Shipped` | **Co
 | P2-5 | Migrate category→workflow | Shipped | ☐ | ☐ | Jul 2026 |
 | P2-6 | Outbound webhooks | Shipped | ☐ | ☐ | Jul 2026 |
 | P2-7 | Okta read | Shipped | ☐ | ☐ | Jul 2026 |
-| P2-8 | Google/M365 read | Not started | ☐ | ☐ | |
+| P2-8 | Google/M365 read | Shipped | ☐ | ☐ | Jul 2026 |
 | P2-9 | Jira escalate sync | Not started | ☐ | ☐ | |
 
 ### Phase 3 — AI + Workflow fusion

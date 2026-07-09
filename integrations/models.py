@@ -331,3 +331,87 @@ class ConnectorCheckLog(models.Model):
 
     def __str__(self):
         return f"{self.connector}.{self.check_type} ({self.status})"
+
+
+class GoogleWorkspaceInstallation(models.Model):
+    """OAuth-linked Google Workspace admin for directory/license read checks (P2-8)."""
+
+    resolvemeq_team = models.ForeignKey(
+        "base.Team",
+        on_delete=models.CASCADE,
+        related_name="google_workspace_installations",
+    )
+    admin_email = models.CharField(max_length=254, blank=True, default="")
+    access_token = models.TextField(blank=True, default="")
+    refresh_token = models.TextField(blank=True, default="")
+    token_expires_at = models.DateTimeField(null=True, blank=True)
+    scopes = models.CharField(max_length=512, blank=True, default="")
+    installed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="google_workspace_installs",
+    )
+    is_active = models.BooleanField(default=True)
+    failure_count = models.PositiveIntegerField(default=0)
+    circuit_open_until = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["resolvemeq_team"],
+                condition=models.Q(is_active=True),
+                name="integrations_google_one_active_per_team",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["resolvemeq_team", "is_active"]),
+        ]
+
+    def __str__(self):
+        return f"Google Workspace → {self.resolvemeq_team_id}"
+
+
+class Microsoft365Installation(models.Model):
+    """OAuth-linked Microsoft 365 tenant for Graph read checks (P2-8)."""
+
+    resolvemeq_team = models.ForeignKey(
+        "base.Team",
+        on_delete=models.CASCADE,
+        related_name="microsoft365_installations",
+    )
+    tenant_id = models.CharField(max_length=64, blank=True, default="")
+    access_token = models.TextField(blank=True, default="")
+    refresh_token = models.TextField(blank=True, default="")
+    token_expires_at = models.DateTimeField(null=True, blank=True)
+    scopes = models.CharField(max_length=512, blank=True, default="")
+    installed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="microsoft365_installs",
+    )
+    is_active = models.BooleanField(default=True)
+    failure_count = models.PositiveIntegerField(default=0)
+    circuit_open_until = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["resolvemeq_team"],
+                condition=models.Q(is_active=True),
+                name="integrations_m365_one_active_per_team",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["resolvemeq_team", "is_active"]),
+        ]
+
+    def __str__(self):
+        return f"Microsoft 365 {self.tenant_id or '?'} → {self.resolvemeq_team_id}"

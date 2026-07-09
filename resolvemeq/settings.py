@@ -310,6 +310,32 @@ OKTA_SCOPES = os.getenv(
     "OKTA_SCOPES",
     "okta.users.read okta.groups.read offline_access openid",
 )
+
+# Google Workspace read connector (P2-8)
+GOOGLE_WORKSPACE_CLIENT_ID = os.getenv("GOOGLE_WORKSPACE_CLIENT_ID")
+GOOGLE_WORKSPACE_CLIENT_SECRET = os.getenv("GOOGLE_WORKSPACE_CLIENT_SECRET")
+GOOGLE_WORKSPACE_REDIRECT_URI = os.getenv(
+    "GOOGLE_WORKSPACE_REDIRECT_URI",
+    f"{_api_base}/api/integrations/google/oauth/redirect/",
+)
+GOOGLE_WORKSPACE_SCOPES = os.getenv(
+    "GOOGLE_WORKSPACE_SCOPES",
+    "https://www.googleapis.com/auth/admin.directory.user.readonly "
+    "https://www.googleapis.com/auth/apps.licensing",
+)
+
+# Microsoft 365 read connector (P2-8)
+MICROSOFT365_CLIENT_ID = os.getenv("MICROSOFT365_CLIENT_ID")
+MICROSOFT365_CLIENT_SECRET = os.getenv("MICROSOFT365_CLIENT_SECRET")
+MICROSOFT365_REDIRECT_URI = os.getenv(
+    "MICROSOFT365_REDIRECT_URI",
+    f"{_api_base}/api/integrations/microsoft/oauth/redirect/",
+)
+MICROSOFT365_SCOPES = os.getenv(
+    "MICROSOFT365_SCOPES",
+    "openid offline_access User.Read.All Directory.Read.All",
+)
+
 # Optional: Slack channel ID (e.g. C01234ABCD) to post escalated tickets for support visibility
 SLACK_ESCALATION_CHANNEL = os.getenv("SLACK_ESCALATION_CHANNEL", "").strip()
 # Optional: digest / alert target (channel ID); management commands post per active install

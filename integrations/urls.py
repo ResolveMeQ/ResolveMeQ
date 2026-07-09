@@ -17,6 +17,8 @@ from .teams_views import (
 )
 from . import webhook_views
 from . import okta_views
+from . import google_views
+from . import microsoft_views
 
 urlpatterns = [
     path("slack/status/", slack_integration_status, name="slack_integration_status"),
@@ -40,4 +42,12 @@ urlpatterns = [
     path("okta/oauth/start/", okta_views.okta_oauth_start, name="okta_oauth_start"),
     path("okta/oauth/redirect/", okta_views.okta_oauth_redirect, name="okta_oauth_redirect"),
     path("okta/disconnect/", okta_views.okta_disconnect, name="okta_disconnect"),
+    path("google/status/", google_views.google_workspace_status, name="google_workspace_status"),
+    path("google/oauth/start/", google_views.google_workspace_oauth_start, name="google_workspace_oauth_start"),
+    path("google/oauth/redirect/", google_views.google_workspace_oauth_redirect, name="google_workspace_oauth_redirect"),
+    path("google/disconnect/", google_views.google_workspace_disconnect, name="google_workspace_disconnect"),
+    path("microsoft/status/", microsoft_views.microsoft365_status, name="microsoft365_status"),
+    path("microsoft/oauth/start/", microsoft_views.microsoft365_oauth_start, name="microsoft365_oauth_start"),
+    path("microsoft/oauth/redirect/", microsoft_views.microsoft365_oauth_redirect, name="microsoft365_oauth_redirect"),
+    path("microsoft/disconnect/", microsoft_views.microsoft365_disconnect, name="microsoft365_disconnect"),
 ]

@@ -53,6 +53,32 @@ ONBOARDING_TEMPLATE_STEPS = [
         },
     },
     {
+        "title": "Verify Google Workspace account",
+        "description": "Automatically confirms the new hire has a Google Workspace user.",
+        "assignee_team": "IT Support",
+        "assignee_role": "it",
+        "step_type": "auto_check",
+        "due_days": 1,
+        "auto_check": {
+            "connector": "google_workspace",
+            "check": "user_exists",
+            "email_from": "ticket_reporter",
+        },
+    },
+    {
+        "title": "Verify Microsoft 365 account",
+        "description": "Automatically confirms the new hire exists in Microsoft 365.",
+        "assignee_team": "IT Support",
+        "assignee_role": "it",
+        "step_type": "auto_check",
+        "due_days": 1,
+        "auto_check": {
+            "connector": "microsoft365",
+            "check": "user_exists",
+            "email_from": "ticket_reporter",
+        },
+    },
+    {
         "title": "Assign hardware",
         "description": "Prepare laptop, monitor, and peripherals. Confirm shipping or desk delivery before day one.",
         "assignee_team": "IT Support",

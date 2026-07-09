@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from integrations.models import SlackToken, WebhookDelivery, WebhookEndpoint, OktaInstallation, ConnectorCheckLog
+from integrations.models import SlackToken, WebhookDelivery, WebhookEndpoint, OktaInstallation, ConnectorCheckLog, GoogleWorkspaceInstallation, Microsoft365Installation
 
 
 @admin.register(SlackToken)
@@ -48,3 +48,17 @@ class ConnectorCheckLogAdmin(admin.ModelAdmin):
     list_filter = ("connector", "status", "check_type")
     search_fields = ("message",)
     readonly_fields = ("ran_at", "detail")
+
+
+@admin.register(GoogleWorkspaceInstallation)
+class GoogleWorkspaceInstallationAdmin(admin.ModelAdmin):
+    list_display = ("admin_email", "resolvemeq_team", "is_active", "failure_count", "updated_at")
+    list_filter = ("is_active",)
+    raw_id_fields = ("resolvemeq_team", "installed_by")
+
+
+@admin.register(Microsoft365Installation)
+class Microsoft365InstallationAdmin(admin.ModelAdmin):
+    list_display = ("tenant_id", "resolvemeq_team", "is_active", "failure_count", "updated_at")
+    list_filter = ("is_active",)
+    raw_id_fields = ("resolvemeq_team", "installed_by")
