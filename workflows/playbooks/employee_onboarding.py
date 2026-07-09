@@ -16,7 +16,49 @@ ONBOARDING_KB_ARTICLE_TITLES = [
     "New Employee - IT Onboarding Checklist",
 ]
 
-# Category auto-start is the v1 "rule" until Phase 2 Rules engine ships.
+ONBOARDING_RESOLUTION_TEMPLATE_NAME = "New Employee IT Provisioning"
+
+ONBOARDING_RESOLUTION_TEMPLATE = {
+    "name": ONBOARDING_RESOLUTION_TEMPLATE_NAME,
+    "description": "Standard IT provisioning checklist for new hires — accounts, access, and day-one readiness.",
+    "category": "onboarding",
+    "issue_types": ["onboarding", "new hire", "new employee", "provisioning"],
+    "tags": ["onboarding", "provisioning", "new_hire", "accounts"],
+    "estimated_time": "45 minutes",
+    "steps": [
+        {
+            "step_number": 1,
+            "title": "Create core accounts",
+            "description": "Provision email, SSO/Okta, and primary collaboration apps (Teams/Slack).",
+            "estimated_minutes": 10,
+        },
+        {
+            "step_number": 2,
+            "title": "Assign licenses and groups",
+            "description": "Add role-based groups, shared mailboxes, and required SaaS licenses.",
+            "estimated_minutes": 10,
+        },
+        {
+            "step_number": 3,
+            "title": "Configure VPN and MFA",
+            "description": "Enroll MFA, confirm VPN profile, and verify first login from a managed device.",
+            "estimated_minutes": 10,
+        },
+        {
+            "step_number": 4,
+            "title": "Prepare hardware",
+            "description": "Image laptop, install standard software bundle, and confirm peripherals.",
+            "estimated_minutes": 10,
+        },
+        {
+            "step_number": 5,
+            "title": "Day-one verification",
+            "description": "Walk through email, VPN, MFA, and ticket submission with the new hire.",
+            "estimated_minutes": 5,
+        },
+    ],
+}
+
 ONBOARDING_AUTOMATION_RULE = {
     "id": "onboarding-auto-start",
     "name": "Auto-start onboarding workflow",
@@ -26,7 +68,7 @@ ONBOARDING_AUTOMATION_RULE = {
     "action": "start_workflow",
     "template_trigger_category": "onboarding",
     "status": "active",
-    "implemented_via": "workflows.services.maybe_start_workflow_for_ticket",
+    "implemented_via": "automation.engine (seed_automation_rules)",
 }
 
 ONBOARDING_TEMPLATE_STEPS = [

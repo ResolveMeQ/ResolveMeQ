@@ -12,4 +12,6 @@ urlpatterns = [
     path("<uuid:workflow_id>/steps/<int:step_id>/claim/", views.claim_step, name="workflow-step-claim"),
     path("<uuid:workflow_id>/steps/<int:step_id>/complete/", views.complete_step, name="workflow-step-complete"),
     path("<uuid:workflow_id>/steps/<int:step_id>/auto-check/", views.rerun_auto_check, name="workflow-step-auto-check"),
+    path("<uuid:workflow_id>/steps/<int:step_id>/assistant/", views.step_assistant_suggestions, name="workflow-step-assistant"),
+    path("<uuid:workflow_id>/steps/<int:step_id>/assistant/accept/", views.step_assistant_accept, name="workflow-step-assistant-accept"),
 ]

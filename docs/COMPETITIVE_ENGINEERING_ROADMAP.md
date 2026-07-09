@@ -203,7 +203,7 @@ automation/engine.py               # evaluate + execute
 
 | ID | Feature | Competitive Complete = win vs | Engineering scope | Acceptance (Competitive Complete) |
 |----|---------|------------------------------|-------------------|-----------------------------------|
-| P3-1 | **AI step assistant** | Moveworks (contextual) | On active step, suggest actions from KB only — no invented steps | Suggestions cite KB; user accepts in one click |
+| P3-1 | **Step assistant (LLM + KB)** | Moveworks (contextual) | On active step, LLM guidance grounded in KB + playbook links | Suggestions cite KB when available; accept in one click |
 | P3-2 | **Playbook bundles** | Atomicwork packs | Template + KB articles + resolution templates + default rule | Sales sells “Onboarding pack” as one SKU |
 | P3-3 | **Connector-driven auto_complete** | ServiceNow integration hub | Step completes when Okta/M365 confirms | 2+ steps auto-complete in onboarding demo |
 | P3-4 | **Cross-ticket workflows** | Enterprise ITSM | Parent workflow spawns child tickets per step | Facilities + IT steps tracked separately |
@@ -331,8 +331,8 @@ Update at each release. Status: `Not started` | `In progress` | `Shipped` | **Co
 
 | ID | Feature | Status | Competitive Complete | Product sign-off | Release |
 |----|---------|--------|----------------------|------------------|---------|
-| P3-1 | AI step assistant | Not started | ☐ | ☐ | |
-| P3-2 | Playbook bundles | Not started | ☐ | ☐ | |
+| P3-1 | Step assistant (LLM + KB) | In progress | ☐ | ☐ | Jul 2026 |
+| P3-2 | Playbook bundles | Shipped | ☐ | ☐ | Jul 2026 |
 | P3-3 | Connector auto_complete | Not started | ☐ | ☐ | |
 | P3-4 | Cross-ticket workflows | Not started | ☐ | ☐ | |
 | P3-5 | MSP mode | Not started | ☐ | ☐ | |

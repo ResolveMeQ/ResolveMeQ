@@ -6,9 +6,11 @@ from rest_framework.response import Response
 from .kb_links import resolve_kb_articles_by_titles
 from .models import WorkflowTemplate
 from .playbook_metrics import compute_onboarding_playbook_metrics
+from .playbook_assets import resolve_resolution_templates_by_names
 from .playbooks.employee_onboarding import (
     ONBOARDING_AUTOMATION_RULE,
     ONBOARDING_KB_ARTICLE_TITLES,
+    ONBOARDING_RESOLUTION_TEMPLATE_NAME,
     ONBOARDING_TEMPLATE_NAME,
     ONBOARDING_TEMPLATE_STEPS,
     SKU_ID,
@@ -34,6 +36,9 @@ def employee_onboarding_playbook(request):
     metrics = compute_onboarding_playbook_metrics(wf_qs)
 
     kb_articles = resolve_kb_articles_by_titles(ONBOARDING_KB_ARTICLE_TITLES)
+    resolution_templates = resolve_resolution_templates_by_names(
+        [ONBOARDING_RESOLUTION_TEMPLATE_NAME]
+    )
 
     steps = template.steps if template else ONBOARDING_TEMPLATE_STEPS
     step_previews = []
@@ -64,7 +69,10 @@ def employee_onboarding_playbook(request):
             "workflow_sla_days": sla_days,
             "steps": step_previews,
             "kb_articles": kb_articles,
+            "resolution_templates": resolution_templates,
+            "resolution_template_installed": bool(resolution_templates),
             "automation_rule": ONBOARDING_AUTOMATION_RULE,
+            "install_command": "python manage.py install_playbook_bundle employee-onboarding",
             "metrics": metrics,
             "demo_minutes": 10,
         },

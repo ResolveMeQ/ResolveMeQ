@@ -15,6 +15,7 @@ from .services import _activate_next_steps, maybe_notify_workflow_sla_breach, st
 from .assignee_roles import role_label
 from .kb_links import resolve_kb_articles_by_titles
 from .auto_checks import get_auto_check_config, latest_check_result, run_auto_check
+from .step_assistant import accept_step_assistant_suggestion, get_step_assistant_suggestions
 
 
 def _kb_articles_for_step(workflow, order_index: int):
@@ -260,3 +261,38 @@ def rerun_auto_check(request, workflow_id, step_id):
         "message": message,
         "workflow": _workflow_to_dict(workflow, user=request.user),
     })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def step_assistant_suggestions(request, workflow_id, step_id):
+    workflow = get_object_or_404(Workflow, pk=workflow_id)
+    if not user_can_access_workflow(request.user, workflow):
+        return Response({"error": "You do not have permission to access this workflow."}, status=403)
+    step = get_object_or_404(WorkflowStep, pk=step_id, workflow=workflow)
+
+    result = get_step_assistant_suggestions(workflow=workflow, step=step, user=request.user)
+    if result.get("error") == "agent_quota_exceeded":
+        return Response(result, status=429)
+    if result.get("error"):
+        return Response(result, status=400)
+    return Response({"suggestions": result, "step": _step_to_dict(step, user=request.user)})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def step_assistant_accept(request, workflow_id, step_id):
+    workflow = get_object_or_404(Workflow, pk=workflow_id)
+    if not user_can_access_workflow(request.user, workflow):
+        return Response({"error": "You do not have permission to access this workflow."}, status=403)
+    step = get_object_or_404(WorkflowStep, pk=step_id, workflow=workflow)
+
+    result = accept_step_assistant_suggestion(
+        workflow=workflow,
+        step=step,
+        user=request.user,
+        note=(request.data.get("note") or "").strip(),
+    )
+    if result.get("error"):
+        return Response(result, status=400)
+    return Response(result)

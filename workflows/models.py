@@ -157,3 +157,37 @@ class WorkflowStep(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.status})"
+
+
+class WorkflowStepAssistantEvent(models.Model):
+    """Telemetry for workflow step AI assistant (P3-1)."""
+
+    EVENT_VIEWED = "viewed"
+    EVENT_ACCEPTED = "accepted"
+    EVENT_CHOICES = [
+        (EVENT_VIEWED, "Viewed"),
+        (EVENT_ACCEPTED, "Accepted"),
+    ]
+
+    step = models.ForeignKey(
+        WorkflowStep,
+        on_delete=models.CASCADE,
+        related_name="assistant_events",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="workflow_step_assistant_events",
+    )
+    event_type = models.CharField(max_length=16, choices=EVENT_CHOICES)
+    payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["step", "event_type", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.event_type} step={self.step_id} user={self.user_id}"
+
