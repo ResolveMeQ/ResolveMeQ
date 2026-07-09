@@ -13,6 +13,17 @@ from .models import Workflow, WorkflowStep, WorkflowTemplate
 from .scoping import user_can_access_workflow, user_can_claim_step, workflows_queryset_for_user
 from .services import _activate_next_steps, maybe_notify_workflow_sla_breach, start_workflow
 from .assignee_roles import role_label
+from .kb_links import resolve_kb_articles_by_titles
+
+
+def _kb_articles_for_step(workflow, order_index: int):
+    template = workflow.template
+    if not template:
+        return []
+    steps = template.steps or []
+    if order_index < 0 or order_index >= len(steps):
+        return []
+    return resolve_kb_articles_by_titles(steps[order_index].get("kb_links") or [])
 
 
 def _step_is_overdue(step, now=None):
@@ -51,6 +62,7 @@ def _step_to_dict(step, now=None, user=None):
         "due_at": step.due_at,
         "is_overdue": _step_is_overdue(step, now),
         "can_claim": can_claim,
+        "kb_articles": _kb_articles_for_step(step.workflow, step.order_index),
         "claimed_by": step.claimed_by_id and {
             "id": str(step.claimed_by_id),
             "name": step.claimed_by.get_full_name() or step.claimed_by.email or step.claimed_by.username,
@@ -202,6 +214,13 @@ def complete_step(request, workflow_id, step_id):
     step.status = "done"
     step.completed_at = timezone.now()
     step.save(update_fields=["status", "completed_at"])
+
+    try:
+        from automation.hooks import on_workflow_step_completed
+
+        on_workflow_step_completed(workflow, step)
+    except Exception:
+        pass
 
     completed_whole_workflow = _activate_next_steps(workflow)
 

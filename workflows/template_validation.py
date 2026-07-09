@@ -51,5 +51,12 @@ def normalize_template_steps(raw_steps: Any) -> List[Dict[str, Any]]:
         }
         if skip_when:
             normalized["skip_when"] = skip_when
+        kb_links = step.get("kb_links")
+        if kb_links is not None:
+            if not isinstance(kb_links, list) or not all(isinstance(x, str) for x in kb_links):
+                raise ValueError(f"step {idx + 1} kb_links must be a list of article titles")
+            cleaned = [x.strip()[:200] for x in kb_links if (x or "").strip()]
+            if cleaned:
+                normalized["kb_links"] = cleaned[:5]
         out.append(normalized)
     return out

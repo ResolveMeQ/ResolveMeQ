@@ -5,6 +5,8 @@ Usage: python manage.py populate_workflow_templates
 from django.core.management.base import BaseCommand
 
 from workflows.models import WorkflowTemplate
+from workflows.playbooks.employee_onboarding import ONBOARDING_TEMPLATE_NAME, ONBOARDING_TEMPLATE_STEPS
+from workflows.template_validation import normalize_template_steps
 
 
 class Command(BaseCommand):
@@ -44,35 +46,10 @@ class Command(BaseCommand):
                 ],
             },
             {
-                "name": "Employee onboarding",
+                "name": ONBOARDING_TEMPLATE_NAME,
                 "trigger_category": "onboarding",
-                "steps": [
-                    {
-                        "title": "Provision accounts",
-                        "description": "Create email, SSO, and core system accounts for the new hire.",
-                        "assignee_team": "IT Support",
-                    },
-                    {
-                        "title": "Assign hardware",
-                        "description": "Prepare and assign a laptop and any other required equipment.",
-                        "assignee_team": "IT Support",
-                    },
-                    {
-                        "title": "Coordinate facilities & desk setup",
-                        "description": "Confirm desk/workspace and building access are ready for day one.",
-                        "assignee_team": "Facilities",
-                    },
-                    {
-                        "title": "Schedule orientation & training",
-                        "description": "Book onboarding sessions and share the first-week schedule.",
-                        "assignee_team": "HR",
-                    },
-                    {
-                        "title": "Confirm new hire is set up",
-                        "description": "Check in with the new hire that accounts, hardware, and access all work.",
-                        "assignee_team": "IT Support",
-                    },
-                ],
+                "steps": ONBOARDING_TEMPLATE_STEPS,
+                "upgrade": True,
             },
             {
                 "name": "Employee offboarding",
@@ -229,13 +206,30 @@ class Command(BaseCommand):
         ]
 
         created_count = 0
+        upgraded_count = 0
         for data in templates:
+            steps = normalize_template_steps(data["steps"]) if data.get("upgrade") else data["steps"]
+            if data.get("upgrade"):
+                template, created = WorkflowTemplate.objects.update_or_create(
+                    name=data["name"],
+                    team=None,
+                    defaults={"trigger_category": data["trigger_category"], "steps": steps},
+                )
+                if created:
+                    created_count += 1
+                else:
+                    upgraded_count += 1
+                continue
             _, created = WorkflowTemplate.objects.get_or_create(
                 name=data["name"],
                 team=None,
-                defaults={"trigger_category": data["trigger_category"], "steps": data["steps"]},
+                defaults={"trigger_category": data["trigger_category"], "steps": steps},
             )
             if created:
                 created_count += 1
 
-        self.stdout.write(self.style.SUCCESS(f"Seeded {created_count} new workflow template(s)."))
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Seeded {created_count} new workflow template(s); upgraded {upgraded_count} playbook SKU template(s)."
+            )
+        )

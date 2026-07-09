@@ -95,3 +95,9 @@ def notify_workflow_step_active(workflow, step):
 
     _safe("slack", "workflow_step", slack_inst.notify_workflow_step_active, workflow, step)
     _safe("teams", "workflow_step", _teams, workflow, step)
+
+
+def notify_webhook_event(event_type: str, context: dict) -> None:
+    from integrations.connectors.webhook import fan_out_webhook_event
+
+    _safe("webhook", event_type, fan_out_webhook_event, event_type, context)

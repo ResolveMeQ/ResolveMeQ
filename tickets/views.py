@@ -255,6 +255,7 @@ def outcome_metrics(request):
     Outcome metrics for visible tickets: time to first AI, deflection-style rates, per-team breakdown.
     """
     from .outcome_metrics import compute_outcome_metrics
+    from workflows.playbook_metrics import compute_onboarding_playbook_metrics
     from workflows.scoping import workflows_queryset_for_user
 
     base_qs = _tickets_for_user(request)
@@ -263,6 +264,7 @@ def outcome_metrics(request):
     wf_qs = workflows_queryset_for_user(request.user)
     payload["workflows_completed_count"] = wf_qs.filter(status="completed").count()
     payload["workflows_in_progress_count"] = wf_qs.filter(status="in_progress").count()
+    payload["onboarding_playbook"] = compute_onboarding_playbook_metrics(wf_qs)
     return Response(payload)
 
 
@@ -1034,6 +1036,12 @@ def escalate_ticket(request, ticket_id):
         params=params,
         acting_user=request.user,
     )
+    try:
+        from automation.hooks import on_ticket_escalated
+
+        on_ticket_escalated(ticket)
+    except Exception:
+        pass
     return Response({
         "message": "Ticket escalated.",
         "ticket": TicketSerializer(ticket).data,
@@ -1244,6 +1252,13 @@ def update_ticket_status(request, ticket_id):
     if previous_status != canonical:
         _notify_ticket_status_change(ticket, canonical)
         dispatch_ticket_status_emails(ticket, previous_status, canonical)
+        if canonical == "resolved":
+            try:
+                from automation.hooks import on_ticket_resolved
+
+                on_ticket_resolved(ticket)
+            except Exception:
+                pass
     return Response({
         "message": f"Ticket status updated to {canonical}.",
         "ticket": TicketSerializer(ticket).data,

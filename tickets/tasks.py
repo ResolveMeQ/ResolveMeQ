@@ -488,6 +488,9 @@ def handle_escalate(ticket, params):
     from .notifications import notify_support_escalation
     notify_support_escalation(ticket, params)
 
+    from automation.hooks import on_ticket_escalated
+    on_ticket_escalated(ticket)
+
     logger.info(f"Escalated ticket {ticket.ticket_id}")
     return True
 

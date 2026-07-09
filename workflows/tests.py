@@ -557,3 +557,74 @@ class WorkflowSlaTest(TestCase):
             InAppNotification.objects.filter(title="Workflow SLA breached").count(),
             2,
         )
+
+
+class OnboardingPlaybookSkuTest(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="sku1", email="sku1@example.com", password="pw")
+        self.team = Team.objects.create(name="SKU Co", owner=self.owner)
+        self.team.members.add(self.owner)
+        _set_active_team(self.owner, self.team)
+        self.client = APIClient()
+        self.client.force_authenticate(self.owner)
+        from workflows.template_validation import normalize_template_steps
+        from workflows.playbooks.employee_onboarding import ONBOARDING_TEMPLATE_NAME, ONBOARDING_TEMPLATE_STEPS
+
+        WorkflowTemplate.objects.update_or_create(
+            name=ONBOARDING_TEMPLATE_NAME,
+            team=None,
+            defaults={
+                "trigger_category": "onboarding",
+                "steps": normalize_template_steps(ONBOARDING_TEMPLATE_STEPS),
+            },
+        )
+
+    def test_playbook_bundle_endpoint(self):
+        from knowledge_base.models import KnowledgeBaseArticle
+
+        KnowledgeBaseArticle.objects.create(
+            title="New Employee - IT Onboarding Checklist",
+            content="Checklist body",
+            tags=["onboarding"],
+            team=None,
+            is_published=True,
+        )
+        resp = self.client.get("/api/workflows/playbooks/employee-onboarding/")
+        self.assertEqual(resp.status_code, 200)
+        pb = resp.data["playbook"]
+        self.assertEqual(pb["id"], "employee-onboarding")
+        self.assertTrue(pb["template_installed"])
+        self.assertEqual(pb["step_count"], 6)
+        self.assertTrue(pb["kb_articles"])
+        self.assertEqual(pb["automation_rule"]["trigger"], "ticket.created")
+
+    def test_onboarding_metrics_in_outcome_api(self):
+        template = WorkflowTemplate.objects.get(name="Employee onboarding", team=None)
+        start_workflow(template=template, team=self.team, started_by=self.owner)
+        wf = start_workflow(template=template, team=self.team, started_by=self.owner)
+        step = wf.steps.get(order_index=0)
+        self.client.post(f"/api/workflows/{wf.id}/steps/{step.id}/complete/")
+
+        resp = self.client.get("/api/tickets/outcome-metrics/")
+        self.assertEqual(resp.status_code, 200)
+        ob = resp.data["onboarding_playbook"]
+        self.assertEqual(ob["workflows_started"], 2)
+        self.assertGreaterEqual(ob["workflows_completed"], 0)
+
+    def test_step_kb_links_in_workflow_api(self):
+        from knowledge_base.models import KnowledgeBaseArticle
+
+        KnowledgeBaseArticle.objects.create(
+            title="New Employee - IT Onboarding Checklist",
+            content="Checklist",
+            tags=["onboarding"],
+            team=None,
+            is_published=True,
+        )
+        template = WorkflowTemplate.objects.get(name="Employee onboarding", team=None)
+        workflow = start_workflow(template=template, team=self.team, started_by=self.owner)
+        resp = self.client.get("/api/workflows/")
+        wf = next(w for w in resp.data["workflows"] if w["id"] == str(workflow.id))
+        first = wf["steps"][0]
+        self.assertTrue(first["kb_articles"])
+        self.assertEqual(first["kb_articles"][0]["title"], "New Employee - IT Onboarding Checklist")

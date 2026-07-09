@@ -152,3 +152,86 @@ class TeamsLinkCode(models.Model):
     def __str__(self):
         state = "consumed" if self.consumed_at else "pending"
         return f"TeamsLinkCode {self.code} ({state})"
+
+
+class WebhookEndpoint(models.Model):
+    """Team-scoped outbound webhook URL with HMAC signing secret."""
+
+    resolvemeq_team = models.ForeignKey(
+        "base.Team",
+        on_delete=models.CASCADE,
+        related_name="webhook_endpoints",
+    )
+    name = models.CharField(max_length=120, blank=True, default="")
+    url = models.URLField(max_length=512)
+    secret = models.CharField(max_length=128)
+    events = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Empty list = all events; else subset of ticket.* / workflow.* events.",
+    )
+    is_active = models.BooleanField(default=True)
+    failure_count = models.PositiveIntegerField(default=0)
+    circuit_open_until = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="webhook_endpoints_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["resolvemeq_team", "is_active"]),
+        ]
+
+    def __str__(self):
+        label = self.name or self.url
+        return f"Webhook {label} ({self.resolvemeq_team_id})"
+
+
+class WebhookDelivery(models.Model):
+    """Outbound webhook attempt log (retries + admin visibility)."""
+
+    delivery_id = models.UUIDField(unique=True, db_index=True)
+    endpoint = models.ForeignKey(
+        WebhookEndpoint,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="deliveries",
+    )
+    event_type = models.CharField(max_length=64, db_index=True)
+    team_id = models.UUIDField(null=True, blank=True, db_index=True)
+    url = models.URLField(max_length=512)
+    secret = models.CharField(max_length=128)
+    payload = models.JSONField(default=dict)
+    status = models.CharField(
+        max_length=16,
+        default="pending",
+        choices=[
+            ("pending", "Pending"),
+            ("success", "Success"),
+            ("failed", "Failed"),
+        ],
+    )
+    attempts = models.PositiveIntegerField(default=0)
+    response_code = models.PositiveIntegerField(null=True, blank=True)
+    response_body = models.TextField(blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["endpoint", "created_at"]),
+            models.Index(fields=["team_id", "created_at"]),
+        ]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"WebhookDelivery {self.delivery_id} ({self.status})"

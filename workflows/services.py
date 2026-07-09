@@ -93,6 +93,11 @@ def finalize_workflow(workflow):
         if ticket.status not in ("resolved", "closed"):
             ticket.status = "resolved"
             ticket.save(update_fields=["status", "updated_at"])
+            try:
+                from automation.hooks import on_ticket_resolved
+                on_ticket_resolved(ticket)
+            except Exception:
+                pass
 
 
 def _activate_next_steps(workflow):
@@ -121,6 +126,11 @@ def _activate_next_steps(workflow):
             next_step.status = "done"
             next_step.completed_at = timezone.now()
             next_step.save(update_fields=["status", "completed_at"])
+            try:
+                from automation.hooks import on_workflow_step_completed
+                on_workflow_step_completed(workflow, next_step)
+            except Exception:
+                pass
             continue  # keep advancing through the chain
 
         try:

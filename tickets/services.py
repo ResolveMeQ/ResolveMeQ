@@ -77,10 +77,10 @@ def create_ticket_with_reporter(
         logger.warning("Failed to create ticket-created notification: %s", exc)
 
     try:
-        from workflows.services import maybe_start_workflow_for_ticket
+        from automation.hooks import on_ticket_created
 
-        maybe_start_workflow_for_ticket(ticket)
+        on_ticket_created(ticket)
     except Exception as exc:
-        logger.warning("Failed to start workflow for ticket %s: %s", ticket.ticket_id, exc)
+        logger.warning("Failed to run automation for ticket %s: %s", ticket.ticket_id, exc)
 
     return ticket

@@ -149,7 +149,7 @@ Honest inventory — **built**, **partial**, **missing**:
 ### Phase 1 exit criteria
 
 - [ ] Customer admin authors and runs custom template (not seed-only)
-- [ ] Onboarding playbook documented as sellable SKU
+- [x] Onboarding playbook documented as sellable SKU (`docs/PLAYBOOK_EMPLOYEE_ONBOARDING.md`)
 - [ ] ≥3 pilot teams complete onboarding workflow with SLA alerts
 
 ---
@@ -311,18 +311,18 @@ Update at each release. Status: `Not started` | `In progress` | `Shipped` | **Co
 | P1-4 | Team assignee routing | Shipped | ☐ | ☐ | Jul 2026 |
 | P1-5 | Workflow SLA | Shipped | ☐ | ☐ | Jul 2026 |
 | P1-6 | Workflow ↔ ticket sync | Shipped | ☐ | ☐ | Jul 2026 |
-| P1-7 | Onboarding playbook SKU | Not started | ☐ | ☐ | |
+| P1-7 | Onboarding playbook SKU | Shipped | ☐ | ☐ | Jul 2026 |
 
 ### Phase 2 — Rules + Connectors
 
 | ID | Feature | Status | Competitive Complete | Product sign-off | Release |
 |----|---------|--------|----------------------|------------------|---------|
-| P2-1 | Rules engine core | Not started | ☐ | ☐ | |
-| P2-2 | Triggers v1 | Not started | ☐ | ☐ | |
-| P2-3 | Actions v1 | Not started | ☐ | ☐ | |
-| P2-4 | Rules admin UI | Not started | ☐ | ☐ | |
-| P2-5 | Migrate category→workflow | Not started | ☐ | ☐ | |
-| P2-6 | Outbound webhooks | Not started | ☐ | ☐ | |
+| P2-1 | Rules engine core | Shipped | ☐ | ☐ | Jul 2026 |
+| P2-2 | Triggers v1 | Shipped | ☐ | ☐ | Jul 2026 |
+| P2-3 | Actions v1 | Shipped | ☐ | ☐ | Jul 2026 |
+| P2-4 | Rules admin UI | Shipped | ☐ | ☐ | Jul 2026 |
+| P2-5 | Migrate category→workflow | Shipped | ☐ | ☐ | Jul 2026 |
+| P2-6 | Outbound webhooks | Shipped | ☐ | ☐ | Jul 2026 |
 | P2-7 | Okta read | Not started | ☐ | ☐ | |
 | P2-8 | Google/M365 read | Not started | ☐ | ☐ | |
 | P2-9 | Jira escalate sync | Not started | ☐ | ☐ | |

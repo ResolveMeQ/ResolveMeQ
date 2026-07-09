@@ -15,6 +15,7 @@ from .teams_views import (
     teams_disconnect,
     teams_messages,
 )
+from . import webhook_views
 
 urlpatterns = [
     path("slack/status/", slack_integration_status, name="slack_integration_status"),
@@ -29,4 +30,9 @@ urlpatterns = [
     path("teams/disconnect/", teams_disconnect, name="teams_disconnect"),
     path("teams/link/start/", teams_link_start, name="teams_link_start"),
     path("teams/messages/", teams_messages, name="teams_messages"),
+    path("webhooks/metadata/", webhook_views.webhook_metadata, name="webhook_metadata"),
+    path("webhooks/", webhook_views.webhook_list_create, name="webhook_list_create"),
+    path("webhooks/deliveries/", webhook_views.webhook_deliveries, name="webhook_deliveries"),
+    path("webhooks/<int:endpoint_id>/", webhook_views.webhook_detail, name="webhook_detail"),
+    path("webhooks/<int:endpoint_id>/test/", webhook_views.webhook_test, name="webhook_test"),
 ]
