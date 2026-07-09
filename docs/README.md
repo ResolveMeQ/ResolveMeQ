@@ -18,8 +18,12 @@ ResolveMeQ is a modular Django-based IT support and automation platform with Sla
 - **[Agent API Quick Reference](AGENT_API_QUICK_REFERENCE.md)** - Fast lookup for all agent endpoints
 - **[Marketing Site API](MARKETING_API.md)** - Newsletter subscription and contact request endpoints
 
-### Trust & Reliability (NEW - Feb 2026)
-- **[Platform Assessment](PLATFORM_ASSESSMENT.md)** - Comprehensive trust & reliability analysis
+### Trust & Reliability
+- **[Platform Assessment](PLATFORM_ASSESSMENT.md)** - Trust & reliability analysis (updated Jul 2026)
+- **[Enterprise Security Questionnaire](ENTERPRISE_SECURITY_QUESTIONNAIRE.md)** - Pre-filled RFP/security answers (P4-1)
+- **[Calibration Report Runbook](CALIBRATION_REPORT.md)** - AI confidence vs outcomes (P4-5)
+- **[Public Partner API](PUBLIC_API.md)** - Partner REST API reference (P4-4)
+- **[Competitive Engineering Roadmap](COMPETITIVE_ENGINEERING_ROADMAP.md)** - Phase tracker and release checklist
 - **[Quick Start Improvements](QUICK_START_IMPROVEMENTS.md)** - Week-by-week implementation guide
 - **[Implementation Summary](IMPLEMENTATION_SUMMARY.md)** - Complete feature summary
 - **[Deployment Guide](DEPLOYMENT_GUIDE.md)** - Production deployment steps

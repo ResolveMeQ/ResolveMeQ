@@ -1,6 +1,26 @@
 # Workflows: scoping doc (v1 shipped — Phase 1+ in COMPETITIVE_ENGINEERING_ROADMAP.md)
 
-## Why this exists
+## Shipped reality (July 2026)
+
+The original v1 sketch below was implemented and extended through **Phases 1–3**. Current product includes:
+
+| v1 sketch | Shipped state |
+|-----------|---------------|
+| Strictly sequential steps | **Sequential + simple branching** (`skip_when` on steps, P1-3) |
+| No SLA on steps | **Workflow and step SLAs** with overdue badges (P1-5) |
+| No template UI | **Template admin UI** (P1-1) |
+| No external execution | **Connector auto_check / auto_complete** — Okta, Google, M365 (P2-7–P3-3) |
+| Ticket-only workflows | **Standalone workflows** + **cross-ticket** child workflows (P3-4) |
+| AI matches category only | **Step assistant** — LLM + KB hints per active step (P3-1) |
+| Seed templates only | **Playbook bundles** — employee onboarding SKU + install command (P1-7, P3-2) |
+
+**Live surfaces:** `/workflows` list with overdue filter, ticket detail checklist, escalation queue, Slack/Teams step notifications, outcome metrics (`onboarding_playbook` stats).
+
+**Docs:** `docs/PLAYBOOK_EMPLOYEE_ONBOARDING.md`, `docs/COMPETITIVE_ENGINEERING_ROADMAP.md`
+
+The sections below retain the original v1 design rationale for historical context.
+
+---
 
 ServiceNow's "Now Platform," Aisera's cross-department orchestration, and Atomicwork's
 "AI Coworkers own job roles, not tasks" all describe the same underlying thing: a **multi-step

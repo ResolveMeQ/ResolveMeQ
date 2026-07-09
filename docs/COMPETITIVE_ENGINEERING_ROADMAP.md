@@ -231,9 +231,9 @@ automation/engine.py               # evaluate + execute
 
 ### Phase 4 exit criteria
 
-- [ ] Enterprise security questionnaire answered from built features (not “planned”)
+- [x] Enterprise security questionnaire answered from built features (not “planned”) — `docs/ENTERPRISE_SECURITY_QUESTIONNAIRE.md`
 - [ ] One partner integration on public API
-- [ ] Published calibration report (internal) for AI confidence vs outcomes
+- [x] Published calibration report (internal) for AI confidence vs outcomes — `docs/CALIBRATION_REPORT.md`
 
 ---
 
@@ -299,7 +299,7 @@ Update at each release. Status: `Not started` | `In progress` | `Shipped` | **Co
 | P0-3 | Microsoft Teams UI | Shipped | ☐ | ☐ | Jul 2026 |
 | P0-4 | Automation metrics v1 | Shipped | ☐ | ☐ | Jul 2026 |
 | P0-5 | Chat UX (analysis first) | Shipped | ☐ | ☐ | Jul 2026 |
-| P0-6 | Documentation truth pass | In progress | ☐ | ☐ | Jul 2026 |
+| P0-6 | Documentation truth pass | Shipped | ☐ | ☐ | Jul 2026 |
 
 ### Phase 1 — Workflow 2.0
 
@@ -370,6 +370,9 @@ Copy into PR description or release ticket:
 | Document | Path | Keep in sync when |
 |----------|------|-----------------|
 | Marketing product brief | `docs/MARKETING_PRODUCT_BRIEF.md` | Any user-facing capability changes |
+| Enterprise security Q&A | `docs/ENTERPRISE_SECURITY_QUESTIONNAIRE.md` | Audit, API, or compliance control changes |
+| Calibration report runbook | `docs/CALIBRATION_REPORT.md` | Analytics or confidence logging changes |
+| Public partner API | `docs/PUBLIC_API.md` | Partner API scope or endpoint changes |
 | Workflows scope (historical) | `docs/WORKFLOWS_SCOPE.md` | Workflow model or semantics change |
 | Platform assessment | `docs/PLATFORM_ASSESSMENT.md` | Security/reliability milestones |
 | Agent improvement plan | `docs/AGENT_IMPROVEMENT_PLAN.md` | AI UX changes |
@@ -380,6 +383,7 @@ Copy into PR description or release ticket:
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-07-09 | Engineering | P0-6 docs truth pass; enterprise security questionnaire; calibration report runbook |
 | 2026-07-08 | Engineering | Initial roadmap; Competitive Complete bar; Phases 0–4 |
 
 ---

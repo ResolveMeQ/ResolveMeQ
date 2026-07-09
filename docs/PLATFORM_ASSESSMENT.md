@@ -1,8 +1,8 @@
 # ResolveMeQ Platform Trust & Reliability Assessment
 
-**Assessment Date:** January 2025  
-**Version:** 2.0  
-**Status:** Production-Ready with Recommended Improvements
+**Assessment Date:** July 2026 (updated)  
+**Version:** 2.1  
+**Status:** Production-Ready — Enterprise controls shipped (Phase 4)
 
 ---
 
@@ -14,10 +14,12 @@
 - ✅ **Multi-level safety system** (auto-resolve → followup → clarify → escalate)
 - ✅ **Solution verification** and learning loops
 - ✅ **Comprehensive test coverage** with autonomous agent tests
-- ✅ **Analytics and monitoring** endpoints
-- ✅ **Audit logging** capability for compliance
+- ✅ **Analytics and monitoring** endpoints (outcome metrics, advanced analytics, agent SLO)
+- ✅ **Compliance audit log** — immutable append-only stream with CSV export (P4-1)
+- ✅ **Agent circuit breaker** — 30s max timeout, Redis-backed breaker, fallback on outage (P4-2)
+- ✅ **Partner public API** — scoped keys for ticket/workflow/rule access (P4-4)
 
-**However**, to establish **COMPLETE TRUST** for offices and individuals, we recommend implementing **15 critical improvements** across 5 categories before full production deployment.
+**Recommended improvements** below remain valid for **formal certification** and **operational hardening** — not blockers for mid-market pilots with built enterprise features.
 
 ---
 
@@ -65,30 +67,37 @@ Based on the codebase analysis, ResolveMeQ can handle:
    - Source: `tickets/autonomous_agent.py:86`
 
 4. **Audit Trail**
-   - Endpoint: `/api/tickets/<ticket_id>/audit-log/`
-   - Tracks all interactions (clarification, feedback, agent_response, user_message)
-   - Source: `tickets/models.py:148`, `tickets/views.py`
+   - Per-ticket: `/api/tickets/<ticket_id>/audit-log/` (`TicketInteraction`)
+   - **Compliance audit (P4-1):** `/api/audit/events/`, CSV export `/api/audit/export/?export_format=csv`
+   - Immutable `ComplianceAuditEvent` — ticket, workflow, rule, MSP events
+   - UI: Settings → Security
+   - See `docs/ENTERPRISE_SECURITY_QUESTIONNAIRE.md`
 
-5. **Knowledge Base Voting**
+5. **Agent reliability (P4-2)**
+   - Centralized `base/agent_client.py` — 30s timeout, circuit breaker
+   - Metrics: `/api/monitoring/agent-slo/`
+   - Source: `base/agent_circuit.py`
+
+6. **Knowledge Base Voting**
    - `helpful_votes`, `total_votes` fields
    - Community validation of solutions
    - Source: `knowledge_base/models.py`
 
-6. **Error Handling**
+7. **Error Handling**
    - Celery retry with exponential backoff (60s, 120s, 240s)
    - Max 3 retries before failure logging
    - Source: `tickets/tasks.py:113-120`
 
-7. **Comprehensive Logging**
+8. **Comprehensive Logging**
    - Logger instances in all critical modules
    - Tracks decision points and errors
    - Source: Throughout codebase
 
 8. **Analytics Dashboard**
    - Processing rate, success rate, confidence distribution
-   - Autonomous solutions count
-   - KB enrichment statistics
-   - Source: `tickets/views.py:497-569`
+   - Outcome metrics, advanced analytics (calibration, bottlenecks)
+   - Autonomous solutions count; KB enrichment statistics
+   - Source: `tickets/views.py`, `tickets/advanced_analytics.py`
 
 ---
 
