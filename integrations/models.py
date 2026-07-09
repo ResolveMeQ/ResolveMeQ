@@ -415,3 +415,52 @@ class Microsoft365Installation(models.Model):
 
     def __str__(self):
         return f"Microsoft 365 {self.tenant_id or '?'} → {self.resolvemeq_team_id}"
+
+
+class JiraInstallation(models.Model):
+    """Jira Cloud connection for escalate → issue sync (P2-9)."""
+
+    resolvemeq_team = models.ForeignKey(
+        "base.Team",
+        on_delete=models.CASCADE,
+        related_name="jira_installations",
+    )
+    site_url = models.URLField(max_length=256, help_text="https://your-org.atlassian.net")
+    user_email = models.CharField(max_length=254, help_text="Atlassian account email for API token auth")
+    api_token = models.TextField(help_text="Jira Cloud API token")
+    project_key = models.CharField(max_length=32, default="SUP")
+    issue_type = models.CharField(max_length=64, default="Task")
+    sync_on_escalate = models.BooleanField(default=True)
+    sync_on_resolve = models.BooleanField(default=True)
+    resolve_transition = models.CharField(
+        max_length=64,
+        default="Done",
+        help_text="Jira transition name when ticket is resolved",
+    )
+    installed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="jira_installs",
+    )
+    is_active = models.BooleanField(default=True)
+    failure_count = models.PositiveIntegerField(default=0)
+    circuit_open_until = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["resolvemeq_team"],
+                condition=models.Q(is_active=True),
+                name="integrations_jira_one_active_per_team",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["resolvemeq_team", "is_active"]),
+        ]
+
+    def __str__(self):
+        return f"Jira {self.project_key} @ {self.site_url}"

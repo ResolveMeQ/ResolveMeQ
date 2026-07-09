@@ -412,7 +412,10 @@ def ticket_agent_status(request, ticket_id):
     """
     Get the agent processing status and history for a ticket.
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if request.user and request.user.is_authenticated:
         if not user_can_access_ticket(request.user, ticket):
             return Response(
@@ -548,7 +551,10 @@ def clarify_ticket(request, ticket_id):
     """
     Add clarification to a ticket (web portal).
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not user_can_access_ticket(request.user, ticket):
         return Response(
             {"error": "You do not have permission to modify this ticket."},
@@ -577,7 +583,10 @@ def feedback_ticket(request, ticket_id):
     """
     Add feedback to a ticket (web portal).
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not user_can_access_ticket(request.user, ticket):
         return Response(
             {"error": "You do not have permission to modify this ticket."},
@@ -600,7 +609,10 @@ def ticket_history(request, ticket_id):
     """
     Get ticket history (recent interactions).
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not user_can_access_ticket(request.user, ticket):
         return Response(
             {"error": "You do not have permission to access this ticket."},
@@ -643,7 +655,11 @@ def list_tickets(request):
         offset = int(offset)
     except ValueError:
         offset = 0
-    queryset = _tickets_for_user(request).order_by("-created_at")
+    queryset = (
+        _tickets_for_user(request)
+        .prefetch_related("external_references")
+        .order_by("-created_at")
+    )
     if status_param:
         queryset = queryset.filter(status=status_param)
     if offset:
@@ -660,7 +676,10 @@ def get_ticket(request, ticket_id):
     Retrieve details for a single ticket by ticket_id.
     Includes comments (user_message interactions) for the ticket panel.
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You do not have permission to access this ticket."},
@@ -714,7 +733,10 @@ def get_ticket(request, ticket_id):
 @permission_classes([IsAuthenticated])
 def ticket_feedback_prompts(request, ticket_id):
     """Situational follow-up prompts (resolution survey, escalation hint, etc.)."""
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You do not have permission to access this ticket."},
@@ -729,7 +751,10 @@ def update_ticket(request, ticket_id):
     Update ticket status or details. Accepts partial updates.
     Example body: {"status": "resolved"}
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You do not have permission to modify this ticket."},
@@ -748,7 +773,10 @@ def delete_ticket(request, ticket_id):
     """
     Delete a ticket.
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You do not have permission to delete this ticket."},
@@ -863,7 +891,10 @@ def upload_attachment(request, ticket_id):
     Upload an attachment (file) to a ticket. Use multipart/form-data.
     Allowed images update ticket.screenshot for AI vision; other files are stored only.
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You do not have permission to modify this ticket."},
@@ -894,7 +925,10 @@ def add_comment(request, ticket_id):
     Add a comment to a ticket (threaded discussion).
     Body: {"comment": "..."}
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You don't have permission to comment on this ticket."},
@@ -955,7 +989,10 @@ def escalate_ticket(request, ticket_id):
     Escalate a ticket for priority handling.
     Body (optional): {"conversation_summary": "..."} - brief context for human agents.
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You don't have permission to escalate this ticket."},
@@ -1060,7 +1097,10 @@ def assign_ticket(request, ticket_id):
     Assign or reassign a ticket. Assignee must belong to the ticket's team when set.
     Body: {"agent_id": "<user UUID>"}
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You do not have permission to assign this ticket."},
@@ -1207,7 +1247,10 @@ def update_ticket_status(request, ticket_id):
     Allows both authenticated users and AI Agent with API key.
     Returns updated ticket for immediate UI updates.
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     status_val = request.data.get("status")
     canonical, err = _normalize_ticket_status(status_val)
     if err:
@@ -1357,7 +1400,10 @@ def suggest_kb_articles(request, ticket_id):
     """
     Suggest relevant knowledge base articles for a ticket.
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You do not have permission to access this ticket."},
@@ -1387,7 +1433,10 @@ def add_internal_note(request, ticket_id):
     Add a private/internal note to a ticket (visible only to agents).
     Body: {"note": "..."}
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You do not have permission to access this ticket."},
@@ -1411,7 +1460,10 @@ def audit_log(request, ticket_id):
     """
     Get audit log (all interactions) for a ticket.
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You do not have permission to access this ticket."},
@@ -1450,7 +1502,10 @@ def ai_suggestions(request, ticket_id):
     """
     Get AI-suggested solutions or similar tickets for a ticket.
     """
-    ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+    ticket = get_object_or_404(
+        Ticket.objects.prefetch_related("external_references"),
+        ticket_id=ticket_id,
+    )
     if not _can_access_ticket(request, ticket):
         return Response(
             {"error": "You do not have permission to access this ticket."},

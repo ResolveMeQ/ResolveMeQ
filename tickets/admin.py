@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import AgentConfidenceLog, Ticket, ResolutionTemplate
+from .models import AgentConfidenceLog, Ticket, ResolutionTemplate, ExternalReference
 from integrations.notify import notify_user_ticket_resolved
 import csv
 from django.http import HttpResponse
@@ -80,6 +80,14 @@ class TicketAdmin(admin.ModelAdmin):
     )
     actions = [mark_as_resolved, respond_via_bot, export_tickets_csv]
     autocomplete_fields = ["user", "assigned_to"]
+
+
+@admin.register(ExternalReference)
+class ExternalReferenceAdmin(admin.ModelAdmin):
+    list_display = ("ticket", "system", "external_id", "external_url", "updated_at")
+    list_filter = ("system",)
+    search_fields = ("external_id", "ticket__ticket_id")
+    raw_id_fields = ("ticket",)
 
 
 @admin.action(description="Activate selected templates")

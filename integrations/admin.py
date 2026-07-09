@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from integrations.models import SlackToken, WebhookDelivery, WebhookEndpoint, OktaInstallation, ConnectorCheckLog, GoogleWorkspaceInstallation, Microsoft365Installation
+from integrations.models import SlackToken, WebhookDelivery, WebhookEndpoint, OktaInstallation, ConnectorCheckLog, GoogleWorkspaceInstallation, Microsoft365Installation, JiraInstallation
 
 
 @admin.register(SlackToken)
@@ -61,4 +61,12 @@ class GoogleWorkspaceInstallationAdmin(admin.ModelAdmin):
 class Microsoft365InstallationAdmin(admin.ModelAdmin):
     list_display = ("tenant_id", "resolvemeq_team", "is_active", "failure_count", "updated_at")
     list_filter = ("is_active",)
+    raw_id_fields = ("resolvemeq_team", "installed_by")
+
+
+@admin.register(JiraInstallation)
+class JiraInstallationAdmin(admin.ModelAdmin):
+    list_display = ("site_url", "project_key", "resolvemeq_team", "is_active", "updated_at")
+    list_filter = ("is_active",)
+    search_fields = ("site_url", "project_key", "resolvemeq_team__name")
     raw_id_fields = ("resolvemeq_team", "installed_by")

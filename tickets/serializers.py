@@ -40,6 +40,7 @@ class KnowledgeBaseEntryListSerializer(serializers.ModelSerializer):
 class TicketSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.SerializerMethodField()
     team_name = serializers.SerializerMethodField()
+    external_references = serializers.SerializerMethodField()
 
     class Meta:
         model = Ticket
@@ -49,7 +50,7 @@ class TicketSerializer(serializers.ModelSerializer):
             'assigned_to', 'assigned_to_name', 'category', 'tags', 'created_at', 'updated_at',
             'agent_response', 'agent_processed',
             'first_ai_at', 'escalated_at', 'awaiting_response_from', 'last_message_at', 'last_message_by',
-            'escalation_priority', 'claimed_at', 'sla_due_at',
+            'escalation_priority', 'claimed_at', 'sla_due_at', 'external_references',
         ]
         read_only_fields = [
             'ticket_id', 'team', 'created_at', 'updated_at', 'agent_response', 'agent_processed',
@@ -68,6 +69,20 @@ class TicketSerializer(serializers.ModelSerializer):
             return None
         agent = obj.assigned_to
         return agent.get_full_name() or agent.email or agent.username
+
+    def get_external_references(self, obj):
+        refs = getattr(obj, "_prefetched_objects_cache", {}).get("external_references")
+        if refs is None:
+            refs = obj.external_references.all()
+        return [
+            {
+                "system": r.system,
+                "external_id": r.external_id,
+                "external_url": r.external_url,
+                "metadata": r.metadata or {},
+            }
+            for r in refs
+        ]
 
 class TicketInteractionSerializer(serializers.ModelSerializer):
     user = serializers.StringRelatedField()

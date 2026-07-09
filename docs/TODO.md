@@ -7,3 +7,6 @@ GOOGLE_WORKSPACE_CLIENT_SECRET=
 MICROSOFT365_CLIENT_ID=
 MICROSOFT365_CLIENT_SECRET=
 # redirect: https://api.resolvemeq.net/api/integrations/microsoft/oauth/redirect/
+
+# Jira Cloud (API token — no OAuth redirect): configure per workspace in Settings → Integrations
+# Create token: https://id.atlassian.com/manage-profile/security/api-tokens

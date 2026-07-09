@@ -806,3 +806,33 @@ class ResolutionTemplate(models.Model):
         if success:
             self.success_count += 1
         self.save(update_fields=['use_count', 'success_count'])
+
+
+class ExternalReference(models.Model):
+    """Link a ResolveMeQ ticket to an external system record (Jira, etc.)."""
+
+    ticket = models.ForeignKey(
+        Ticket,
+        on_delete=models.CASCADE,
+        related_name="external_references",
+    )
+    system = models.CharField(max_length=32, db_index=True)
+    external_id = models.CharField(max_length=128, help_text="External key, e.g. SUP-123")
+    external_url = models.URLField(max_length=512, blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["ticket", "system"],
+                name="tickets_externalreference_unique_ticket_system",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["system", "external_id"]),
+        ]
+
+    def __str__(self):
+        return f"{self.system}:{self.external_id} → #{self.ticket_id}"

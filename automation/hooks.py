@@ -25,6 +25,24 @@ def _safe_webhooks(trigger: str, context: dict):
         logger.warning("Webhook fan-out failed (%s): %s", trigger, exc)
 
 
+def _safe_jira_escalate(ticket):
+    try:
+        from integrations.jira_sync import maybe_sync_ticket_escalated_to_jira
+
+        maybe_sync_ticket_escalated_to_jira(ticket)
+    except Exception as exc:
+        logger.warning("Jira escalate sync failed: %s", exc)
+
+
+def _safe_jira_resolve(ticket):
+    try:
+        from integrations.jira_sync import maybe_sync_ticket_resolved_to_jira
+
+        maybe_sync_ticket_resolved_to_jira(ticket)
+    except Exception as exc:
+        logger.warning("Jira resolve sync failed: %s", exc)
+
+
 def on_ticket_created(ticket):
     ctx = {"ticket": ticket, "category": ticket.category, "status": ticket.status, "team_id": ticket.team_id}
     _safe_dispatch("ticket.created", ctx)
@@ -35,12 +53,14 @@ def on_ticket_escalated(ticket):
     ctx = {"ticket": ticket, "category": ticket.category, "status": ticket.status, "team_id": ticket.team_id}
     _safe_dispatch("ticket.escalated", ctx)
     _safe_webhooks("ticket.escalated", ctx)
+    _safe_jira_escalate(ticket)
 
 
 def on_ticket_resolved(ticket):
     ctx = {"ticket": ticket, "category": ticket.category, "status": ticket.status, "team_id": ticket.team_id}
     _safe_dispatch("ticket.resolved", ctx)
     _safe_webhooks("ticket.resolved", ctx)
+    _safe_jira_resolve(ticket)
 
 
 def on_workflow_step_completed(workflow, step):

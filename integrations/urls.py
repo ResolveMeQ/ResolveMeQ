@@ -19,6 +19,7 @@ from . import webhook_views
 from . import okta_views
 from . import google_views
 from . import microsoft_views
+from . import jira_views
 
 urlpatterns = [
     path("slack/status/", slack_integration_status, name="slack_integration_status"),
@@ -50,4 +51,8 @@ urlpatterns = [
     path("microsoft/oauth/start/", microsoft_views.microsoft365_oauth_start, name="microsoft365_oauth_start"),
     path("microsoft/oauth/redirect/", microsoft_views.microsoft365_oauth_redirect, name="microsoft365_oauth_redirect"),
     path("microsoft/disconnect/", microsoft_views.microsoft365_disconnect, name="microsoft365_disconnect"),
+    path("jira/status/", jira_views.jira_integration_status, name="jira_integration_status"),
+    path("jira/configure/", jira_views.jira_configure, name="jira_configure"),
+    path("jira/update/", jira_views.jira_update, name="jira_update"),
+    path("jira/disconnect/", jira_views.jira_disconnect, name="jira_disconnect"),
 ]
