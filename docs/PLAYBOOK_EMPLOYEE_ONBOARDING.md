@@ -13,6 +13,7 @@
 | **Resolution template** | *New Employee IT Provisioning* — apply to linked tickets |
 | **Automation rule** | `ticket.created` + `category=onboarding` → auto-start playbook (via rules engine) |
 | **Connector auto-complete** | 3 `auto_check` steps verify Okta, Google Workspace, and Microsoft 365 when integrations are connected |
+| **Cross-ticket tasks** | IT and Facilities steps spawn separate child tickets; resolving a child ticket completes the workflow step |
 | **Metrics** | Completion rate, overdue count, workflows started/completed on dashboard |
 
 ## Install (VPS / fresh env)

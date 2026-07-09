@@ -127,6 +127,8 @@ ONBOARDING_TEMPLATE_STEPS = [
         "assignee_role": "it",
         "step_type": "manual",
         "due_days": 2,
+        "spawn_child_ticket": True,
+        "child_ticket_category": "provisioning",
         "kb_links": ["New Employee - IT Onboarding Checklist"],
     },
     {
@@ -136,6 +138,8 @@ ONBOARDING_TEMPLATE_STEPS = [
         "assignee_role": "facilities",
         "step_type": "manual",
         "due_days": 2,
+        "spawn_child_ticket": True,
+        "child_ticket_category": "access",
         "skip_when": {"ticket_field": "category", "equals": "remote_onboarding"},
     },
     {

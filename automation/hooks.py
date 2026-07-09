@@ -61,6 +61,12 @@ def on_ticket_resolved(ticket):
     _safe_dispatch("ticket.resolved", ctx)
     _safe_webhooks("ticket.resolved", ctx)
     _safe_jira_resolve(ticket)
+    try:
+        from workflows.child_tickets import maybe_complete_step_for_resolved_child
+
+        maybe_complete_step_for_resolved_child(ticket)
+    except Exception as exc:
+        logger.warning("Child ticket workflow sync failed: %s", exc)
 
 
 def on_workflow_step_completed(workflow, step):

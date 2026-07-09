@@ -77,12 +77,22 @@ def _step_to_dict(step, now=None, user=None):
             "name": step.claimed_by.get_full_name() or step.claimed_by.email or step.claimed_by.username,
         },
         "completed_at": step.completed_at,
+        "child_ticket": _child_ticket_dict(step.child_ticket) if step.child_ticket_id else None,
+    }
+
+
+def _child_ticket_dict(ticket):
+    return {
+        "ticket_id": ticket.ticket_id,
+        "issue_type": ticket.issue_type,
+        "status": ticket.status,
+        "category": ticket.category,
     }
 
 
 def _workflow_to_dict(workflow, now=None, user=None):
     now = now or timezone.now()
-    steps = list(workflow.steps.all())
+    steps = list(workflow.steps.select_related("child_ticket").all())
     overdue_count = sum(1 for s in steps if _step_is_overdue(s, now))
     wf_overdue = _workflow_is_overdue(workflow, now)
     return {

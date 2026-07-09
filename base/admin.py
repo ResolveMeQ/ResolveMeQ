@@ -120,8 +120,8 @@ admin.site.register(User, UserAdmin)
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
     """Admin interface for Team model."""
-    list_display = ['name', 'department', 'location', 'lead', 'is_active', 'created_at']
-    list_filter = ['is_active', 'department', 'created_at']
+    list_display = ['name', 'team_kind', 'msp_parent', 'department', 'location', 'lead', 'is_active', 'created_at']
+    list_filter = ['is_active', 'team_kind', 'department', 'created_at']
     search_fields = ['name', 'description', 'department', 'location']
     filter_horizontal = ['members']
     readonly_fields = ['id', 'created_at', 'updated_at']

@@ -151,6 +151,14 @@ class WorkflowStep(models.Model):
         default="manual",
         help_text="Copied from template at creation. Approval steps use an Approve action in UI.",
     )
+    child_ticket = models.ForeignKey(
+        "tickets.Ticket",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="spawned_from_workflow_steps",
+        help_text="Child ticket spawned when this step became active (P3-4).",
+    )
 
     class Meta:
         ordering = ["order_index"]

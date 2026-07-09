@@ -428,10 +428,12 @@ class TeamSerializer(serializers.ModelSerializer):
             'member_count',
             'active_member_count',
             'is_active',
+            'team_kind',
+            'msp_parent',
             'created_at',
             'updated_at'
         ]
-        read_only_fields = ['id', 'owner', 'created_at', 'updated_at', 'member_count', 'active_member_count']
+        read_only_fields = ['id', 'owner', 'created_at', 'updated_at', 'member_count', 'active_member_count', 'msp_parent']
     
     def get_is_owner(self, obj):
         request = self.context.get('request')

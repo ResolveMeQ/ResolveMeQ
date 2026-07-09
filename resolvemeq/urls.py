@@ -47,6 +47,7 @@ urlpatterns = [
    path("api/auth/", include("base.urls")),
    path("api/users/", include("base.api_urls")),
    path("api/teams/", include("base.teams_urls")),
+   path("api/msp/", include("base.msp_urls")),
    path("api/billing/", include("base.billing_urls")),
    path("api/integrations/", include("integrations.urls")),
    path("api/workflows/", include("workflows.urls")),

@@ -138,6 +138,10 @@ def _activate_next_steps(workflow):
         if try_auto_complete_connector_step(workflow, next_step):
             continue
 
+        from .child_tickets import spawn_child_ticket_for_step
+
+        spawn_child_ticket_for_step(workflow, next_step)
+
         try:
             from .notifications import notify_team_step_active
 

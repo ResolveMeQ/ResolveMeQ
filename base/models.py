@@ -528,6 +528,29 @@ class Team(models.Model):
         help_text=_("Whether this team is currently active")
     )
 
+    TEAM_KIND_WORKSPACE = "workspace"
+    TEAM_KIND_MSP = "msp"
+    TEAM_KIND_MSP_CLIENT = "msp_client"
+    TEAM_KIND_CHOICES = [
+        (TEAM_KIND_WORKSPACE, _("Workspace")),
+        (TEAM_KIND_MSP, _("MSP hub")),
+        (TEAM_KIND_MSP_CLIENT, _("MSP client")),
+    ]
+    team_kind = models.CharField(
+        max_length=16,
+        choices=TEAM_KIND_CHOICES,
+        default=TEAM_KIND_WORKSPACE,
+        help_text=_("MSP hub manages linked client workspaces (P3-5)."),
+    )
+    msp_parent = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="msp_clients",
+        help_text=_("MSP hub team when team_kind is msp_client."),
+    )
+
     created_at = models.DateTimeField(
         _("created at"),
         auto_now_add=True,
@@ -548,6 +571,7 @@ class Team(models.Model):
             models.Index(fields=['name']),
             models.Index(fields=['department']),
             models.Index(fields=['is_active']),
+            models.Index(fields=['team_kind', 'msp_parent']),
         ]
 
     def __str__(self):

@@ -334,8 +334,8 @@ Update at each release. Status: `Not started` | `In progress` | `Shipped` | **Co
 | P3-1 | Step assistant (LLM + KB) | Shipped | ☐ | ☐ | Jul 2026 |
 | P3-2 | Playbook bundles | Shipped | ☐ | ☐ | Jul 2026 |
 | P3-3 | Connector auto_complete | Shipped | ☐ | ☐ | Jul 2026 |
-| P3-4 | Cross-ticket workflows | Not started | ☐ | ☐ | |
-| P3-5 | MSP mode | Not started | ☐ | ☐ | |
+| P3-4 | Cross-ticket workflows | Shipped | ☐ | ☐ | Jul 2026 |
+| P3-5 | MSP mode | Shipped | ☐ | ☐ | Jul 2026 |
 
 ### Phase 4 — Enterprise & moat
 

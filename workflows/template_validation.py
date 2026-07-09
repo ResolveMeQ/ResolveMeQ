@@ -64,5 +64,10 @@ def normalize_template_steps(raw_steps: Any) -> List[Dict[str, Any]]:
             normalized["auto_check"] = normalize_auto_check(auto_check, step_index=idx)
         elif step_type == "auto_check":
             raise ValueError(f"step {idx + 1} auto_check step requires auto_check config")
+        if step.get("spawn_child_ticket"):
+            normalized["spawn_child_ticket"] = True
+            child_cat = (step.get("child_ticket_category") or "").strip()
+            if child_cat:
+                normalized["child_ticket_category"] = child_cat[:30]
         out.append(normalized)
     return out
