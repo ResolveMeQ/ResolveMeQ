@@ -83,4 +83,12 @@ def create_ticket_with_reporter(
     except Exception as exc:
         logger.warning("Failed to run automation for ticket %s: %s", ticket.ticket_id, exc)
 
+    if not assigned_to:
+        try:
+            from tickets.predictive_routing import maybe_apply_predictive_routing
+
+            maybe_apply_predictive_routing(ticket)
+        except Exception as exc:
+            logger.warning("Predictive routing failed for ticket %s: %s", ticket.ticket_id, exc)
+
     return ticket

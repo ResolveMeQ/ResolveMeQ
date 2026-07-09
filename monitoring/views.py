@@ -1,3 +1,4 @@
+from base.agent_circuit import get_agent_slo_status
 import time
 
 import requests
@@ -10,7 +11,7 @@ from django.db import connection
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny, IsAdminUser
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
 # Shown in Swagger “Try it out” — these are read in code from request.GET / request.headers
@@ -183,6 +184,8 @@ def build_service_health_results() -> dict:
 
     results["overall_status"] = "healthy" if all_healthy else "degraded"
 
+    results["agent_slo"] = get_agent_slo_status()
+
     return results
 
 
@@ -322,6 +325,13 @@ def mail_test_send(request):
             {"ok": False, "error": str(exc), "ms": ms},
             status=503,
         )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def agent_slo_status(request):
+    """AI agent circuit breaker and SLO metrics (authenticated)."""
+    return Response(get_agent_slo_status())
 
 
 @swagger_auto_schema(

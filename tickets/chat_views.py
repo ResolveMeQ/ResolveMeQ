@@ -17,6 +17,8 @@ import logging
 
 from .models import Ticket, TicketInteraction, TicketResolution
 from base.agent_http import get_agent_service_headers
+from base.agent_client import AgentCallError, call_agent_json
+from base.agent_circuit import agent_circuit_is_open, record_agent_circuit_skip
 from base.agent_usage import (
     get_billing_user_for_ticket,
     refund_agent_operation,
@@ -696,7 +698,14 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
     
     # Try to get response from AI agent
     agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
-    
+
+    if agent_circuit_is_open():
+        record_agent_circuit_skip()
+        refund_agent_operation(billing_user)
+        return _generate_fallback_response(
+            message, ticket, agent_data, agent_error="AI agent circuit is open"
+        )
+
     try:
         def _assistant_text_for_validation(agent_json):
             if not isinstance(agent_json, dict):
@@ -713,14 +722,12 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
             return "\n\n".join(parts).strip()
 
         def _call_agent(p, timeout_s):
-            resp = requests.post(
-                agent_url,  # Use the standard /analyze/ endpoint
-                json=p,
-                headers=get_agent_service_headers(),
-                timeout=timeout_s,  # Chat may include RAG + long context; allow a bit more time
+            return call_agent_json(
+                agent_url,
+                p,
+                timeout=timeout_s,
+                operation="chat",
             )
-            resp.raise_for_status()
-            return resp.json()
 
         data = _call_agent(payload, 25)
 

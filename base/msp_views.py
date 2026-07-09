@@ -11,6 +11,7 @@ from base.msp_scoping import (
     user_manages_msp_client,
 )
 from base.msp_usage import client_usage_metrics, hub_dashboard_payload
+from monitoring.audit import audit_from_request
 
 
 def _hub_or_error(request, team_id=None):
@@ -60,6 +61,14 @@ def msp_enable(request):
         return Response({"enabled": True, "hub": {"id": str(team.id), "name": team.name}})
     team.team_kind = Team.TEAM_KIND_MSP
     team.save(update_fields=["team_kind", "updated_at"])
+    audit_from_request(
+        request,
+        event_type="msp.enabled",
+        team=team,
+        resource_type="team",
+        resource_id=str(team.id),
+        summary=f"MSP mode enabled on workspace {team.name}",
+    )
     return Response({"enabled": True, "hub": {"id": str(team.id), "name": team.name}}, status=201)
 
 
@@ -103,6 +112,16 @@ def msp_create_client(request):
         is_active=True,
     )
     client.members.add(request.user)
+
+    audit_from_request(
+        request,
+        event_type="msp.client_created",
+        team=hub,
+        resource_type="team",
+        resource_id=str(client.id),
+        summary=f"MSP client workspace created: {client.name}",
+        metadata={"client_name": client.name},
+    )
 
     from base.agent_usage import resolve_usage_period
 

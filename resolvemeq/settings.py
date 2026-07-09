@@ -103,6 +103,7 @@ INSTALLED_APPS = [
     "workflows",
     'base',
     'monitoring',
+    'public_api',
 ]
 
 MIDDLEWARE = [
@@ -380,6 +381,13 @@ BILLING_CHECKOUT_RETURN_URL = os.getenv('BILLING_CHECKOUT_RETURN_URL', '').strip
 AI_AGENT_URL = 'https://agent.resolvemeq.net/tickets/analyze/'
 # Shared secret: Django sends X-API-Key; FastAPI agent rejects requests without it when set.
 AI_AGENT_SERVICE_KEY = (os.getenv('AI_AGENT_SERVICE_KEY') or '').strip()
+AI_AGENT_HTTP_TIMEOUT = int(os.getenv('AI_AGENT_HTTP_TIMEOUT', '30'))
+AI_AGENT_HTTP_TIMEOUT_MAX = int(os.getenv('AI_AGENT_HTTP_TIMEOUT_MAX', '30'))
+AI_AGENT_CIRCUIT_MAX_FAILURES = int(os.getenv('AI_AGENT_CIRCUIT_MAX_FAILURES', '5'))
+AI_AGENT_CIRCUIT_OPEN_SECONDS = int(os.getenv('AI_AGENT_CIRCUIT_OPEN_SECONDS', '300'))
+PREDICTIVE_ROUTING_ENABLED = os.getenv('PREDICTIVE_ROUTING_ENABLED', 'true').strip().lower() in ('1', 'true', 'yes')
+PREDICTIVE_ROUTING_AUTO_ASSIGN_MIN_CONFIDENCE = float(os.getenv('PREDICTIVE_ROUTING_AUTO_ASSIGN_MIN_CONFIDENCE', '0.55'))
+PREDICTIVE_ROUTING_LOOKBACK_DAYS = int(os.getenv('PREDICTIVE_ROUTING_LOOKBACK_DAYS', '90'))
 AGENT_API_KEY = os.getenv('AGENT_API_KEY', 'resolvemeq-agent-secret-key-2026')
 # LLM confidence thresholds (used by AutonomousAgent and Solution creation in tasks)
 AGENT_CONFIDENCE_HIGH = float((os.getenv("AGENT_CONFIDENCE_HIGH", "0.8") or "0.8").strip())

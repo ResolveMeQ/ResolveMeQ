@@ -6,4 +6,5 @@ urlpatterns = [
     path('health/services/', views.service_health_check, name='service_health_check'),
     path('health/complete/', views.service_health_complete, name='service_health_complete'),
     path('mail-test/', views.mail_test_send, name='mail_test_send'),
+    path('agent-slo/', views.agent_slo_status, name='agent_slo_status'),
 ]

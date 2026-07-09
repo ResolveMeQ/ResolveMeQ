@@ -11,6 +11,7 @@ from .engine import dispatch_event
 from .models import Rule, RuleExecutionLog
 from .scoping import rules_queryset_for_user, user_can_edit_rule, user_can_dry_run_rule, user_can_manage_rules
 from .validation import normalize_actions, normalize_conditions, validate_trigger
+from monitoring.audit import audit_from_request
 
 
 def _rule_to_dict(rule: Rule, *, can_edit: bool) -> dict:
@@ -100,6 +101,15 @@ def rule_list_create(request):
         is_active=bool(request.data.get("is_active", True)),
         priority=int(request.data.get("priority") or 100),
     )
+    audit_from_request(
+        request,
+        event_type="rule.created",
+        team=team,
+        resource_type="rule",
+        resource_id=str(rule.id),
+        summary=f"Rule created: {rule.name}",
+        metadata={"trigger": rule.trigger},
+    )
     return Response({"rule": _rule_to_dict(rule, can_edit=True)}, status=201)
 
 
@@ -117,6 +127,15 @@ def rule_detail(request, rule_id):
         return Response({"error": "You do not have permission to edit this rule."}, status=403)
 
     if request.method == "DELETE":
+        audit_from_request(
+            request,
+            event_type="rule.deleted",
+            team=rule.team,
+            resource_type="rule",
+            resource_id=str(rule.id),
+            summary=f"Rule deleted: {rule.name}",
+            metadata={"trigger": rule.trigger},
+        )
         rule.delete()
         return Response({"deleted": True})
 
@@ -146,6 +165,15 @@ def rule_detail(request, rule_id):
         for field, value in updates.items():
             setattr(rule, field, value)
         rule.save(update_fields=list(updates.keys()) + ["updated_at"])
+        audit_from_request(
+            request,
+            event_type="rule.updated",
+            team=rule.team,
+            resource_type="rule",
+            resource_id=str(rule.id),
+            summary=f"Rule updated: {rule.name}",
+            metadata={"fields": list(updates.keys())},
+        )
 
     return Response({"rule": _rule_to_dict(rule, can_edit=True)})
 

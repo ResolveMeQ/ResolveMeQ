@@ -268,6 +268,21 @@ def outcome_metrics(request):
     return Response(payload)
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def advanced_analytics(request):
+    """
+    P4-5 advanced analytics: deflection by category, confidence calibration, workflow bottlenecks.
+    Scoped to tickets/workflows visible to the current user.
+    """
+    from tickets.advanced_analytics import compute_advanced_analytics
+    from workflows.scoping import workflows_queryset_for_user
+
+    ticket_qs = _tickets_for_user(request)
+    wf_qs = workflows_queryset_for_user(request.user)
+    return Response(compute_advanced_analytics(ticket_qs=ticket_qs, workflow_qs=wf_qs))
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticatedOrAgent])
 @throttle_classes([AgentActionThrottle])
@@ -726,6 +741,12 @@ def get_ticket(request, ticket_id):
     except TicketResolution.DoesNotExist:
         data["resolution_feedback_submitted"] = False
     data["feedback_prompts"] = build_feedback_prompts(ticket, request.user)
+    try:
+        from tickets.predictive_routing import routing_suggestion_for_api
+
+        data["routing_suggestion"] = routing_suggestion_for_api(ticket)
+    except Exception:
+        data["routing_suggestion"] = None
     return Response(data)
 
 
@@ -1116,6 +1137,8 @@ def assign_ticket(request, ticket_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    previous_assignee_id = ticket.assigned_to_id
+
     # "Claiming" an escalated ticket = self/teammate assignment while it's still
     # unclaimed. Race-safe: whoever's conditional UPDATE actually matches wins (mirrors
     # outcome_helpers.touch_first_ai_at's pattern), the loser just sees the real state
@@ -1143,6 +1166,13 @@ def assign_ticket(request, ticket_id):
         content=f"Ticket assigned to {agent.get_full_name() or agent.email}.",
     )
     dispatch_ticket_assigned_email(ticket, agent, request.user)
+
+    try:
+        from tickets.predictive_routing import record_routing_reassignment
+
+        record_routing_reassignment(ticket, previous_assignee_id, agent.id)
+    except Exception:
+        pass
 
     if claimed_now:
         ActionHistory.objects.create(
@@ -1307,6 +1337,15 @@ def update_ticket_status(request, ticket_id):
         "ticket": TicketSerializer(ticket).data,
     })
 
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def routing_metrics(request):
+    """Predictive routing telemetry (team owners / staff)."""
+    from tickets.predictive_routing import get_routing_metrics
+
+    return Response(get_routing_metrics())
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def escalation_queue(request):
@@ -1341,9 +1380,15 @@ def escalation_queue(request):
     )
     total = queryset.count()
     queryset = queryset[offset : offset + limit]
-    serializer = TicketSerializer(queryset, many=True)
+    from tickets.predictive_routing import routing_suggestion_for_api
+
+    tickets_data = []
+    for ticket in queryset:
+        row = dict(TicketSerializer(ticket).data)
+        row["routing_suggestion"] = routing_suggestion_for_api(ticket)
+        tickets_data.append(row)
     return Response({
-        "tickets": serializer.data,
+        "tickets": tickets_data,
         "total": total,
         "limit": limit,
         "offset": offset,

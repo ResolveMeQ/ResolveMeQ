@@ -9,6 +9,7 @@ import requests
 from django.conf import settings
 
 from base.agent_http import get_agent_service_headers
+from base.agent_client import AgentCallError, call_agent_analyze
 from base.agent_usage import refund_agent_operation, try_consume_agent_operation
 
 logger = logging.getLogger(__name__)
@@ -149,14 +150,10 @@ def _call_agent_for_step(*, workflow, step, ticket, user) -> Tuple[Optional[Dict
     if ticket and ticket.screenshot:
         payload["screenshot"] = ticket.screenshot
 
-    resp = requests.post(
-        agent_url,
-        json=payload,
-        headers=get_agent_service_headers(),
-        timeout=25,
-    )
-    resp.raise_for_status()
-    return resp.json(), None
+    try:
+        return call_agent_analyze(payload, timeout=25, url=agent_url), None
+    except AgentCallError as exc:
+        return None, str(exc)
 
 
 def get_step_assistant_suggestions(*, workflow, step, user) -> Dict[str, Any]:

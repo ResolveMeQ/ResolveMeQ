@@ -341,11 +341,11 @@ Update at each release. Status: `Not started` | `In progress` | `Shipped` | **Co
 
 | ID | Feature | Status | Competitive Complete | Product sign-off | Release |
 |----|---------|--------|----------------------|------------------|---------|
-| P4-1 | Compliance audit log | Not started | ☐ | ☐ | |
-| P4-2 | Agent circuit breaker | Not started | ☐ | ☐ | |
-| P4-3 | Predictive routing | Not started | ☐ | ☐ | |
-| P4-4 | Public API | Not started | ☐ | ☐ | |
-| P4-5 | Advanced analytics | Not started | ☐ | ☐ | |
+| P4-1 | Compliance audit log | Shipped | ☐ | ☐ | Jul 2026 |
+| P4-2 | Agent circuit breaker | Shipped | ☐ | ☐ | Jul 2026 |
+| P4-3 | Predictive routing | Shipped | ☐ | ☐ | Jul 2026 |
+| P4-4 | Public API | Shipped | ☐ | ☐ | Jul 2026 |
+| P4-5 | Advanced analytics | Shipped | ☐ | ☐ | Jul 2026 |
 
 ---
 

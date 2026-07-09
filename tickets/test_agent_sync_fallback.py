@@ -5,6 +5,7 @@ when Celery/the broker is unavailable, instead of the ticket silently never bein
 """
 from unittest.mock import MagicMock, patch
 
+import requests
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
@@ -36,7 +37,7 @@ class ProcessTicketWithAgentSyncTest(TestCase):
 
     @patch("tickets.tasks.execute_autonomous_action")
     @patch("tickets.tasks.try_consume_agent_operation", return_value=_quota_result(True))
-    @patch("tickets.tasks.requests.post")
+    @patch("base.agent_client.requests.post")
     def test_happy_path_saves_response_and_runs_autonomous_action(
         self, mock_post, mock_quota, mock_execute
     ):
@@ -66,7 +67,7 @@ class ProcessTicketWithAgentSyncTest(TestCase):
     @patch("tickets.tasks.execute_autonomous_action")
     @patch("tickets.tasks.refund_agent_operation")
     @patch("tickets.tasks.try_consume_agent_operation", return_value=_quota_result(True))
-    @patch("tickets.tasks.requests.post", side_effect=ConnectionError("agent unreachable"))
+    @patch("base.agent_client.requests.post", side_effect=requests.ConnectionError("agent unreachable"))
     def test_agent_unreachable_degrades_to_placeholder_and_refunds(
         self, mock_post, mock_quota, mock_refund, mock_execute
     ):

@@ -112,6 +112,29 @@ def dispatch_event(
             context_snapshot=_snapshot_context(context),
         )
         log_ids.append(log.id)
+        if not dry_run:
+            try:
+                from base.models import Team
+                from monitoring.audit import record_audit_event
+
+                team_obj = None
+                tid = team_id or rule.team_id
+                if tid:
+                    team_obj = Team.objects.filter(pk=tid).first()
+                record_audit_event(
+                    event_type="rule.executed",
+                    team=team_obj,
+                    resource_type="rule",
+                    resource_id=str(rule.id),
+                    summary=f"Rule executed: {rule.name} ({status})",
+                    metadata={
+                        "trigger": trigger,
+                        "status": status,
+                        "log_id": log.id,
+                    },
+                )
+            except Exception as exc:
+                logger.warning("Compliance audit for rule execution failed: %s", exc)
         if rule_id:
             break
 

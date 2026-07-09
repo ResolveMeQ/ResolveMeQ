@@ -15,6 +15,12 @@ from monitoring.metrics import AgentMetrics
 from django.utils import timezone
 
 from base.agent_http import get_agent_service_headers
+from base.agent_client import (
+    AgentCallError,
+    build_ticket_analyze_fallback,
+    call_agent_analyze,
+    try_call_agent_analyze,
+)
 from base.agent_usage import (
     get_billing_user_for_ticket,
     refund_agent_operation,
@@ -78,14 +84,21 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False, bill
 
         # Send to agent
         agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
-        headers = get_agent_service_headers()
         logger.info(f"Sending POST to FastAPI: {agent_url} with payload: {payload}")
-        response = requests.post(agent_url, json=payload, headers=headers, timeout=30)
-        logger.info(f"Received response from FastAPI: {response.status_code} {response.text}")
-        response.raise_for_status()
+        try:
+            agent_response = call_agent_analyze(payload, timeout=30, url=agent_url)
+        except AgentCallError as exc:
+            if exc.circuit_open:
+                logger.warning("AI agent circuit open for ticket %s — using fallback", ticket_id)
+                if billing_user:
+                    refund_agent_operation(billing_user)
+                agent_response = build_ticket_analyze_fallback(ticket, reason=str(exc))
+            else:
+                raise requests.RequestException(str(exc)) from exc
+        logger.info("Received agent response for ticket %s", ticket_id)
 
         # Update ticket with agent response
-        ticket.agent_response = response.json()
+        ticket.agent_response = agent_response
         ticket.agent_processed = True
         ticket.save()
         agent_saved = True
@@ -230,34 +243,16 @@ def process_ticket_with_agent_sync(ticket, billing_user, force=False, billing_pr
             payload["reported_platform"] = ticket.reported_platform
 
         agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
-        headers = get_agent_service_headers()
-
-        try:
-            response = requests.post(agent_url, json=payload, headers=headers, timeout=10)
-            response.raise_for_status()
-            agent_response = response.json()
-        except Exception as agent_error:
-            logger.warning(f"AI Agent unavailable for ticket {ticket.ticket_id}, using placeholder: {agent_error}")
+        agent_response, agent_error = try_call_agent_analyze(
+            payload, ticket=ticket, timeout=10, url=agent_url
+        )
+        if agent_error and agent_response and agent_response.get("agent_fallback"):
+            logger.warning(
+                "AI Agent unavailable for ticket %s, using fallback: %s",
+                ticket.ticket_id,
+                agent_error,
+            )
             refund_agent_operation(billing_user)
-            agent_response = {
-                "confidence": 0.0,
-                "recommended_action": "request_clarification",
-                "analysis": {
-                    "category": ticket.category or "general",
-                    "severity": "medium",
-                    "complexity": "medium",
-                },
-                "solution": {
-                    "steps": [
-                        "This is a placeholder response - the AI agent is currently unavailable",
-                        "Please check the issue description and category",
-                        "You can manually assign this ticket to the appropriate team",
-                    ],
-                    "estimated_time": "Pending agent availability",
-                    "success_probability": 0.0,
-                },
-                "reasoning": "AI agent service is currently unavailable. This is a placeholder response.",
-            }
 
         ticket.agent_response = agent_response
         ticket.agent_processed = True
@@ -490,6 +485,14 @@ def handle_escalate(ticket, params):
 
     from automation.hooks import on_ticket_escalated
     on_ticket_escalated(ticket)
+
+    if not ticket.assigned_to_id:
+        try:
+            from tickets.predictive_routing import maybe_apply_predictive_routing
+
+            maybe_apply_predictive_routing(ticket)
+        except Exception as exc:
+            logger.warning("Predictive routing on escalate failed for ticket %s: %s", ticket.ticket_id, exc)
 
     logger.info(f"Escalated ticket {ticket.ticket_id}")
     return True

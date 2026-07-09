@@ -187,6 +187,21 @@ class RollbackManager:
             return False
 
     @staticmethod
+    def rollback_predictive_route(ticket, action_history, rollback_by, reason):
+        before = action_history.before_state or {}
+        ticket.assigned_to_id = before.get("assigned_to_id")
+        ticket.status = before.get("status") or ticket.status
+        ticket.save(update_fields=["assigned_to", "status", "updated_at"])
+        action_history.rolled_back = True
+        action_history.rolled_back_at = timezone.now()
+        action_history.rolled_back_by = rollback_by
+        action_history.rollback_reason = reason
+        action_history.save(
+            update_fields=["rolled_back", "rolled_back_at", "rolled_back_by", "rollback_reason"]
+        )
+        return True
+
+    @staticmethod
     def can_rollback(action_type):
         """
         Check if action type supports rollback.
@@ -203,8 +218,9 @@ class RollbackManager:
             'ESCALATE',
             'SCHEDULE_FOLLOWUP',
             'MANUAL_RESOLVE',
-            'CLAIM',
-        ]
+        'CLAIM',
+        'PREDICTIVE_ROUTE',
+    ]
         return action_type in ROLLBACK_SUPPORTED
     
     @staticmethod
@@ -234,6 +250,8 @@ class RollbackManager:
             return RollbackManager.rollback_escalate(ticket, action_history, rollback_by, reason)
         elif action_type == 'CLAIM':
             return RollbackManager.rollback_claim(ticket, action_history, rollback_by, reason)
+        elif action_type == 'PREDICTIVE_ROUTE':
+            return RollbackManager.rollback_predictive_route(ticket, action_history, rollback_by, reason)
         else:
             logger.warning(f"No rollback handler for action type: {action_type}")
             return False
