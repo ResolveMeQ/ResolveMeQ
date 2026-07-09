@@ -71,7 +71,7 @@ Use these as **feature bullets**; verify wording against the **current** demo be
 
 - **Compliance audit log** — Immutable append-only event stream; CSV export (Settings → Security).
 - **Agent circuit breaker** — Agent outages do not hang tickets beyond 30s; fallback messaging and SLO metrics.
-- **Partner public API** — Scoped REST for ticket intake, workflows, rules (`docs/PUBLIC_API.md`).
+- **Partner public API** — Scoped REST for ticket intake, workflows, rules (`docs/api/PUBLIC_API.md`).
 - **Advanced analytics** — Deflection by category, AI confidence calibration vs outcomes, workflow bottleneck detection.
 
 ### For the business
@@ -160,7 +160,7 @@ ServiceNow full replacement is **not** positioned — partner/sync and public AP
 ## 9. Public marketing touchpoints (engineering)
 
 - **Newsletter:** `POST /api/subscribe`  
-- **Demo / contact:** documented under marketing API (`ResolveMeQ/docs/MARKETING_API.md`, `resolvemeqWeb/docs/MARKETING_API.md`)
+- **Demo / contact:** documented under marketing API (`ResolveMeQ/docs/api/MARKETING_API.md`, `resolvemeqWeb/docs/partner-api`)
 
 Marketing should use **exact** URLs and copy from the live marketing site once deployed.
 
@@ -194,4 +194,4 @@ Marketing should use **exact** URLs and copy from the live marketing site once d
 
 ---
 
-*This brief is derived from repository READMEs, `README.md` (ResolveMeQ), `resolvemeq-agent/README.md`, `resolvemeqwebapp/README.md`, `docs/MARKETING_API.md`, `docs/PLATFORM_ASSESSMENT.md`, and agent enhancement docs. It is not a legal or financial commitment.*
+*This brief is derived from repository READMEs, `README.md` (ResolveMeQ), `resolvemeq-agent/README.md`, `resolvemeqwebapp/README.md`, `docs/api/MARKETING_API.md`, `docs/trust/PLATFORM_ASSESSMENT.md`, and agent enhancement docs. It is not a legal or financial commitment.*

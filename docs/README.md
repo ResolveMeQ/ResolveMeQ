@@ -10,26 +10,27 @@ ResolveMeQ is a modular Django-based IT support and automation platform with Sla
 
 ### Getting Started
 - **[Main README](../README.md)** - Project overview and quick start
-- **[Installation & Setup](DEPLOYMENT.md)** - Basic deployment instructions
-- **[Integration Setup](INTEGRATION_SETUP.md)** - Slack and external integrations
+- **[Installation & Setup](deployment/DEPLOYMENT.md)** - Basic deployment instructions
+- **[Integration Setup](deployment/INTEGRATION_SETUP.md)** - Slack and external integrations
 
 ### API Documentation (NEW - March 2026)
-- **[AI Agent API Documentation](AGENT_API.md)** - Complete guide to AI agent endpoints with interactive examples
-- **[Agent API Quick Reference](AGENT_API_QUICK_REFERENCE.md)** - Fast lookup for all agent endpoints
-- **[Marketing Site API](MARKETING_API.md)** - Newsletter subscription and contact request endpoints
+- **[AI Agent API Documentation](agent/AGENT_API.md)** - Complete guide to AI agent endpoints with interactive examples
+- **[Agent API Quick Reference](agent/AGENT_API_QUICK_REFERENCE.md)** - Fast lookup for all agent endpoints
+- **[Marketing Site API](api/MARKETING_API.md)** - Newsletter subscription and contact request endpoints
+- **[Public Partner API](api/PUBLIC_API.md)** - Partner REST API reference (P4-4)
 
 ### Trust & Reliability
-- **[Platform Assessment](PLATFORM_ASSESSMENT.md)** - Trust & reliability analysis (updated Jul 2026)
-- **[Enterprise Security Questionnaire](ENTERPRISE_SECURITY_QUESTIONNAIRE.md)** - Pre-filled RFP/security answers (P4-1)
-- **[Calibration Report Runbook](CALIBRATION_REPORT.md)** - AI confidence vs outcomes (P4-5)
-- **[Public Partner API](PUBLIC_API.md)** - Partner REST API reference (P4-4)
-- **[Competitive Engineering Roadmap](COMPETITIVE_ENGINEERING_ROADMAP.md)** - Phase tracker and release checklist
-- **[Quick Start Improvements](QUICK_START_IMPROVEMENTS.md)** - Week-by-week implementation guide
-- **[Implementation Summary](IMPLEMENTATION_SUMMARY.md)** - Complete feature summary
-- **[Deployment Guide](DEPLOYMENT_GUIDE.md)** - Production deployment steps
+- **[Platform Assessment](trust/PLATFORM_ASSESSMENT.md)** - Trust & reliability analysis (updated Jul 2026)
+- **[Enterprise Security Questionnaire](trust/ENTERPRISE_SECURITY_QUESTIONNAIRE.md)** - Pre-filled RFP/security answers (P4-1)
+- **[Calibration Report Runbook](trust/CALIBRATION_REPORT.md)** - AI confidence vs outcomes (P4-5)
+- **[Competitive Engineering Roadmap](architecture/COMPETITIVE_ENGINEERING_ROADMAP.md)** - Phase tracker and release checklist
+- **[Workflows scope](architecture/WORKFLOWS_SCOPE.md)** - Workflow semantics and non-goals
+- **[Quick Start Improvements](misc/QUICK_START_IMPROVEMENTS.md)** - Week-by-week implementation guide
+- **[Implementation Summary](misc/IMPLEMENTATION_SUMMARY.md)** - Complete feature summary
+- **[Deployment Guide](deployment/DEPLOYMENT_GUIDE.md)** - Production deployment steps
 
 ### Development & Testing
-- **[Testing Guide](TESTING.md)** - Test suite documentation
+- **[Testing Guide](misc/TESTING.md)** - Test suite documentation
 - **[Contributing](../CONTRIBUTING.md)** - Contribution guidelines
 - **[Code of Conduct](../CODE_OF_CONDUCT.md)** - Community standards
 - **[Changelog](../CHANGELOG.md)** - Release history

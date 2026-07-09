@@ -64,7 +64,7 @@
 | IdP / directory read | Okta, Google Workspace, Microsoft 365 **read** connectors for workflow auto-check steps (P2-7, P2-8). |
 | Ticketing sync | Jira Cloud escalate sync (P2-9). |
 | Outbound webhooks | Customer-configured webhooks on automation events (P2-6). |
-| Partner intake API | Public Partner API v1 — documented in `docs/PUBLIC_API.md`. |
+| Partner intake API | Public Partner API v1 — documented in `docs/api/PUBLIC_API.md`. |
 | Connector isolation | No vendor SDKs in Django views; timeouts and circuit breakers required per architecture principles. |
 
 ---
@@ -109,9 +109,9 @@
 | Audit log API | `monitoring/audit_views.py`, `GET /api/audit/events/` |
 | Immutable model | `monitoring/models.py` — `ComplianceAuditEvent.save/delete` |
 | Circuit breaker | `base/agent_circuit.py`, `base/agent_client.py` |
-| Partner API scopes | `public_api/permissions.py`, `docs/PUBLIC_API.md` |
+| Partner API scopes | `public_api/permissions.py`, `docs/api/PUBLIC_API.md` |
 | Advanced analytics | `tickets/advanced_analytics.py`, Analytics page in web app |
-| Roadmap status | `docs/COMPETITIVE_ENGINEERING_ROADMAP.md` |
+| Roadmap status | `docs/architecture/COMPETITIVE_ENGINEERING_ROADMAP.md` |
 
 ---
 

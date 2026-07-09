@@ -16,7 +16,7 @@ The original v1 sketch below was implemented and extended through **Phases 1–3
 
 **Live surfaces:** `/workflows` list with overdue filter, ticket detail checklist, escalation queue, Slack/Teams step notifications, outcome metrics (`onboarding_playbook` stats).
 
-**Docs:** `docs/PLAYBOOK_EMPLOYEE_ONBOARDING.md`, `docs/COMPETITIVE_ENGINEERING_ROADMAP.md`
+**Docs:** `docs/playbooks/PLAYBOOK_EMPLOYEE_ONBOARDING.md`, `docs/architecture/COMPETITIVE_ENGINEERING_ROADMAP.md`
 
 The sections below retain the original v1 design rationale for historical context.
 

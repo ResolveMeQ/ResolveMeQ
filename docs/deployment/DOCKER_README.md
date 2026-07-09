@@ -268,7 +268,7 @@ docker compose down --rmi all
 ## 📚 Documentation
 
 - [Complete Deployment Guide](docs/DOCKER_DEPLOYMENT_GUIDE.md)
-- [Platform Assessment](docs/PLATFORM_ASSESSMENT.md)
+- [Platform Assessment](docs/trust/PLATFORM_ASSESSMENT.md)
 - [Implementation Summary](docs/IMPLEMENTATION_SUMMARY.md)
 - [Test Report](docs/TEST_REPORT.md)
 

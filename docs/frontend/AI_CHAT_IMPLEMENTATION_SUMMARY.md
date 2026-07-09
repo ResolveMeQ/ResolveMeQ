@@ -73,7 +73,7 @@
 
 ### Modified Files (2)
 1. `tickets/urls.py` - Added chat URL include
-2. `docs/AGENT_API.md` - Added section 11: AI Chat Conversation
+2. `docs/agent/AGENT_API.md` - Added section 11: AI Chat Conversation
 
 ---
 

@@ -14,7 +14,7 @@ This guide covers deploying the newly implemented trust and reliability improvem
 ## Pre-Deployment Checklist
 
 - [ ] Review [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)
-- [ ] Review [PLATFORM_ASSESSMENT.md](PLATFORM_ASSESSMENT.md)
+- [ ] Review [PLATFORM_ASSESSMENT.md](../trust/PLATFORM_ASSESSMENT.md)
 - [ ] Sentry account created and project configured
 - [ ] Staging environment tested
 - [ ] Database backup completed
@@ -468,7 +468,7 @@ Deployment is successful when:
 - Slack: #resolvemeq-support
 
 **Documentation:**
-- [PLATFORM_ASSESSMENT.md](PLATFORM_ASSESSMENT.md)
+- [PLATFORM_ASSESSMENT.md](../trust/PLATFORM_ASSESSMENT.md)
 - [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)
 - [QUICK_START_IMPROVEMENTS.md](QUICK_START_IMPROVEMENTS.md)
 

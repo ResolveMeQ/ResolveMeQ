@@ -12,7 +12,7 @@
 1. **Pick work from the current phase only** unless a P0 production bug forces an exception.
 2. **Do not mark a feature “complete”** until it passes the [Competitive Complete bar](#competitive-complete-bar) for that feature.
 3. **Update the [Phase tracker](#phase-tracker)** at the end of each sprint or release.
-4. **Verify marketing claims** against this doc before external use (`docs/MARKETING_PRODUCT_BRIEF.md` must stay aligned).
+4. **Verify marketing claims** against this doc before external use (`docs/misc/MARKETING_PRODUCT_BRIEF.md` must stay aligned).
 
 ---
 
@@ -149,7 +149,7 @@ Honest inventory — **built**, **partial**, **missing**:
 ### Phase 1 exit criteria
 
 - [ ] Customer admin authors and runs custom template (not seed-only)
-- [x] Onboarding playbook documented as sellable SKU (`docs/PLAYBOOK_EMPLOYEE_ONBOARDING.md`)
+- [x] Onboarding playbook documented as sellable SKU (`docs/playbooks/PLAYBOOK_EMPLOYEE_ONBOARDING.md`)
 - [ ] ≥3 pilot teams complete onboarding workflow with SLA alerts
 
 ---
@@ -369,12 +369,12 @@ Copy into PR description or release ticket:
 
 | Document | Path | Keep in sync when |
 |----------|------|-----------------|
-| Marketing product brief | `docs/MARKETING_PRODUCT_BRIEF.md` | Any user-facing capability changes |
-| Enterprise security Q&A | `docs/ENTERPRISE_SECURITY_QUESTIONNAIRE.md` | Audit, API, or compliance control changes |
-| Calibration report runbook | `docs/CALIBRATION_REPORT.md` | Analytics or confidence logging changes |
-| Public partner API | `docs/PUBLIC_API.md` | Partner API scope or endpoint changes |
-| Workflows scope (historical) | `docs/WORKFLOWS_SCOPE.md` | Workflow model or semantics change |
-| Platform assessment | `docs/PLATFORM_ASSESSMENT.md` | Security/reliability milestones |
+| Marketing product brief | `docs/misc/MARKETING_PRODUCT_BRIEF.md` | Any user-facing capability changes |
+| Enterprise security Q&A | `docs/trust/ENTERPRISE_SECURITY_QUESTIONNAIRE.md` | Audit, API, or compliance control changes |
+| Calibration report runbook | `docs/trust/CALIBRATION_REPORT.md` | Analytics or confidence logging changes |
+| Public partner API | `docs/api/PUBLIC_API.md` | Partner API scope or endpoint changes |
+| Workflows scope (historical) | `docs/architecture/WORKFLOWS_SCOPE.md` | Workflow model or semantics change |
+| Platform assessment | `docs/trust/PLATFORM_ASSESSMENT.md` | Security/reliability milestones |
 | Agent improvement plan | `docs/AGENT_IMPROVEMENT_PLAN.md` | AI UX changes |
 
 ---

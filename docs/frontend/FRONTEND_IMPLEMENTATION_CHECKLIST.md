@@ -20,7 +20,7 @@ Use this checklist to implement all the new API endpoints in your frontend appli
 - [ ] Optional: Add privacy policy checkbox
 - [ ] Optional: Add double opt-in confirmation email
 
-**Example Code Location:** [MARKETING_API.md](MARKETING_API.md) → "Frontend Integration" section
+**Example Code Location:** [MARKETING_API.md](../api/MARKETING_API.md) → "Frontend Integration" section
 
 **Test It:**
 ```bash
@@ -46,7 +46,7 @@ curl -X POST http://localhost:8000/api/subscribe \
 - [ ] Optional: Redirect to thank you page on success
 - [ ] Optional: Send confirmation email
 
-**Example Code Location:** [MARKETING_API.md](MARKETING_API.md) → "Frontend Integration" section
+**Example Code Location:** [MARKETING_API.md](../api/MARKETING_API.md) → "Frontend Integration" section
 
 **Test It:**
 ```bash
@@ -72,7 +72,7 @@ curl -X POST http://localhost:8000/api/contact \
 - [ ] Show success notification when complete
 - [ ] Handle errors gracefully
 
-**Example Code Location:** [AGENT_API.md](AGENT_API.md) → "1. Trigger Agent Processing"
+**Example Code Location:** [AGENT_API.md](../agent/AGENT_API.md) → "1. Trigger Agent Processing"
 
 **Component Example:**
 ```jsx
@@ -95,7 +95,7 @@ curl -X POST http://localhost:8000/api/contact \
 - [ ] Display agent response summary
 - [ ] Add icon/color coding based on confidence
 
-**Example Code Location:** [AGENT_API.md](AGENT_API.md) → "3. Check Agent Status"
+**Example Code Location:** [AGENT_API.md](../agent/AGENT_API.md) → "3. Check Agent Status"
 
 ---
 
@@ -108,7 +108,7 @@ curl -X POST http://localhost:8000/api/contact \
 - [ ] Show label: "High Confidence"
 - [ ] Add pulsing effect for visual appeal
 
-**Example Code Location:** [AGENT_API_QUICK_REFERENCE.md](AGENT_API_QUICK_REFERENCE.md) → "Confidence Badge Component"
+**Example Code Location:** [AGENT_API_QUICK_REFERENCE.md](../agent/AGENT_API_QUICK_REFERENCE.md) → "Confidence Badge Component"
 
 ```jsx
 <ConfidenceBadge confidence={0.85} />
@@ -132,7 +132,7 @@ curl -X POST http://localhost:8000/api/contact \
 - [ ] Add "Modify" button
 - [ ] Implement progressive disclosure (click to expand)
 
-**Example Code Location:** [AGENT_API.md](AGENT_API.md) → "Pattern 3: Progressive Disclosure"
+**Example Code Location:** [AGENT_API.md](../agent/AGENT_API.md) → "Pattern 3: Progressive Disclosure"
 
 ---
 
@@ -150,7 +150,7 @@ curl -X POST http://localhost:8000/api/contact \
 - [ ] Implement filters (by confidence, category, etc.)
 - [ ] Add refresh button
 
-**Example Code Location:** [AGENT_API.md](AGENT_API.md) → "2. Get AI Recommendations"
+**Example Code Location:** [AGENT_API.md](../agent/AGENT_API.md) → "2. Get AI Recommendations"
 
 ```
 Dashboard shows:
@@ -172,7 +172,7 @@ Dashboard shows:
 - [ ] Make items clickable to navigate
 - [ ] Add "Try This Solution" button
 
-**Example Code Location:** [AGENT_API.md](AGENT_API.md) → "4. Get AI Suggestions for Ticket"
+**Example Code Location:** [AGENT_API.md](../agent/AGENT_API.md) → "4. Get AI Suggestions for Ticket"
 
 ---
 
@@ -190,7 +190,7 @@ Dashboard shows:
 - [ ] Show "Rolled back" badge if already undone
 - [ ] Color code by action type
 
-**Example Code Location:** [AGENT_API.md](AGENT_API.md) → "5. Action History & Audit Trail"
+**Example Code Location:** [AGENT_API.md](../agent/AGENT_API.md) → "5. Action History & Audit Trail"
 
 ```
 Timeline:
@@ -214,7 +214,7 @@ Timeline:
 - [ ] Refresh action history
 - [ ] Restrict to admins/managers only
 
-**Example Code Location:** [AGENT_API.md](AGENT_API.md) → "6. Rollback Actions"
+**Example Code Location:** [AGENT_API.md](../agent/AGENT_API.md) → "6. Rollback Actions"
 
 **Permissions:** Only admins and managers can rollback
 
@@ -236,7 +236,7 @@ Timeline:
 - [ ] Show after ticket is resolved
 - [ ] Display success message after submission
 
-**Example Code Location:** [AGENT_API.md](AGENT_API.md) → "9. Resolution Feedback"
+**Example Code Location:** [AGENT_API.md](../agent/AGENT_API.md) → "9. Resolution Feedback"
 
 ---
 
@@ -255,7 +255,7 @@ Timeline:
 - [ ] Add date range filter
 - [ ] Add export to CSV button
 
-**Example Code Location:** [AGENT_API.md](AGENT_API.md) → "7. Agent Analytics"
+**Example Code Location:** [AGENT_API.md](../agent/AGENT_API.md) → "7. Agent Analytics"
 
 ---
 
@@ -271,7 +271,7 @@ Timeline:
 - [ ] Handle timeout (after 30 seconds)
 - [ ] Clear interval on component unmount
 
-**Example Code Location:** [AGENT_API.md](AGENT_API.md) → "10. Task Status Monitoring"
+**Example Code Location:** [AGENT_API.md](../agent/AGENT_API.md) → "10. Task Status Monitoring"
 
 ```javascript
 const { status, result } = useTaskPolling(taskId);
@@ -292,7 +292,7 @@ const { status, result } = useTaskPolling(taskId);
 - [ ] Show celebration confetti when all done
 - [ ] Prompt for feedback after completion
 
-**Example Code Location:** [AGENT_API.md](AGENT_API.md) → "Pattern 4: Step-by-Step Execution"
+**Example Code Location:** [AGENT_API.md](../agent/AGENT_API.md) → "Pattern 4: Step-by-Step Execution"
 
 ---
 
@@ -310,7 +310,7 @@ const { status, result } = useTaskPolling(taskId);
 - [ ] Auto-refresh ticket data on events
 - [ ] Reconnect on disconnect
 
-**Example Code Location:** [AGENT_API.md](AGENT_API.md) → "WebSocket Real-Time Updates"
+**Example Code Location:** [AGENT_API.md](../agent/AGENT_API.md) → "WebSocket Real-Time Updates"
 
 ---
 
@@ -416,10 +416,10 @@ const { status, result } = useTaskPolling(taskId);
 
 ## 📚 Documentation Reference
 
-- **Full Guide:** [AGENT_API.md](AGENT_API.md) - Complete documentation with examples
-- **Quick Lookup:** [AGENT_API_QUICK_REFERENCE.md](AGENT_API_QUICK_REFERENCE.md) - Fast reference
-- **Marketing API:** [MARKETING_API.md](MARKETING_API.md) - Newsletter & contact endpoints
-- **Summary:** [API_IMPLEMENTATION_SUMMARY.md](API_IMPLEMENTATION_SUMMARY.md) - What was built
+- **Full Guide:** [AGENT_API.md](../agent/AGENT_API.md) - Complete documentation with examples
+- **Quick Lookup:** [AGENT_API_QUICK_REFERENCE.md](../agent/AGENT_API_QUICK_REFERENCE.md) - Fast reference
+- **Marketing API:** [MARKETING_API.md](../api/MARKETING_API.md) - Newsletter & contact endpoints
+- **Summary:** [API_IMPLEMENTATION_SUMMARY.md](../api/API_IMPLEMENTATION_SUMMARY.md) - What was built
 
 ---
 

@@ -27,7 +27,7 @@ POST /api/contact    - Demo/contact requests
 ```
 
 #### Documentation:
-📄 **[MARKETING_API.md](docs/MARKETING_API.md)** - Complete documentation including:
+📄 **[MARKETING_API.md](docs/api/MARKETING_API.md)** - Complete documentation including:
 - Endpoint specifications
 - Request/Response formats
 - Frontend integration examples (JavaScript)
@@ -43,7 +43,7 @@ POST /api/contact    - Demo/contact requests
 Complete documentation for all agent-related endpoints with interactive UI patterns and examples.
 
 #### Documentation Created:
-📄 **[AGENT_API.md](docs/AGENT_API.md)** - 500+ line comprehensive guide including:
+📄 **[AGENT_API.md](docs/agent/AGENT_API.md)** - 500+ line comprehensive guide including:
 - Quick start examples
 - Agent workflow diagrams
 - All 10+ agent endpoints documented
@@ -344,9 +344,9 @@ docs/
 
 ## 📞 Support Resources
 
-- **Full Agent Documentation:** [docs/AGENT_API.md](docs/AGENT_API.md)
+- **Full Agent Documentation:** [docs/agent/AGENT_API.md](docs/agent/AGENT_API.md)
 - **Quick Reference:** [docs/AGENT_API_QUICK_REFERENCE.md](docs/AGENT_API_QUICK_REFERENCE.md)
-- **Marketing API:** [docs/MARKETING_API.md](docs/MARKETING_API.md)
+- **Marketing API:** [docs/api/MARKETING_API.md](docs/api/MARKETING_API.md)
 - **API Explorer:** http://localhost:8000/docs/ (Swagger)
 - **Live API:** https://api.resolvemeq.net/
 
