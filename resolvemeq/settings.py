@@ -300,6 +300,16 @@ SLACK_LEGACY_INSTALL_FALLBACK = os.getenv("SLACK_LEGACY_INSTALL_FALLBACK", "").s
     "true",
     "yes",
 )
+
+# Okta read connector (P2-7) — workspace owners OAuth-link their org for auto_check steps.
+_api_base = os.getenv("API_BASE_URL", "https://api.resolvemeq.net" if not DEBUG else "http://localhost:8000").rstrip("/")
+OKTA_CLIENT_ID = os.getenv("OKTA_CLIENT_ID")
+OKTA_CLIENT_SECRET = os.getenv("OKTA_CLIENT_SECRET")
+OKTA_REDIRECT_URI = os.getenv("OKTA_REDIRECT_URI", f"{_api_base}/api/integrations/okta/oauth/redirect/")
+OKTA_SCOPES = os.getenv(
+    "OKTA_SCOPES",
+    "okta.users.read okta.groups.read offline_access openid",
+)
 # Optional: Slack channel ID (e.g. C01234ABCD) to post escalated tickets for support visibility
 SLACK_ESCALATION_CHANNEL = os.getenv("SLACK_ESCALATION_CHANNEL", "").strip()
 # Optional: digest / alert target (channel ID); management commands post per active install

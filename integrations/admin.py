@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from integrations.models import SlackToken, WebhookDelivery, WebhookEndpoint
+from integrations.models import SlackToken, WebhookDelivery, WebhookEndpoint, OktaInstallation, ConnectorCheckLog
 
 
 @admin.register(SlackToken)
@@ -32,3 +32,19 @@ class WebhookDeliveryAdmin(admin.ModelAdmin):
     list_filter = ("status", "event_type")
     search_fields = ("delivery_id", "url", "error_message")
     readonly_fields = ("delivery_id", "payload", "created_at", "delivered_at")
+
+
+@admin.register(OktaInstallation)
+class OktaInstallationAdmin(admin.ModelAdmin):
+    list_display = ("okta_domain", "resolvemeq_team", "is_active", "failure_count", "updated_at")
+    list_filter = ("is_active",)
+    search_fields = ("okta_domain", "resolvemeq_team__name")
+    raw_id_fields = ("resolvemeq_team", "installed_by")
+
+
+@admin.register(ConnectorCheckLog)
+class ConnectorCheckLogAdmin(admin.ModelAdmin):
+    list_display = ("connector", "check_type", "status", "workflow_step", "team", "ran_at")
+    list_filter = ("connector", "status", "check_type")
+    search_fields = ("message",)
+    readonly_fields = ("ran_at", "detail")

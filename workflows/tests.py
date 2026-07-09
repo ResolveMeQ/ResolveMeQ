@@ -594,7 +594,7 @@ class OnboardingPlaybookSkuTest(TestCase):
         pb = resp.data["playbook"]
         self.assertEqual(pb["id"], "employee-onboarding")
         self.assertTrue(pb["template_installed"])
-        self.assertEqual(pb["step_count"], 6)
+        self.assertEqual(pb["step_count"], 7)
         self.assertTrue(pb["kb_articles"])
         self.assertEqual(pb["automation_rule"]["trigger"], "ticket.created")
 

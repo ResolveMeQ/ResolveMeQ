@@ -8,6 +8,9 @@ from .assignee_roles import VALID_ASSIGNEE_ROLE_SLUGS
 
 VALID_STEP_TYPES = frozenset({"manual", "approval", "auto_check"})
 VALID_AUTO_ASSIGN = frozenset({"", "started_by", "ticket_reporter"})
+VALID_AUTO_CHECK_CONNECTORS = frozenset({"okta"})
+VALID_AUTO_CHECK_TYPES = frozenset({"user_exists", "group_member"})
+VALID_EMAIL_FROM = frozenset({"ticket_reporter"})
 
 
 def normalize_template_steps(raw_steps: Any) -> List[Dict[str, Any]]:
@@ -58,5 +61,31 @@ def normalize_template_steps(raw_steps: Any) -> List[Dict[str, Any]]:
             cleaned = [x.strip()[:200] for x in kb_links if (x or "").strip()]
             if cleaned:
                 normalized["kb_links"] = cleaned[:5]
+        auto_check = step.get("auto_check")
+        if auto_check is not None:
+            if not isinstance(auto_check, dict):
+                raise ValueError(f"step {idx + 1} auto_check must be an object")
+            connector = (auto_check.get("connector") or "").strip().lower()
+            check = (auto_check.get("check") or "").strip()
+            email_from = (auto_check.get("email_from") or "ticket_reporter").strip()
+            if connector not in VALID_AUTO_CHECK_CONNECTORS:
+                raise ValueError(f"step {idx + 1} auto_check has invalid connector")
+            if check not in VALID_AUTO_CHECK_TYPES:
+                raise ValueError(f"step {idx + 1} auto_check has invalid check")
+            if email_from not in VALID_EMAIL_FROM:
+                raise ValueError(f"step {idx + 1} auto_check has invalid email_from")
+            ac_norm = {
+                "connector": connector,
+                "check": check,
+                "email_from": email_from,
+            }
+            if check == "group_member":
+                group_id = (auto_check.get("group_id") or "").strip()
+                if not group_id:
+                    raise ValueError(f"step {idx + 1} group_member check requires group_id")
+                ac_norm["group_id"] = group_id[:128]
+            normalized["auto_check"] = ac_norm
+        elif step_type == "auto_check":
+            raise ValueError(f"step {idx + 1} auto_check step requires auto_check config")
         out.append(normalized)
     return out

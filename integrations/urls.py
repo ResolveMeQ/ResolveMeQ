@@ -16,6 +16,7 @@ from .teams_views import (
     teams_messages,
 )
 from . import webhook_views
+from . import okta_views
 
 urlpatterns = [
     path("slack/status/", slack_integration_status, name="slack_integration_status"),
@@ -35,4 +36,8 @@ urlpatterns = [
     path("webhooks/deliveries/", webhook_views.webhook_deliveries, name="webhook_deliveries"),
     path("webhooks/<int:endpoint_id>/", webhook_views.webhook_detail, name="webhook_detail"),
     path("webhooks/<int:endpoint_id>/test/", webhook_views.webhook_test, name="webhook_test"),
+    path("okta/status/", okta_views.okta_integration_status, name="okta_integration_status"),
+    path("okta/oauth/start/", okta_views.okta_oauth_start, name="okta_oauth_start"),
+    path("okta/oauth/redirect/", okta_views.okta_oauth_redirect, name="okta_oauth_redirect"),
+    path("okta/disconnect/", okta_views.okta_disconnect, name="okta_disconnect"),
 ]

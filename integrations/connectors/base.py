@@ -33,6 +33,18 @@ def http_post_json(
         raise ConnectorError(str(exc)) from exc
 
 
+def http_get_json(
+    url: str,
+    *,
+    headers: dict,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+) -> requests.Response:
+    try:
+        return requests.get(url, headers=headers, timeout=timeout)
+    except requests.RequestException as exc:
+        raise ConnectorError(str(exc)) from exc
+
+
 def circuit_is_open(endpoint) -> bool:
     until = getattr(endpoint, "circuit_open_until", None)
     return bool(until and until > timezone.now())

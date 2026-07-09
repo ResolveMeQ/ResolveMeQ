@@ -14,6 +14,7 @@ from .scoping import user_can_access_workflow, user_can_claim_step, workflows_qu
 from .services import _activate_next_steps, maybe_notify_workflow_sla_breach, start_workflow
 from .assignee_roles import role_label
 from .kb_links import resolve_kb_articles_by_titles
+from .auto_checks import get_auto_check_config, latest_check_result, run_auto_check
 
 
 def _kb_articles_for_step(workflow, order_index: int):
@@ -63,6 +64,8 @@ def _step_to_dict(step, now=None, user=None):
         "is_overdue": _step_is_overdue(step, now),
         "can_claim": can_claim,
         "kb_articles": _kb_articles_for_step(step.workflow, step.order_index),
+        "auto_check": get_auto_check_config(step.workflow, step),
+        "auto_check_result": latest_check_result(step),
         "claimed_by": step.claimed_by_id and {
             "id": str(step.claimed_by_id),
             "name": step.claimed_by.get_full_name() or step.claimed_by.email or step.claimed_by.username,
@@ -225,3 +228,35 @@ def complete_step(request, workflow_id, step_id):
     completed_whole_workflow = _activate_next_steps(workflow)
 
     return Response({"workflow": _workflow_to_dict(workflow, user=request.user)})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def rerun_auto_check(request, workflow_id, step_id):
+    workflow = get_object_or_404(Workflow, pk=workflow_id)
+    if not user_can_access_workflow(request.user, workflow):
+        return Response({"error": "You do not have permission to access this workflow."}, status=403)
+    step = get_object_or_404(WorkflowStep, pk=step_id, workflow=workflow)
+
+    if step.step_type != "auto_check":
+        return Response({"error": "This step is not an auto_check step."}, status=400)
+    if step.status != "active":
+        return Response({"error": "Auto check can only run on the active step.", "step": _step_to_dict(step, user=request.user)}, status=409)
+
+    passed, message = run_auto_check(step, workflow)
+    if passed:
+        step.status = "done"
+        step.completed_at = timezone.now()
+        step.save(update_fields=["status", "completed_at"])
+        try:
+            from automation.hooks import on_workflow_step_completed
+            on_workflow_step_completed(workflow, step)
+        except Exception:
+            pass
+        _activate_next_steps(workflow)
+
+    return Response({
+        "passed": passed,
+        "message": message,
+        "workflow": _workflow_to_dict(workflow, user=request.user),
+    })

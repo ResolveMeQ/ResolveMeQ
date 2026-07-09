@@ -235,3 +235,99 @@ class WebhookDelivery(models.Model):
 
     def __str__(self):
         return f"WebhookDelivery {self.delivery_id} ({self.status})"
+
+
+class OktaInstallation(models.Model):
+    """OAuth-linked Okta org for read-only user/group checks (P2-7)."""
+
+    resolvemeq_team = models.ForeignKey(
+        "base.Team",
+        on_delete=models.CASCADE,
+        related_name="okta_installations",
+    )
+    okta_domain = models.CharField(max_length=128, help_text="Okta org subdomain, e.g. dev-12345678")
+    issuer_url = models.URLField(
+        max_length=512,
+        help_text="OAuth issuer, typically https://{domain}.okta.com/oauth2/default",
+    )
+    access_token = models.TextField(blank=True, default="")
+    refresh_token = models.TextField(blank=True, default="")
+    token_expires_at = models.DateTimeField(null=True, blank=True)
+    scopes = models.CharField(max_length=256, blank=True, default="")
+    installed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="okta_app_installs",
+    )
+    is_active = models.BooleanField(default=True)
+    failure_count = models.PositiveIntegerField(default=0)
+    circuit_open_until = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["resolvemeq_team"],
+                condition=models.Q(is_active=True),
+                name="integrations_okta_one_active_per_team",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["resolvemeq_team", "is_active"]),
+        ]
+
+    def __str__(self):
+        return f"Okta {self.okta_domain} → {self.resolvemeq_team_id}"
+
+
+class ConnectorCheckLog(models.Model):
+    """Audit log for connector auto_check runs (visible in admin)."""
+
+    team = models.ForeignKey(
+        "base.Team",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="connector_check_logs",
+    )
+    workflow = models.ForeignKey(
+        "workflows.Workflow",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="connector_check_logs",
+    )
+    workflow_step = models.ForeignKey(
+        "workflows.WorkflowStep",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="connector_check_logs",
+    )
+    connector = models.CharField(max_length=32, db_index=True)
+    check_type = models.CharField(max_length=64)
+    status = models.CharField(
+        max_length=16,
+        choices=[
+            ("success", "Success"),
+            ("failed", "Failed"),
+            ("error", "Error"),
+            ("skipped", "Skipped"),
+        ],
+    )
+    message = models.TextField(blank=True, default="")
+    detail = models.JSONField(default=dict, blank=True)
+    ran_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-ran_at"]
+        indexes = [
+            models.Index(fields=["workflow_step", "ran_at"]),
+            models.Index(fields=["team", "connector", "ran_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.connector}.{self.check_type} ({self.status})"

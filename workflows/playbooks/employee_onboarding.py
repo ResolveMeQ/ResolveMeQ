@@ -40,6 +40,19 @@ ONBOARDING_TEMPLATE_STEPS = [
         "kb_links": ["New Employee - IT Onboarding Checklist"],
     },
     {
+        "title": "Verify Okta SSO account",
+        "description": "Automatically confirms the new hire exists in your connected Okta org.",
+        "assignee_team": "IT Support",
+        "assignee_role": "it",
+        "step_type": "auto_check",
+        "due_days": 1,
+        "auto_check": {
+            "connector": "okta",
+            "check": "user_exists",
+            "email_from": "ticket_reporter",
+        },
+    },
+    {
         "title": "Assign hardware",
         "description": "Prepare laptop, monitor, and peripherals. Confirm shipping or desk delivery before day one.",
         "assignee_team": "IT Support",
