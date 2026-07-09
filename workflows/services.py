@@ -190,10 +190,11 @@ def start_workflow(*, template: WorkflowTemplate, ticket=None, team=None, starte
 
 def maybe_start_workflow_for_ticket(ticket):
     """
-    Called from tickets.services.create_ticket_with_reporter after a ticket is created.
     If the ticket's category matches a WorkflowTemplate.trigger_category (team-scoped first,
-    else the global fallback), instantiate that workflow. No-op if no template matches --
-    most tickets aren't workflow-shaped requests.
+    else the global fallback), instantiate that workflow. No-op if no template matches.
+
+    Production ticket creation uses automation rules (ticket.created → start_workflow action);
+    this helper remains for direct calls and tests.
     """
     if not ticket.category:
         return None

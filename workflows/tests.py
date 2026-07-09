@@ -3,6 +3,8 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from base.models import InAppNotification, Team, UserPreferences, Profile
+from automation.models import Rule
+from automation.validation import normalize_actions, normalize_conditions
 from tickets.models import Ticket
 from tickets.services import create_ticket_with_reporter
 
@@ -17,6 +19,20 @@ def _set_active_team(user, team):
     prefs, _ = UserPreferences.objects.get_or_create(user=user)
     prefs.active_team = team
     prefs.save()
+
+
+def _rule_start_workflow_for_category(category: str, *, priority: int = 10) -> Rule:
+    """Mirror seed_automation_rules — category→workflow via rules engine (P2-5)."""
+    return Rule.objects.create(
+        name=f"Test auto-start {category}",
+        team=None,
+        trigger="ticket.created",
+        conditions=normalize_conditions([{"field": "category", "op": "equals", "value": category}]),
+        actions=normalize_actions(
+            [{"type": "start_workflow", "template_trigger_category": category}]
+        ),
+        priority=priority,
+    )
 
 
 class WorkflowTriggerTest(TestCase):
@@ -34,6 +50,7 @@ class WorkflowTriggerTest(TestCase):
                 {"title": "Step C", "description": "", "assignee_team": "IT"},
             ],
         )
+        _rule_start_workflow_for_category("provisioning")
 
     def test_provisioning_ticket_starts_workflow_with_first_step_active(self):
         ticket = create_ticket_with_reporter(
@@ -57,6 +74,7 @@ class WorkflowTriggerTest(TestCase):
             name="Onboarding", trigger_category="onboarding", team=None,
             steps=[{"title": "Provision accounts", "description": "", "assignee_team": "IT"}],
         )
+        _rule_start_workflow_for_category("onboarding")
         ticket = create_ticket_with_reporter(
             self.user, self.team, issue_type="New hire starting Monday", category="onboarding",
         )
@@ -68,6 +86,7 @@ class WorkflowTriggerTest(TestCase):
             name="Offboarding", trigger_category="offboarding", team=None,
             steps=[{"title": "Revoke access", "description": "", "assignee_team": "IT"}],
         )
+        _rule_start_workflow_for_category("offboarding")
         ticket = create_ticket_with_reporter(
             self.user, self.team, issue_type="Employee leaving", category="offboarding",
         )
