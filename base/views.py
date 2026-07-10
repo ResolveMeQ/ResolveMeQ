@@ -724,12 +724,13 @@ class UserDetailView(generics.RetrieveUpdateAPIView):
         if target.pk != actor.pk:
             if "profile" in serializer.validated_data and "ops_role" in serializer.validated_data.get("profile", {}):
                 from base.models import Team
+                from base.team_permissions import user_can_manage_team_members
 
-                owns_member = Team.objects.filter(owner=actor, members=target).exists()
-                if not owns_member:
+                member_teams = Team.objects.filter(members=target)
+                if not any(user_can_manage_team_members(actor, team) for team in member_teams):
                     from rest_framework.exceptions import PermissionDenied
 
-                    raise PermissionDenied("Only a workspace owner can set a member's ops role.")
+                    raise PermissionDenied("Only a workspace owner or admin can set a member's ops role.")
         serializer.save()
 
 
@@ -857,7 +858,7 @@ class TeamDeleteView(generics.DestroyAPIView):
 # ---------- Team invitations (owner invites by email; invitee accepts/declines) ----------
 
 class TeamInviteView(GenericAPIView):
-    """Invite a user to the team by email (owner only). Respects plan max_members."""
+    """Invite a user to the team by email (owner or workspace admin). Respects plan max_members."""
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = serializers.Serializer
 
@@ -868,13 +869,15 @@ class TeamInviteView(GenericAPIView):
     def post(self, request, pk):
         from base.models import Team, TeamInvitation
         from base.billing_views import get_max_members_for_user
+        from base.team_permissions import user_can_manage_team_members
+
         team = get_object_or_404(Team, pk=pk)
-        if team.owner_id != request.user.id:
-            return Response({'error': 'Only the team owner can invite members.'}, status=status.HTTP_403_FORBIDDEN)
+        if not user_can_manage_team_members(request.user, team):
+            return Response({'error': 'Only the workspace owner or admin can invite members.'}, status=status.HTTP_403_FORBIDDEN)
         email = (request.data.get('email') or '').strip().lower()
         if not email:
             return Response({'error': 'email is required.'}, status=status.HTTP_400_BAD_REQUEST)
-        max_members = get_max_members_for_user(request.user)
+        max_members = get_max_members_for_user(team.owner)
         current = team.members.count()
         pending = TeamInvitation.objects.filter(team=team, status=TeamInvitation.Status.PENDING).count()
         if current + pending >= max_members:
@@ -904,7 +907,7 @@ class TeamInviteView(GenericAPIView):
 
 
 class TeamSentInvitationsListView(GenericAPIView):
-    """List pending invitations the owner sent for this team."""
+    """List pending invitations the owner or admin sent for this team."""
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = serializers.Serializer
 
@@ -914,9 +917,11 @@ class TeamSentInvitationsListView(GenericAPIView):
 
     def get(self, request, team_id):
         from base.models import Team, TeamInvitation
+        from base.team_permissions import user_can_manage_team_members
+
         team = get_object_or_404(Team, pk=team_id)
-        if team.owner_id != request.user.id:
-            return Response({'error': 'Only the team owner can view sent invitations.'}, status=status.HTTP_403_FORBIDDEN)
+        if not user_can_manage_team_members(request.user, team):
+            return Response({'error': 'Only the workspace owner or admin can view sent invitations.'}, status=status.HTTP_403_FORBIDDEN)
         qs = TeamInvitation.objects.filter(
             team=team,
             status=TeamInvitation.Status.PENDING,
@@ -934,7 +939,7 @@ class TeamSentInvitationsListView(GenericAPIView):
 
 
 class TeamInvitationResendView(GenericAPIView):
-    """Resend invitation email (owner only). Does not duplicate in-app notifications."""
+    """Resend invitation email (owner or workspace admin). Does not duplicate in-app notifications."""
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = serializers.Serializer
 
@@ -944,9 +949,11 @@ class TeamInvitationResendView(GenericAPIView):
 
     def post(self, request, invitation_id):
         from base.models import TeamInvitation
+        from base.team_permissions import user_can_manage_team_members
+
         inv = get_object_or_404(TeamInvitation, id=invitation_id)
-        if inv.team.owner_id != request.user.id:
-            return Response({'error': 'Only the team owner can resend invitations.'}, status=status.HTTP_403_FORBIDDEN)
+        if not user_can_manage_team_members(request.user, inv.team):
+            return Response({'error': 'Only the workspace owner or admin can resend invitations.'}, status=status.HTTP_403_FORBIDDEN)
         if inv.status != TeamInvitation.Status.PENDING:
             return Response({'error': 'This invitation is no longer pending.'}, status=status.HTTP_400_BAD_REQUEST)
         _send_team_invitation_email(inv, inv.team, inv.invited_by)
@@ -954,7 +961,7 @@ class TeamInvitationResendView(GenericAPIView):
 
 
 class TeamInvitationOwnerCancelView(GenericAPIView):
-    """Revoke a pending invitation (owner only)."""
+    """Revoke a pending invitation (owner or workspace admin)."""
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = serializers.Serializer
 
@@ -964,9 +971,11 @@ class TeamInvitationOwnerCancelView(GenericAPIView):
 
     def post(self, request, invitation_id):
         from base.models import TeamInvitation
+        from base.team_permissions import user_can_manage_team_members
+
         inv = get_object_or_404(TeamInvitation, id=invitation_id)
-        if inv.team.owner_id != request.user.id:
-            return Response({'error': 'Only the team owner can cancel invitations.'}, status=status.HTTP_403_FORBIDDEN)
+        if not user_can_manage_team_members(request.user, inv.team):
+            return Response({'error': 'Only the workspace owner or admin can cancel invitations.'}, status=status.HTTP_403_FORBIDDEN)
         if inv.status != TeamInvitation.Status.PENDING:
             return Response({'error': 'This invitation is no longer pending.'}, status=status.HTTP_400_BAD_REQUEST)
         inv.delete()
@@ -1061,17 +1070,20 @@ class TeamLeaveView(GenericAPIView):
 
     def post(self, request, pk):
         from base.models import Team
+        from base.team_permissions import revoke_workspace_admin
+
         team = get_object_or_404(Team, pk=pk)
         if team.owner_id == request.user.id:
             return Response({'error': 'Owner cannot leave. Transfer ownership or delete the team.'}, status=status.HTTP_400_BAD_REQUEST)
         if not team.members.filter(pk=request.user.id).exists():
             return Response({'error': 'You are not a member of this team.'}, status=status.HTTP_400_BAD_REQUEST)
+        revoke_workspace_admin(team, request.user)
         team.members.remove(request.user)
         return Response({'message': 'You left the team.'})
 
 
 class TeamRemoveMemberView(GenericAPIView):
-    """Remove a member from the team (owner only)."""
+    """Remove a member from the team (owner or workspace admin)."""
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = serializers.Serializer
 
@@ -1081,9 +1093,11 @@ class TeamRemoveMemberView(GenericAPIView):
 
     def post(self, request, pk):
         from base.models import Team
+        from base.team_permissions import revoke_workspace_admin, user_can_manage_team_members
+
         team = get_object_or_404(Team, pk=pk)
-        if team.owner_id != request.user.id:
-            return Response({'error': 'Only the team owner can remove members.'}, status=status.HTTP_403_FORBIDDEN)
+        if not user_can_manage_team_members(request.user, team):
+            return Response({'error': 'Only the workspace owner or admin can remove members.'}, status=status.HTTP_403_FORBIDDEN)
         user_id = request.data.get('user_id')
         if not user_id:
             return Response({'error': 'user_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1092,8 +1106,123 @@ class TeamRemoveMemberView(GenericAPIView):
         member = team.members.filter(pk=user_id).first()
         if not member:
             return Response({'error': 'User is not a member of this team.'}, status=status.HTTP_400_BAD_REQUEST)
+        revoke_workspace_admin(team, member)
         team.members.remove(member)
         return Response({'message': 'Member removed.'})
+
+
+class TeamWorkspaceAdminGrantView(GenericAPIView):
+    """Grant or update scoped workspace permissions for a member (owner only)."""
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import Team
+        return Team.objects.none()
+
+    def post(self, request, pk):
+        from base.models import Team
+        from base.team_permissions import upsert_delegation, user_is_team_owner
+        from monitoring.audit import audit_from_request
+
+        team = get_object_or_404(Team, pk=pk)
+        if not user_is_team_owner(request.user, team):
+            return Response({'error': 'Only the workspace owner can manage delegated permissions.'}, status=status.HTTP_403_FORBIDDEN)
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if str(team.owner_id) == str(user_id):
+            return Response({'error': 'The workspace owner already has full access.'}, status=status.HTTP_400_BAD_REQUEST)
+        member = team.members.filter(pk=user_id).first()
+        if not member:
+            return Response({'error': 'User must be a workspace member first.'}, status=status.HTTP_400_BAD_REQUEST)
+        permissions_raw = request.data.get('permissions')
+        grant, created, permissions = upsert_delegation(
+            team=team,
+            user=member,
+            granted_by=request.user,
+            permissions_raw=permissions_raw,
+        )
+        if grant is None:
+            audit_from_request(
+                request,
+                event_type="workspace.admin.revoked",
+                summary=f"Revoked all delegated permissions from {member.email}",
+                team=team,
+                resource_type="user",
+                resource_id=str(member.pk),
+                metadata={"revoked_user_email": member.email, "permissions": permissions},
+            )
+            return Response({'message': 'Delegated permissions removed.', 'permissions': permissions})
+        event_type = "workspace.admin.granted" if created else "workspace.permissions.updated"
+        audit_from_request(
+            request,
+            event_type=event_type,
+            summary=f"{'Granted' if created else 'Updated'} workspace permissions for {member.email}",
+            team=team,
+            resource_type="user",
+            resource_id=str(member.pk),
+            metadata={"user_email": member.email, "permissions": permissions},
+        )
+        return Response({
+            'message': f"Permissions {'granted' if created else 'updated'} for {member.get_full_name() or member.email}.",
+            'user_id': str(member.pk),
+            'permissions': permissions,
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class TeamWorkspaceAdminRevokeView(GenericAPIView):
+    """Revoke workspace admin from a member (owner only)."""
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import Team
+        return Team.objects.none()
+
+    def post(self, request, pk):
+        from base.models import Team
+        from base.team_permissions import revoke_workspace_admin, user_is_team_owner
+        from monitoring.audit import audit_from_request
+
+        team = get_object_or_404(Team, pk=pk)
+        if not user_is_team_owner(request.user, team):
+            return Response({'error': 'Only the workspace owner can revoke admin access.'}, status=status.HTTP_403_FORBIDDEN)
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        member = team.members.filter(pk=user_id).first()
+        if not member:
+            return Response({'error': 'User is not a member of this team.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not revoke_workspace_admin(team, member):
+            return Response({'error': 'User is not a workspace admin.'}, status=status.HTTP_400_BAD_REQUEST)
+        audit_from_request(
+            request,
+            event_type="workspace.admin.revoked",
+            summary=f"Revoked workspace admin from {member.email}",
+            team=team,
+            resource_type="user",
+            resource_id=str(member.pk),
+            metadata={"revoked_user_email": member.email},
+        )
+        return Response({'message': 'Workspace admin access revoked.'})
+
+
+class TeamPermissionScopesView(GenericAPIView):
+    """List available scoped delegation permissions (for owner UI)."""
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
+
+    def get_queryset(self):
+        from base.models import Team
+        return Team.objects.none()
+
+    def get(self, request):
+        from base.workspace_permissions import OWNER_ONLY_NOTE, permission_scopes_metadata
+        return Response({
+            "scopes": permission_scopes_metadata(),
+            "owner_only_note": OWNER_ONLY_NOTE,
+        })
 
 
 class NewsletterSubscribeView(GenericAPIView):

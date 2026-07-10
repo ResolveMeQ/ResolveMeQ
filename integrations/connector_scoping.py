@@ -1,5 +1,7 @@
 """Shared permission helpers for integration OAuth endpoints."""
 
+from base.team_permissions import user_can_manage_integrations, user_is_team_owner
+
 
 def team_from_request(request, *, require_owner: bool = False, owner_detail: str = "Only the workspace owner can manage this integration."):
     from rest_framework.response import Response
@@ -19,6 +21,8 @@ def team_from_request(request, *, require_owner: bool = False, owner_detail: str
         return None, Response({"detail": "Team not found."}, status=404)
     if team.owner_id != request.user.pk and not team.members.filter(pk=request.user.pk).exists():
         return None, Response({"detail": "You are not a member of this team."}, status=403)
-    if require_owner and team.owner_id != request.user.pk and not getattr(request.user, "is_staff", False):
-        return None, Response({"detail": owner_detail}, status=403)
+    if require_owner:
+        allowed = user_is_team_owner(request.user, team) or user_can_manage_integrations(request.user, team)
+        if not allowed and not getattr(request.user, "is_staff", False):
+            return None, Response({"detail": owner_detail.replace("workspace owner", "workspace owner or integrations delegate")}, status=403)
     return team, None

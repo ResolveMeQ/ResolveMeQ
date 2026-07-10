@@ -15,11 +15,15 @@ from .views import (
     TeamInvitationDeclineView,
     TeamLeaveView,
     TeamRemoveMemberView,
+    TeamWorkspaceAdminGrantView,
+    TeamWorkspaceAdminRevokeView,
+    TeamPermissionScopesView,
 )
 
 urlpatterns = [
     path('', TeamListView.as_view(), name='team-list'),
     path('limits/', TeamLimitsView.as_view(), name='team-limits'),
+    path('permission-scopes/', TeamPermissionScopesView.as_view(), name='team-permission-scopes'),
     path('create/', TeamCreateView.as_view(), name='team-create'),
     path('invitations/', TeamInvitationListView.as_view(), name='team-invitations-list'),
     path('invitations/<uuid:invitation_id>/accept/', TeamInvitationAcceptView.as_view(), name='team-invitation-accept'),
@@ -33,4 +37,6 @@ urlpatterns = [
     path('<uuid:pk>/invite/', TeamInviteView.as_view(), name='team-invite'),
     path('<uuid:pk>/leave/', TeamLeaveView.as_view(), name='team-leave'),
     path('<uuid:pk>/members/remove/', TeamRemoveMemberView.as_view(), name='team-remove-member'),
+    path('<uuid:pk>/workspace-admins/grant/', TeamWorkspaceAdminGrantView.as_view(), name='team-workspace-admin-grant'),
+    path('<uuid:pk>/workspace-admins/revoke/', TeamWorkspaceAdminRevokeView.as_view(), name='team-workspace-admin-revoke'),
 ]

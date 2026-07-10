@@ -57,7 +57,7 @@ def _filtered_events(request):
 def audit_events(request):
     """List compliance audit events for the active workspace (team owner or staff)."""
     if not user_can_view_audit(request.user):
-        return Response({"error": "Only the workspace owner can view the compliance audit log."}, status=403)
+        return Response({"error": "You do not have permission to view the compliance audit log."}, status=403)
 
     limit = min(int(request.GET.get("limit", 50)), 200)
     offset = max(int(request.GET.get("offset", 0)), 0)
@@ -78,7 +78,7 @@ def audit_events(request):
 def audit_export(request):
     """Export compliance audit events as CSV or JSON."""
     if not user_can_view_audit(request.user):
-        return Response({"error": "Only the workspace owner can export the compliance audit log."}, status=403)
+        return Response({"error": "You do not have permission to export the compliance audit log."}, status=403)
 
     export_fmt = (request.GET.get("export_format") or request.GET.get("format") or "csv").lower()
     qs = _filtered_events(request).order_by("created_at")

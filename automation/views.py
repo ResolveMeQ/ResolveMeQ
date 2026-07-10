@@ -72,7 +72,7 @@ def rule_list_create(request):
         })
 
     if not can_manage:
-        return Response({"error": "Only the workspace owner can create rules."}, status=403)
+        return Response({"error": "Only the workspace owner or admin can create rules."}, status=403)
 
     name = (request.data.get("name") or "").strip()
     if not name:

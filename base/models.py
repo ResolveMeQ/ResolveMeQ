@@ -588,6 +588,69 @@ class Team(models.Model):
         return self.members.filter(is_active=True).count()
 
 
+class TeamWorkspaceAdmin(models.Model):
+    """
+    Scoped workspace delegation granted by the owner.
+    Each flag controls a distinct admin surface; billing and ownership stay with the owner.
+    """
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name="workspace_admin_grants",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="workspace_admin_grants",
+    )
+    granted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="workspace_admins_granted",
+    )
+    can_manage_playbooks = models.BooleanField(
+        default=True,
+        help_text=_("Workflow templates and automation rules"),
+    )
+    can_manage_members = models.BooleanField(
+        default=True,
+        help_text=_("Invite/remove members and set ops roles"),
+    )
+    can_manage_integrations = models.BooleanField(
+        default=False,
+        help_text=_("Connect and disconnect integrations"),
+    )
+    can_manage_webhooks = models.BooleanField(
+        default=False,
+        help_text=_("Outbound webhook endpoints"),
+    )
+    can_manage_partner_api = models.BooleanField(
+        default=False,
+        help_text=_("Partner API keys"),
+    )
+    can_view_audit_log = models.BooleanField(
+        default=False,
+        help_text=_("Compliance audit log view and export"),
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("workspace admin")
+        verbose_name_plural = _("workspace admins")
+        constraints = [
+            models.UniqueConstraint(fields=["team", "user"], name="uniq_team_workspace_admin"),
+        ]
+        indexes = [
+            models.Index(fields=["team", "user"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id} admin of {self.team_id}"
+
+
 class TeamInvitation(models.Model):
     """
     Invitation to join a team. Owner invites by email; invitee accepts or declines.

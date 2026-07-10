@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from base.team_permissions import user_can_manage_partner_api
 from base.models import Team
 from public_api.models import PartnerApiKey, generate_partner_key_pair
 from public_api.scopes import DEFAULT_SCOPES, SCOPE_LABELS, normalize_scopes
@@ -11,15 +12,7 @@ from tickets.scoping import active_team_id_for_user
 
 
 def _user_can_manage_keys(user) -> bool:
-    if not user or not user.is_authenticated:
-        return False
-    if getattr(user, "is_staff", False):
-        return True
-    tid = active_team_id_for_user(user)
-    if not tid:
-        return False
-    team = Team.objects.filter(pk=tid).first()
-    return bool(team and team.owner_id == user.pk)
+    return user_can_manage_partner_api(user)
 
 
 def _key_to_dict(key: PartnerApiKey, *, include_secret: str | None = None) -> dict:
@@ -50,7 +43,7 @@ def partner_key_metadata(request):
 @permission_classes([IsAuthenticated])
 def partner_key_list_create(request):
     if not _user_can_manage_keys(request.user):
-        return Response({"error": "Only the workspace owner can manage partner API keys."}, status=403)
+        return Response({"error": "You do not have permission to manage partner API keys for this workspace."}, status=403)
 
     tid = active_team_id_for_user(request.user)
     team = Team.objects.filter(pk=tid).first()
@@ -88,7 +81,7 @@ def partner_key_list_create(request):
 @permission_classes([IsAuthenticated])
 def partner_key_revoke(request, key_id):
     if not _user_can_manage_keys(request.user):
-        return Response({"error": "Only the workspace owner can manage partner API keys."}, status=403)
+        return Response({"error": "You do not have permission to manage partner API keys for this workspace."}, status=403)
     tid = active_team_id_for_user(request.user)
     key = PartnerApiKey.objects.filter(pk=key_id, team_id=tid).first()
     if not key:

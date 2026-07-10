@@ -401,6 +401,9 @@ class TeamSerializer(serializers.ModelSerializer):
     member_count = serializers.SerializerMethodField()
     active_member_count = serializers.SerializerMethodField()
     is_owner = serializers.SerializerMethodField()
+    is_workspace_admin = serializers.SerializerMethodField()
+    can_manage_members = serializers.SerializerMethodField()
+    workspace_permissions = serializers.SerializerMethodField()
     member_ids = serializers.ListField(
         child=serializers.UUIDField(),
         write_only=True,
@@ -420,6 +423,9 @@ class TeamSerializer(serializers.ModelSerializer):
             'location',
             'owner',
             'is_owner',
+            'is_workspace_admin',
+            'can_manage_members',
+            'workspace_permissions',
             'lead',
             'lead_name',
             'lead_email',
@@ -440,6 +446,27 @@ class TeamSerializer(serializers.ModelSerializer):
         if not request or not request.user:
             return False
         return obj.owner_id == request.user.id
+
+    def get_is_workspace_admin(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user:
+            return False
+        from base.team_permissions import user_is_workspace_admin
+        return user_is_workspace_admin(request.user, obj)
+
+    def get_can_manage_members(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user:
+            return False
+        from base.team_permissions import user_can_manage_team_members
+        return user_can_manage_team_members(request.user, obj)
+
+    def get_workspace_permissions(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user:
+            return {}
+        from base.team_permissions import effective_permissions_for_user
+        return effective_permissions_for_user(request.user, obj)
     
     def get_lead_name(self, obj):
         """Get the team lead's full name."""
@@ -465,12 +492,25 @@ class TeamSerializer(serializers.ModelSerializer):
         """Get detailed information about team members."""
         from integrations.slack_installation import display_name_for_user, is_slack_shadow_user
 
+        request = self.context.get('request')
+        grants_by_user = {}
+        if request and request.user and obj.owner_id == request.user.id:
+            from base.team_permissions import delegation_map_for_team
+            from base.workspace_permissions import permissions_dict_from_grant
+
+            grants_by_user = {
+                uid: permissions_dict_from_grant(grant)
+                for uid, grant in delegation_map_for_team(obj).items()
+            }
+
         return [
             {
                 'id': str(member.id),
                 'name': display_name_for_user(member),
                 'email': (None if is_slack_shadow_user(member) else member.email),
                 'is_active': member.is_active,
+                'is_workspace_admin': bool(grants_by_user.get(member.pk)) and any(grants_by_user.get(member.pk, {}).values()),
+                'delegated_permissions': grants_by_user.get(member.pk),
             }
             for member in obj.members.all()
         ]

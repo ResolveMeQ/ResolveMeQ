@@ -20,6 +20,9 @@ class ComplianceAuditEvent(models.Model):
         ("rule.deleted", "Rule deleted"),
         ("msp.enabled", "MSP mode enabled"),
         ("msp.client_created", "MSP client created"),
+        ("workspace.admin.granted", "Workspace admin granted"),
+        ("workspace.admin.revoked", "Workspace admin revoked"),
+        ("workspace.permissions.updated", "Workspace permissions updated"),
         ("audit.exported", "Audit log exported"),
     ]
 

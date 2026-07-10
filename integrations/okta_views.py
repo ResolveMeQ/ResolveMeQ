@@ -12,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from base.models import Team
+from base.team_permissions import user_can_manage_integrations, user_is_team_owner
 
 from .connectors.okta import issuer_for_domain, normalize_okta_domain
 from .models import OktaInstallation
@@ -31,8 +32,10 @@ def _team_from_request(request, *, require_owner: bool = False):
         return None, Response({"detail": "Team not found."}, status=404)
     if team.owner_id != request.user.pk and not team.members.filter(pk=request.user.pk).exists():
         return None, Response({"detail": "You are not a member of this team."}, status=403)
-    if require_owner and team.owner_id != request.user.pk and not getattr(request.user, "is_staff", False):
-        return None, Response({"detail": "Only the workspace owner can manage Okta."}, status=403)
+    if require_owner:
+        allowed = user_is_team_owner(request.user, team) or user_can_manage_integrations(request.user, team)
+        if not allowed and not getattr(request.user, "is_staff", False):
+            return None, Response({"detail": "You do not have permission to manage Okta for this workspace."}, status=403)
     return team, None
 
 

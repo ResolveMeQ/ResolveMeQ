@@ -1,22 +1,15 @@
 """Permissions for automation rule administration."""
 
+from django.db.models import Q
+
+from base.team_permissions import user_can_manage_playbooks, user_has_team_permission
 from tickets.scoping import active_team_id_for_user
 
 from .models import Rule
 
 
 def user_can_manage_rules(user) -> bool:
-    if not user or not user.is_authenticated:
-        return False
-    if getattr(user, "is_staff", False):
-        return True
-    tid = active_team_id_for_user(user)
-    if not tid:
-        return False
-    from base.models import Team
-
-    team = Team.objects.filter(pk=tid).first()
-    return bool(team and team.owner_id == user.pk)
+    return user_can_manage_playbooks(user)
 
 
 def user_can_edit_rule(user, rule: Rule) -> bool:
@@ -26,7 +19,7 @@ def user_can_edit_rule(user, rule: Rule) -> bool:
         return True
     if rule.team_id is None:
         return False
-    return rule.team.owner_id == user.pk
+    return user_has_team_permission(user, rule.team, "manage_playbooks")
 
 
 def user_can_dry_run_rule(user, rule: Rule) -> bool:
@@ -38,8 +31,6 @@ def user_can_dry_run_rule(user, rule: Rule) -> bool:
 
 
 def rules_queryset_for_user(user):
-    from django.db.models import Q
-
     if not user or not user.is_authenticated:
         return Rule.objects.none()
     tid = active_team_id_for_user(user)
