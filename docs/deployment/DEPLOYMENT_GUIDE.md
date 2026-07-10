@@ -63,6 +63,8 @@ MAX_AUTONOMOUS_ACTIONS_PER_HOUR=100
 python manage.py migrate
 ```
 
+**Workspace permissions release (Jul 2026):** applies `base` migrations `0034_teamworkspaceadmin` and `0035_teamworkspaceadmin_scoped_permissions`, plus `monitoring` migrations `0002`–`0003` for delegation audit events. After deploy, smoke-test: owner grants IT lead playbooks-only, HR lead members-only; verify invite and template create match grants.
+
 **Expected output:**
 ```
 Applying tickets.0002_actionhistory_ticketresolution... OK

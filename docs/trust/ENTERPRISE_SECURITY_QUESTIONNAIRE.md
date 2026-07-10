@@ -23,8 +23,8 @@
 | Question | Answer |
 |----------|--------|
 | User authentication | JWT (Django REST + frontend session). Standard Django user model with team membership. |
-| API authentication (partners) | **Partner API keys** (`rmq_pk_*`) with per-key scopes: `tickets:read`, `tickets:write`, `workflows:read`, `rules:read`. Keys are team-scoped; only workspace owners create/revoke keys in Settings → Integrations → Partner API. |
-| Role-based access | Workspace owner, team members, ops roles on workflow steps (`Profile.ops_role`: IT, HR, etc.). Escalation queue and workflow claim use atomic assign patterns. |
+| API authentication (partners) | **Partner API keys** (`rmq_pk_*`) with per-key scopes: `tickets:read`, `tickets:write`, `workflows:read`, `rules:read`. Keys are team-scoped; workspace owners or delegated admins with **Partner API** permission create/revoke keys in Settings → Integrations → Partner API. |
+| Role-based access | **Workspace owner** (full control). **Delegated workspace admins** receive scoped grants: playbooks & automation rules, members & ops roles, integrations, outbound webhooks, partner API keys, compliance audit log (`TeamWorkspaceAdmin` + `base/team_permissions.py`). **Ops roles** on profiles (IT, HR, etc.) gate workflow step claiming only. Escalation queue and workflow claim use atomic assign patterns. |
 | Agent service auth | Separate agent token (`IsAuthenticatedOrAgent`) for AI callback endpoints; throttled. |
 
 ---
@@ -34,12 +34,12 @@
 | Question | Answer |
 |----------|--------|
 | Compliance audit log? | **Yes (P4-1).** Append-only `ComplianceAuditEvent` model — records cannot be updated or deleted after insert. |
-| What is logged? | Ticket lifecycle (created, escalated, resolved), workflow step completions, automation rule CRUD and executions, MSP mode events, audit export actions. |
-| Who can view audit logs? | Authenticated workspace admins via **Settings → Security** and `GET /api/audit/events/`. |
+| What is logged? | Ticket lifecycle (created, escalated, resolved), workflow step completions, automation rule CRUD and executions, workspace admin granted/revoked and permission scope updates, MSP mode events, audit export actions. |
+| Who can view audit logs? | Workspace owner or delegated admin with **view_audit_log** scope via **Settings → Security** and `GET /api/audit/events/`. |
 | Export for auditors? | **Yes.** `GET /api/audit/export/?export_format=csv` (CSV download). Export itself is audited (`audit.exported`). |
 | Ticket interaction history? | Per-ticket audit trail at `GET /api/tickets/<id>/audit-log/` (`TicketInteraction` — chat, feedback, agent responses). |
 
-**Event types (current):** `ticket.created`, `ticket.escalated`, `ticket.resolved`, `workflow.step.completed`, `rule.executed`, `rule.created`, `rule.updated`, `rule.deleted`, `msp.enabled`, `msp.client_created`, `audit.exported`.
+**Event types (current):** `ticket.created`, `ticket.escalated`, `ticket.resolved`, `workflow.step.completed`, `rule.executed`, `rule.created`, `rule.updated`, `rule.deleted`, `workspace.admin.granted`, `workspace.admin.revoked`, `workspace.permissions.updated`, `msp.enabled`, `msp.client_created`, `audit.exported`.
 
 ---
 
