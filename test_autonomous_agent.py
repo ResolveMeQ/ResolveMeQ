@@ -215,7 +215,7 @@ class KnowledgeBaseAPITest(APITestCase):
     def setUp(self):
         self.client = Client()
         self.agent_headers = {
-            'HTTP_X_AGENT_API_KEY': getattr(settings, 'AGENT_API_KEY', 'resolvemeq-agent-secret-key-2026'),
+            'HTTP_X_AGENT_API_KEY': settings.AGENT_API_KEY,
         }
         self.kb_article = KnowledgeBaseArticle.objects.create(
             title='WiFi Connection Issues',

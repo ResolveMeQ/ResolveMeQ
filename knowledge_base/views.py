@@ -555,6 +555,19 @@ class LLMResponseViewSet(viewsets.ModelViewSet):
         return Response({'results': serializer.data})
 
 # API endpoints for FastAPI agent access
+def _agent_article_team_scope(request):
+    """
+    Agent-key callers have no per-tenant identity of their own, so scope to global
+    (team=None) articles unless the caller explicitly names a team_id it's grounding
+    for. Defaulting to "all teams" here would leak every tenant's proprietary KB
+    content to any holder of the shared agent key.
+    """
+    team_id = request.query_params.get('team_id') if request.method == 'GET' else request.data.get('team_id')
+    if team_id:
+        return Q(team__isnull=True) | Q(team_id=team_id)
+    return Q(team__isnull=True)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticatedOrAgent])  # agent calls send X-Agent-API-Key
 def kb_articles_for_agent(request):
@@ -562,7 +575,9 @@ def kb_articles_for_agent(request):
     Public API endpoint for FastAPI agent to access Knowledge Base articles.
     Returns all articles with basic fields for AI processing.
     """
-    articles = KnowledgeBaseArticle.objects.filter(is_published=True).values(
+    articles = KnowledgeBaseArticle.objects.filter(
+        _agent_article_team_scope(request), is_published=True
+    ).values(
         'kb_id', 'title', 'content', 'tags',
         'created_at', 'updated_at', 'helpful_votes', 'total_votes', 'views'
     )
@@ -573,16 +588,16 @@ def kb_articles_for_agent(request):
 def search_kb_for_agent(request):
     """
     Search Knowledge Base articles for FastAPI agent.
-    POST body: {"query": "search term", "limit": 10}
+    POST body: {"query": "search term", "limit": 10, "team_id": optional}
     """
     query = request.data.get('query', '')
     limit = request.data.get('limit', 10)
-    
+
     if not query:
         return Response({'error': 'Query parameter is required'}, status=400)
-    
+
     articles_qs = KnowledgeBaseArticle.objects.filter(
-        is_published=True
+        _agent_article_team_scope(request), is_published=True
     ).filter(
         Q(title__icontains=query) |
         Q(content__icontains=query)
@@ -636,7 +651,9 @@ def kb_article_by_id(request, kb_id):
     Get specific Knowledge Base article by ID for FastAPI agent.
     """
     try:
-        article = KnowledgeBaseArticle.objects.get(kb_id=kb_id, is_published=True)
+        article = KnowledgeBaseArticle.objects.get(
+            _agent_article_team_scope(request), kb_id=kb_id, is_published=True
+        )
         serializer = KnowledgeBaseArticleSerializer(article)
         return Response(serializer.data)
     except KnowledgeBaseArticle.DoesNotExist:

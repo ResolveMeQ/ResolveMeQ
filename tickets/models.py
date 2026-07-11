@@ -147,6 +147,11 @@ class Ticket(models.Model):
         help_text="Root Teams activity id for this ticket's reporter conversation, for threaded replies.",
     )
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["team", "status"]),
+        ]
+
     def __str__(self):
         return f"{self.issue_type} ({self.status})"
 
@@ -240,17 +245,12 @@ class Ticket(models.Model):
                 self.sync_to_knowledge_base()
             # Create or update Solution from agent_response (steps can be in solution.steps, resolution_steps, or steps)
             from solutions.models import Solution
+            from .outcome_helpers import steps_from_agent_response
             steps = None
             confidence = 0.0
             if isinstance(self.agent_response, dict):
-                sol = self.agent_response.get("solution") or {}
-                steps = (
-                    self.agent_response.get("resolution_steps")
-                    or self.agent_response.get("steps")
-                    or (sol.get("steps") if isinstance(sol, dict) else None)
-                )
-                if steps and isinstance(steps, list):
-                    steps = "\n".join(steps)
+                step_list = steps_from_agent_response(self.agent_response)
+                steps = "\n".join(step_list) if step_list else None
                 confidence = float(self.agent_response.get("confidence", 0) or 0)
             if steps:
                 Solution.objects.update_or_create(

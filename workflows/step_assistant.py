@@ -11,6 +11,7 @@ from django.conf import settings
 from base.agent_http import get_agent_service_headers
 from base.agent_client import AgentCallError, call_agent_analyze
 from base.agent_usage import refund_agent_operation, try_consume_agent_operation
+from tickets.outcome_helpers import steps_from_agent_response
 
 logger = logging.getLogger(__name__)
 
@@ -211,8 +212,7 @@ def get_step_assistant_suggestions(*, workflow, step, user) -> Dict[str, Any]:
 
     reasoning = (agent_data.get("reasoning") or "").strip()
     solution = agent_data.get("solution") or {}
-    steps_raw = solution.get("steps") if isinstance(solution, dict) else []
-    actions = [str(s).strip() for s in (steps_raw or []) if str(s).strip()][:8]
+    actions = steps_from_agent_response(agent_data, solution=solution)[:8]
     kb_citations = _merge_citations(
         linked_kb,
         _normalize_citations(agent_data.get("kb_article_citations")),

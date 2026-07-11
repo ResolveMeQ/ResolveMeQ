@@ -8,7 +8,7 @@ import logging
 from decimal import Decimal
 from typing import Any
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from base.models import Invoice, Subscription
@@ -88,9 +88,12 @@ def sync_invoices_from_dodo(user) -> int:
                     'pricing_type': 'subscription',
                 }
                 try:
-                    inv = Invoice.objects.create(**create_kwargs)
-                    if created_at and inv.created_at != created_at:
-                        Invoice.objects.filter(pk=inv.pk).update(created_at=created_at)
+                    # Nested atomic (savepoint) so an IntegrityError here rolls back only this
+                    # Invoice creation, not the caller's outer transaction.atomic() block.
+                    with transaction.atomic():
+                        inv = Invoice.objects.create(**create_kwargs)
+                        if created_at and inv.created_at != created_at:
+                            Invoice.objects.filter(pk=inv.pk).update(created_at=created_at)
                     created_count += 1
                     logger.info('Sync: created invoice %s for payment %s', inv.id, payment_id)
                 except IntegrityError:
@@ -267,9 +270,12 @@ def apply_dodo_payment_succeeded(payment_data: Any) -> bool:
         create_kwargs['invoice_url'] = invoice_url
 
     try:
-        inv = Invoice.objects.create(**create_kwargs)
-        if created_at and inv.created_at != created_at:
-            Invoice.objects.filter(pk=inv.pk).update(created_at=created_at)
+        # Nested atomic (savepoint) so an IntegrityError here rolls back only this
+        # Invoice creation, not the caller's outer transaction.atomic() block.
+        with transaction.atomic():
+            inv = Invoice.objects.create(**create_kwargs)
+            if created_at and inv.created_at != created_at:
+                Invoice.objects.filter(pk=inv.pk).update(created_at=created_at)
         logger.info('Dodo payment.succeeded: created invoice %s for subscription %s', inv.id, subscription_id)
         from base.billing.subscription_notifications import handle_payment_succeeded_notifications
 

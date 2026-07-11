@@ -186,13 +186,20 @@ class CurrentSubscriptionView(GenericAPIView):
         return Response(serializer.data)
 
     def patch(self, request):
-        """Update subscription (e.g. change plan). Body: { "plan": "<plan_uuid>" }."""
-        sub = Subscription.objects.filter(user=request.user).first()
-        if not sub:
-            sub, created = Subscription.objects.get_or_create(
-                user=request.user,
-                defaults={'status': Subscription.Status.ACTIVE},
-            )
+        """
+        Switch to a free/trial plan with no payment relationship (e.g. downgrading off a
+        trial before ever subscribing). Body: { "plan": "<plan_uuid>" }.
+
+        This is NOT the paid plan-change path -- paid upgrades/downgrades must go through
+        BillingChangePlanView (existing Dodo subscription) or the checkout flow (new
+        subscription), both of which actually talk to the payment gateway. This endpoint
+        never has, so it must refuse to touch a Dodo-linked subscription or hand out a
+        priced plan for free.
+        """
+        sub, created = Subscription.objects.get_or_create(
+            user=request.user,
+            defaults={'status': Subscription.Status.ACTIVE},
+        )
         if created:
             trial_plan = Plan.objects.filter(slug='trial', is_active=True).first()
             if trial_plan:
@@ -207,10 +214,26 @@ class CurrentSubscriptionView(GenericAPIView):
                 maybe_notify_trial_started(sub)
         plan_id = request.data.get('plan')
         if plan_id is not None:
+            if (sub.gateway_subscription_id or '').strip():
+                return Response(
+                    {
+                        'error': 'has_active_subscription',
+                        'detail': 'You have an active paid subscription. Use change-plan or checkout instead.',
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             plan = Plan.objects.filter(id=plan_id, is_active=True).first()
             if not plan:
                 return Response(
                     {'error': 'Invalid or inactive plan.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not plan.is_trial and plan.price_monthly > 0:
+                return Response(
+                    {
+                        'error': 'paid_plan_requires_checkout',
+                        'detail': 'This plan requires payment. Use checkout to subscribe.',
+                    },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             sub.plan = plan

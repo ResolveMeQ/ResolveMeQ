@@ -29,8 +29,8 @@ def maybe_sync_ticket_escalated_to_jira(ticket) -> None:
             metadata={"project_key": installation.project_key, "sync": "escalate"},
         )
         logger.info("Created Jira issue %s for ticket %s", key, ticket.ticket_id)
-    except Exception as exc:
-        logger.warning("Jira escalate sync failed for ticket %s: %s", ticket.ticket_id, exc)
+    except Exception:
+        logger.exception("Jira escalate sync failed for ticket %s", ticket.ticket_id)
 
 
 def maybe_sync_ticket_resolved_to_jira(ticket) -> None:
@@ -54,5 +54,5 @@ def maybe_sync_ticket_resolved_to_jira(ticket) -> None:
             ref.metadata = meta
             ref.save(update_fields=["metadata", "updated_at"])
             logger.info("Transitioned Jira issue %s for ticket %s", ref.external_id, ticket.ticket_id)
-    except Exception as exc:
-        logger.warning("Jira resolve sync failed for ticket %s: %s", ticket.ticket_id, exc)
+    except Exception:
+        logger.exception("Jira resolve sync failed for ticket %s", ticket.ticket_id)

@@ -3,6 +3,7 @@ import logging
 from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from celery.schedules import crontab
 
 import dj_database_url
@@ -36,14 +37,18 @@ if SENTRY_DSN:
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv(
-    "SECRET_KEY",
-    "django-insecure-xoeau&915nx&jsisbu$@p4h3^iva-4s4bxov6nj5l@y2l48d%r",
-)
-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
+
+# SECURITY WARNING: keep the secret key used in production secret!
+# No insecure fallback in production: an unset SECRET_KEY must fail startup loudly,
+# not silently sign sessions/tokens with a value that's public in this repo's history.
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = "django-insecure-dev-only-key-do-not-use-in-production"
+    else:
+        raise ImproperlyConfigured("SECRET_KEY environment variable must be set when DEBUG=False")
 
 raw_hosts = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1")
 if raw_hosts == "*":
@@ -388,7 +393,9 @@ AI_AGENT_CIRCUIT_OPEN_SECONDS = int(os.getenv('AI_AGENT_CIRCUIT_OPEN_SECONDS', '
 PREDICTIVE_ROUTING_ENABLED = os.getenv('PREDICTIVE_ROUTING_ENABLED', 'true').strip().lower() in ('1', 'true', 'yes')
 PREDICTIVE_ROUTING_AUTO_ASSIGN_MIN_CONFIDENCE = float(os.getenv('PREDICTIVE_ROUTING_AUTO_ASSIGN_MIN_CONFIDENCE', '0.55'))
 PREDICTIVE_ROUTING_LOOKBACK_DAYS = int(os.getenv('PREDICTIVE_ROUTING_LOOKBACK_DAYS', '90'))
-AGENT_API_KEY = os.getenv('AGENT_API_KEY', 'resolvemeq-agent-secret-key-2026')
+# No hardcoded fallback: an unset key must fail authentication, not silently accept a
+# well-known default. See base.authentication.AgentAPIKeyAuthentication.
+AGENT_API_KEY = os.getenv('AGENT_API_KEY', '')
 # LLM confidence thresholds (used by AutonomousAgent and Solution creation in tasks)
 AGENT_CONFIDENCE_HIGH = float((os.getenv("AGENT_CONFIDENCE_HIGH", "0.8") or "0.8").strip())
 AGENT_CONFIDENCE_MEDIUM = float((os.getenv("AGENT_CONFIDENCE_MEDIUM", "0.6") or "0.6").strip())

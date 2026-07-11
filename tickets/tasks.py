@@ -1,6 +1,7 @@
 from celery import shared_task
 from celery.exceptions import MaxRetriesExceededError, Retry
 from django.conf import settings
+from django.db import transaction
 import requests
 from .models import Ticket, ActionHistory, TicketResolution
 import logging
@@ -10,7 +11,12 @@ from solutions.models import Solution
 from .autonomous_agent import AutonomousAgent, AgentAction
 from .confidence_settings import agent_confidence_high
 from .handoff import build_handoff_packet
-from .outcome_helpers import apply_escalated_timestamp, log_agent_confidence_snapshot, touch_first_ai_at
+from .outcome_helpers import (
+    apply_escalated_timestamp,
+    log_agent_confidence_snapshot,
+    steps_from_agent_response,
+    touch_first_ai_at,
+)
 from monitoring.metrics import AgentMetrics
 from django.utils import timezone
 
@@ -98,19 +104,20 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False, bill
         logger.info("Received agent response for ticket %s", ticket_id)
 
         # Update ticket with agent response
-        ticket.agent_response = agent_response
-        ticket.agent_processed = True
-        ticket.save()
-        agent_saved = True
+        with transaction.atomic():
+            ticket.agent_response = agent_response
+            ticket.agent_processed = True
+            ticket.save()
+            agent_saved = True
 
-        touch_first_ai_at(ticket)
-        if isinstance(ticket.agent_response, dict):
-            log_agent_confidence_snapshot(
-                ticket,
-                "analyze",
-                confidence=ticket.agent_response.get("confidence"),
-                recommended_action=str(ticket.agent_response.get("recommended_action") or ""),
-            )
+            touch_first_ai_at(ticket)
+            if isinstance(ticket.agent_response, dict):
+                log_agent_confidence_snapshot(
+                    ticket,
+                    "analyze",
+                    confidence=ticket.agent_response.get("confidence"),
+                    recommended_action=str(ticket.agent_response.get("recommended_action") or ""),
+                )
 
         # Slack DM: skip generic summary when autonomous action sends its own tailored message.
         autonomous_agent = AutonomousAgent(ticket)
@@ -142,34 +149,31 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False, bill
         steps = None
         confidence = 0.0
         if isinstance(agent_data, dict):
-            solution_data = agent_data.get("solution", {})
-            steps = solution_data.get("steps") or agent_data.get("resolution_steps") or agent_data.get("steps")
+            step_list = steps_from_agent_response(agent_data)
+            steps = "\n".join(step_list) if step_list else None
             confidence = agent_data.get("confidence", 0.0)
-            if steps and isinstance(steps, list):
-                steps = "\n".join(steps)
-            elif isinstance(steps, str):
-                pass  # Already a string
         # Mark as solution if confidence is high
-        if steps and confidence >= agent_confidence_high():
-            Solution.objects.get_or_create(
-                ticket=ticket,
-                defaults={
-                    "steps": steps,
-                    "worked": True,
-                    "created_by": ticket.user,
-                    "confidence_score": confidence,
-                }
-            )
-        elif steps:
-            Solution.objects.get_or_create(
-                ticket=ticket,
-                defaults={
-                    "steps": steps,
-                    "worked": False,
-                    "created_by": ticket.user,
-                    "confidence_score": confidence,
-                }
-            )
+        with transaction.atomic():
+            if steps and confidence >= agent_confidence_high():
+                Solution.objects.get_or_create(
+                    ticket=ticket,
+                    defaults={
+                        "steps": steps,
+                        "worked": True,
+                        "created_by": ticket.user,
+                        "confidence_score": confidence,
+                    }
+                )
+            elif steps:
+                Solution.objects.get_or_create(
+                    ticket=ticket,
+                    defaults={
+                        "steps": steps,
+                        "worked": False,
+                        "created_by": ticket.user,
+                        "confidence_score": confidence,
+                    }
+                )
 
         # --- Sync to knowledge base if ticket is resolved ---
         if ticket.status == "resolved":
@@ -278,13 +282,9 @@ def process_ticket_with_agent_sync(ticket, billing_user, force=False, billing_pr
         # Run in-process: Celery's broker may be exactly what's unavailable right now.
         execute_autonomous_action(ticket.ticket_id, action.value, params)
 
-        steps = None
-        confidence = 0.0
-        solution_data = agent_response.get("solution", {})
-        steps = solution_data.get("steps") or agent_response.get("resolution_steps") or agent_response.get("steps")
+        step_list = steps_from_agent_response(agent_response)
+        steps = "\n".join(step_list) if step_list else None
         confidence = agent_response.get("confidence", 0.0)
-        if isinstance(steps, list):
-            steps = "\n".join(steps)
         if steps:
             Solution.objects.get_or_create(
                 ticket=ticket,
@@ -365,53 +365,58 @@ def handle_auto_resolve(ticket, params):
     resolution_steps = params.get("resolution_steps", "No steps provided")
     confidence = ticket.agent_response.get('confidence', 0.0) if isinstance(ticket.agent_response, dict) else 0.0
     reasoning = ticket.agent_response.get('reasoning', '') if isinstance(ticket.agent_response, dict) else ''
-    
-    # Execute action
-    ticket.status = "resolved"
-    ticket.save()
-    
-    # Capture state after action
-    after_state = {
-        'status': ticket.status,
-        'assigned_to_id': ticket.assigned_to.user_id if ticket.assigned_to else None,
-    }
-    
-    # Record action in history for rollback capability
-    ActionHistory.objects.create(
-        ticket=ticket,
-        action_type='AUTO_RESOLVE',
-        action_params=params,
-        confidence_score=confidence,
-        agent_reasoning=reasoning,
-        rollback_possible=True,
-        rollback_steps={'handler': 'rollback_auto_resolve'},
-        before_state=before_state,
-        after_state=after_state,
-    )
-    
-    # Create interaction record
-    TicketInteraction.objects.create(
-        ticket=ticket,
-        user=ticket.user,
-        interaction_type="agent_response",
-        content=f"🤖 Auto-resolved by AI Agent.\n\nResolution:\n{resolution_steps}"
-    )
-    
-    # Create resolution tracking for feedback loop
-    TicketResolution.objects.get_or_create(
-        ticket=ticket,
-        defaults={'autonomous_action': 'AUTO_RESOLVE'}
-    )
-    
-    # Notify user
-    notify_user_auto_resolution(str(ticket.user.id), ticket.ticket_id, params)
-    
-    # Schedule 24-hour follow-up to verify resolution actually worked
-    schedule_resolution_followup.apply_async(
-        args=[ticket.ticket_id],
-        countdown=86400  # 24 hours
-    )
-    
+
+    with transaction.atomic():
+        # Execute action
+        ticket.status = "resolved"
+        ticket.save()
+
+        # Capture state after action
+        after_state = {
+            'status': ticket.status,
+            'assigned_to_id': ticket.assigned_to.user_id if ticket.assigned_to else None,
+        }
+
+        # Record action in history for rollback capability
+        ActionHistory.objects.create(
+            ticket=ticket,
+            action_type='AUTO_RESOLVE',
+            action_params=params,
+            confidence_score=confidence,
+            agent_reasoning=reasoning,
+            rollback_possible=True,
+            rollback_steps={'handler': 'rollback_auto_resolve'},
+            before_state=before_state,
+            after_state=after_state,
+        )
+
+        # Create interaction record
+        TicketInteraction.objects.create(
+            ticket=ticket,
+            user=ticket.user,
+            interaction_type="agent_response",
+            content=f"🤖 Auto-resolved by AI Agent.\n\nResolution:\n{resolution_steps}"
+        )
+
+        # Create resolution tracking for feedback loop
+        TicketResolution.objects.get_or_create(
+            ticket=ticket,
+            defaults={'autonomous_action': 'AUTO_RESOLVE'}
+        )
+
+        # Notify user + schedule follow-up only once the writes above are
+        # durably committed (a mid-transaction crash should not notify the
+        # user of a resolution that never actually persisted).
+        transaction.on_commit(
+            lambda: notify_user_auto_resolution(str(ticket.user.id), ticket.ticket_id, params)
+        )
+        transaction.on_commit(
+            lambda: schedule_resolution_followup.apply_async(
+                args=[ticket.ticket_id],
+                countdown=86400  # 24 hours
+            )
+        )
+
     logger.info(f"Auto-resolved ticket {ticket.ticket_id} with follow-up scheduled")
     return True
 
@@ -427,47 +432,48 @@ def handle_escalate(ticket, params):
     # Capture state before
     before_state = {'status': ticket.status}
 
-    ticket.status = "escalated"
-    apply_escalated_timestamp(ticket)
+    with transaction.atomic():
+        ticket.status = "escalated"
+        apply_escalated_timestamp(ticket)
 
-    priority = derive_escalation_priority(params)
-    ticket.escalation_priority = priority
-    ticket.sla_due_at = compute_sla_due_at(ticket.escalated_at, priority)
-    ticket.save()
+        priority = derive_escalation_priority(params)
+        ticket.escalation_priority = priority
+        ticket.sla_due_at = compute_sla_due_at(ticket.escalated_at, priority)
+        ticket.save()
 
-    # Capture state after
-    after_state = {'status': ticket.status}
+        # Capture state after
+        after_state = {'status': ticket.status}
 
-    confidence = ticket.agent_response.get('confidence', 0.0) if isinstance(ticket.agent_response, dict) else 0.0
-    reasoning = params.get('escalation_reason', 'Requires human attention')
+        confidence = ticket.agent_response.get('confidence', 0.0) if isinstance(ticket.agent_response, dict) else 0.0
+        reasoning = params.get('escalation_reason', 'Requires human attention')
 
-    msg = build_escalation_message(ticket, priority, reasoning, params.get('suggested_team'))
-    params.setdefault('escalation_reason', msg['reason'])
-    params['priority'] = msg['priority']
-    params['suggested_team'] = msg['suggested_team']
-    params['eta_text'] = msg['eta_text']
-    
-    # Record action in history
-    ActionHistory.objects.create(
-        ticket=ticket,
-        action_type='ESCALATE',
-        action_params=params,
-        confidence_score=confidence,
-        agent_reasoning=reasoning,
-        rollback_possible=True,
-        rollback_steps={'handler': 'rollback_escalate'},
-        before_state=before_state,
-        after_state=after_state,
-    )
-    
-    # Create interaction record
-    TicketInteraction.objects.create(
-        ticket=ticket,
-        user=ticket.user,
-        interaction_type="agent_response",
-        content=f"⚠️ Escalated: {reasoning}"
-    )
-    
+        msg = build_escalation_message(ticket, priority, reasoning, params.get('suggested_team'))
+        params.setdefault('escalation_reason', msg['reason'])
+        params['priority'] = msg['priority']
+        params['suggested_team'] = msg['suggested_team']
+        params['eta_text'] = msg['eta_text']
+
+        # Record action in history
+        ActionHistory.objects.create(
+            ticket=ticket,
+            action_type='ESCALATE',
+            action_params=params,
+            confidence_score=confidence,
+            agent_reasoning=reasoning,
+            rollback_possible=True,
+            rollback_steps={'handler': 'rollback_escalate'},
+            before_state=before_state,
+            after_state=after_state,
+        )
+
+        # Create interaction record
+        TicketInteraction.objects.create(
+            ticket=ticket,
+            user=ticket.user,
+            interaction_type="agent_response",
+            content=f"⚠️ Escalated: {reasoning}"
+        )
+
     packet = build_handoff_packet(
         ticket, ticket.user, params.get("conversation_summary", "")
     )

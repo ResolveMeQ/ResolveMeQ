@@ -1061,7 +1061,10 @@ class Invoice(models.Model):
     )
     period_start = models.DateTimeField(null=True, blank=True)
     period_end = models.DateTimeField(null=True, blank=True)
-    gateway_payment_id = models.CharField(max_length=255, blank=True, null=True)
+    # unique=True enforces idempotency at the DB level (payment_sync.py previously relied on a
+    # racy check-then-create). NOTE: verify no duplicate gateway_payment_id rows exist in prod
+    # before deploying this migration, since the prior TOCTOU logic could have created some.
+    gateway_payment_id = models.CharField(max_length=255, blank=True, null=True, unique=True)
     invoice_url = models.URLField(max_length=512, blank=True, null=True)
     pricing_type = models.CharField(max_length=32, default='subscription')  # subscription, one_time, etc.
     created_at = models.DateTimeField(auto_now_add=True)

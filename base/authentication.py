@@ -36,9 +36,13 @@ class AgentAPIKeyAuthentication(BaseAuthentication):
         if not api_key:
             return None  # No authentication attempted
         
-        # Get expected API key from environment or settings
-        expected_key = getattr(settings, 'AGENT_API_KEY', os.getenv('AGENT_API_KEY', 'resolvemeq-agent-secret-key-2026'))
-        
+        # Get expected API key from settings. No hardcoded fallback: if it's not configured,
+        # fail closed rather than silently accepting a well-known default value.
+        expected_key = getattr(settings, 'AGENT_API_KEY', '') or ''
+
+        if not expected_key:
+            raise AuthenticationFailed('Agent API Key authentication is not configured')
+
         if not hmac.compare_digest(api_key, expected_key):
             raise AuthenticationFailed('Invalid Agent API Key')
         

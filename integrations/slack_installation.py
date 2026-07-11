@@ -247,6 +247,11 @@ def get_or_create_slack_shadow_user(
                 prof = (u.get("profile") or {}) if isinstance(u, dict) else {}
                 slack_email = (prof.get("email") or "").strip().lower()
         except Exception:
+            logger.exception(
+                "Slack users.info email lookup failed for slack_user %s (installation %s)",
+                slack_user_id,
+                getattr(installation, "team_id", None),
+            )
             slack_email = ""
 
     if slack_email:
@@ -265,7 +270,11 @@ def get_or_create_slack_shadow_user(
                 if changed:
                     p.save(update_fields=["slack_user_id", "slack_team_id"])
             except Exception:
-                pass
+                logger.exception(
+                    "Failed to link Slack profile for existing user %s (slack_user %s)",
+                    existing.pk,
+                    slack_user_id,
+                )
             return existing, False
 
     email = f"{slack_user_id}@slack.local"
@@ -304,7 +313,11 @@ def get_or_create_slack_shadow_user(
         if changed:
             p.save(update_fields=["slack_user_id", "slack_team_id"])
     except Exception:
-        pass
+        logger.exception(
+            "Failed to persist Slack profile linkage for user %s (slack_user %s)",
+            user.pk,
+            slack_user_id,
+        )
 
     return user, created
 

@@ -24,6 +24,10 @@ AGENT_API_URL = 'http://mock-agent.test/api/analyze'
 # Disable agent processing during most tests
 TEST_DISABLE_AGENT = True
 
+# Deterministic agent API key for tests, independent of ambient env vars.
+# resolvemeq.settings has no hardcoded fallback for this by design.
+AGENT_API_KEY = 'test-agent-api-key-ci-only'
+
 # Disable migrations during testing for speed
 class DisableMigrations:
     def __contains__(self, item):

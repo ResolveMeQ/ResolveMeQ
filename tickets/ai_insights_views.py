@@ -6,10 +6,12 @@ Provides explanations for AI decisions and confidence scores.
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework import status as http_status
 from django.shortcuts import get_object_or_404
 from django.db.models import Q, Count
 
 from tickets.models import Ticket
+from tickets.scoping import user_can_access_ticket
 from solutions.models import KnowledgeBaseEntry
 from tickets.cache_decorators import cache_api_response
 
@@ -24,7 +26,12 @@ def get_confidence_explanation(request, ticket_id):
     Returns factors that contributed to the confidence score and their impact.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"error": "You do not have permission to access this ticket."},
+            status=http_status.HTTP_403_FORBIDDEN,
+        )
+
     if not ticket.agent_processed or not ticket.agent_response:
         return Response({
             'error': 'Ticket has not been processed by AI agent yet',
@@ -218,15 +225,21 @@ def get_similar_tickets(request, ticket_id):
     - status: Filter by status (e.g., 'resolved')
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"error": "You do not have permission to access this ticket."},
+            status=http_status.HTTP_403_FORBIDDEN,
+        )
+
     limit = int(request.GET.get('limit', 5))
     limit = min(limit, 20)  # Max 20 results
     
     threshold = float(request.GET.get('threshold', 0.7))
     status_filter = request.GET.get('status', 'resolved')
     
-    # Find similar tickets
-    queryset = Ticket.objects.exclude(ticket_id=ticket_id)
+    # Find similar tickets, scoped to the origin ticket's own team so cross-tenant
+    # ticket content (issue_type/category/tags) is never surfaced to another tenant.
+    queryset = Ticket.objects.filter(team_id=ticket.team_id).exclude(ticket_id=ticket_id)
     
     # Filter by status if provided
     if status_filter:

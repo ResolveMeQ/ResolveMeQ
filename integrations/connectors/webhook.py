@@ -21,6 +21,7 @@ from integrations.connectors.base import (
     record_delivery_success,
     should_retry,
 )
+from integrations.url_safety import UnsafeWebhookURLError, validate_webhook_url
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,22 @@ def deliver_webhook_now(delivery_id) -> bool:
         delivery.error_message = "Endpoint inactive or circuit open."
         delivery.attempts = (delivery.attempts or 0) + 1
         delivery.save(update_fields=["status", "error_message", "attempts", "updated_at"])
+        return False
+
+    # Re-validate right before connecting: DNS can change between webhook
+    # registration and delivery time (DNS rebinding), so the create/update
+    # time check alone isn't enough to prevent SSRF.
+    try:
+        validate_webhook_url(delivery.url)
+    except UnsafeWebhookURLError as exc:
+        logger.warning(
+            "Blocked webhook delivery %s to unsafe URL: %s", delivery.pk, exc
+        )
+        delivery.status = "failed"
+        delivery.error_message = f"Blocked unsafe webhook URL: {exc}"[:500]
+        delivery.attempts = (delivery.attempts or 0) + 1
+        delivery.save(update_fields=["status", "error_message", "attempts", "updated_at"])
+        record_delivery_failure(endpoint)
         return False
 
     body = json.dumps(delivery.payload, separators=(",", ":"), default=str).encode("utf-8")

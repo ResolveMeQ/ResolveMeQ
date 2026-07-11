@@ -1,3 +1,4 @@
+import logging
 import urllib.parse
 
 from datetime import timedelta
@@ -16,6 +17,8 @@ from base.team_permissions import user_can_manage_integrations, user_is_team_own
 
 from .connectors.okta import issuer_for_domain, normalize_okta_domain
 from .models import OktaInstallation
+
+logger = logging.getLogger(__name__)
 
 
 def _team_from_request(request, *, require_owner: bool = False):
@@ -137,8 +140,9 @@ def okta_oauth_redirect(request):
             body=body,
             headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
         )
-    except Exception as exc:
-        return HttpResponseBadRequest(f"Token exchange failed: {exc}")
+    except Exception:
+        logger.exception("Okta token exchange failed for team %s", team_id)
+        return HttpResponseBadRequest("Authentication failed, please try again.")
 
     if response.status_code >= 400:
         return HttpResponseBadRequest(f"Token exchange failed (HTTP {response.status_code}).")

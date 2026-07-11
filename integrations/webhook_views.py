@@ -14,6 +14,7 @@ from .connectors.webhook import (
     queue_signed_webhook,
 )
 from .models import WebhookDelivery, WebhookEndpoint
+from .url_safety import UnsafeWebhookURLError, validate_webhook_url
 from .webhook_scoping import user_can_edit_webhook, user_can_manage_webhooks, webhooks_queryset_for_user
 
 
@@ -79,6 +80,10 @@ def webhook_list_create(request):
     url = (request.data.get("url") or "").strip()
     if not url:
         return Response({"error": "url is required."}, status=400)
+    try:
+        validate_webhook_url(url)
+    except UnsafeWebhookURLError as exc:
+        return Response({"error": str(exc)}, status=400)
 
     tid = active_team_id_for_user(request.user)
     team = Team.objects.filter(pk=tid).first() if tid else None
@@ -128,6 +133,10 @@ def webhook_detail(request, endpoint_id):
         url = (request.data.get("url") or "").strip()
         if not url:
             return Response({"error": "url cannot be empty."}, status=400)
+        try:
+            validate_webhook_url(url)
+        except UnsafeWebhookURLError as exc:
+            return Response({"error": str(exc)}, status=400)
         updates["url"] = url[:512]
     if "is_active" in request.data:
         updates["is_active"] = bool(request.data.get("is_active"))

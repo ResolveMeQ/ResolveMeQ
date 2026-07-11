@@ -11,6 +11,7 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Q
 
 from tickets.models import ResolutionTemplate, Ticket, ActionHistory
+from tickets.scoping import user_can_access_ticket
 from tickets.serializers import (
     ResolutionTemplateSerializer,
     ResolutionTemplateListSerializer,
@@ -201,7 +202,12 @@ def apply_template_to_ticket(request, ticket_id):
     with the template's solution steps.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"error": "You do not have permission to modify this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     # Validate input
     serializer = ApplyTemplateSerializer(data=request.data)
     if not serializer.is_valid():
@@ -304,7 +310,12 @@ def get_templates_for_ticket(request, ticket_id):
     Returns templates sorted by relevance and success rate.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
-    
+    if not user_can_access_ticket(request.user, ticket):
+        return Response(
+            {"error": "You do not have permission to access this ticket."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     # Find templates matching the ticket's category
     queryset = ResolutionTemplate.objects.filter(
         category=ticket.category,

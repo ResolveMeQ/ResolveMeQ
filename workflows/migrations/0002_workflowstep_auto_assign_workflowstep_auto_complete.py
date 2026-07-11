@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='workflowstep',
             name='auto_assign',
-            field=models.CharField(blank=True, choices=[('', 'None'), ('started_by', 'Whoever started the workflow'), ('ticket_reporter', "The linked ticket's reporter")], help_text='Copied from the template at creation time. If set, claimed_by is resolved automatically when this step becomes active, skipping the manual Claim click.', max_length=20),
+            field=models.CharField(blank=True, choices=[('', 'None'), ('started_by', 'Whoever started the workflow'), ('ticket_reporter', "The linked ticket's reporter")], default='', help_text='Copied from the template at creation time. If set, claimed_by is resolved automatically when this step becomes active, skipping the manual Claim click.', max_length=20),
         ),
         migrations.AddField(
             model_name='workflowstep',

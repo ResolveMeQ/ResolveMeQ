@@ -401,6 +401,7 @@ def process_with_agent(request, ticket_id):
     })
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def task_status(request, task_id):
     """
     Check the status of a Celery task.
@@ -781,7 +782,16 @@ def update_ticket(request, ticket_id):
             {"error": "You do not have permission to modify this ticket."},
             status=status.HTTP_403_FORBIDDEN,
         )
-    serializer = TicketSerializer(ticket, data=request.data, partial=True)
+    # Reassignment and ownership transfer must go through assign_ticket's dedicated
+    # same-team check, not this general-purpose PATCH -- otherwise any user who can
+    # touch a ticket can hand it to an arbitrary user id.
+    if isinstance(request.data, QueryDict):
+        update_data = request.data.copy()
+    else:
+        update_data = dict(request.data)
+    update_data.pop("assigned_to", None)
+    update_data.pop("user", None)
+    serializer = TicketSerializer(ticket, data=update_data, partial=True)
     if serializer.is_valid():
         serializer.save()
         return Response(serializer.data)
@@ -1649,6 +1659,7 @@ def agent_analytics(request):
         )
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def enhanced_kb_search(request):
     """
     Enhanced knowledge base search using FastAPI agent's multi-source search.
@@ -1666,19 +1677,18 @@ def enhanced_kb_search(request):
         if not query:
             return Response({'error': 'Query is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if request.user.is_authenticated:
-            kb_quota = try_consume_agent_operation(request.user)
-            if not kb_quota.allowed:
-                return Response(
-                    {
-                        'error': 'agent_quota_exceeded',
-                        'detail': 'Your plan monthly AI agent limit has been reached. Upgrade to continue.',
-                        'agent_operations_used': kb_quota.used,
-                        'agent_operations_limit': kb_quota.limit,
-                    },
-                    status=status.HTTP_429_TOO_MANY_REQUESTS,
-                )
-            kb_charged = True
+        kb_quota = try_consume_agent_operation(request.user)
+        if not kb_quota.allowed:
+            return Response(
+                {
+                    'error': 'agent_quota_exceeded',
+                    'detail': 'Your plan monthly AI agent limit has been reached. Upgrade to continue.',
+                    'agent_operations_used': kb_quota.used,
+                    'agent_operations_limit': kb_quota.limit,
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        kb_charged = True
 
         # Prepare request for FastAPI agent
         agent_url = getattr(settings, 'AI_AGENT_URL', 'http://localhost:8000')
@@ -1707,13 +1717,16 @@ def enhanced_kb_search(request):
         logger.error(f"Error calling FastAPI agent KB search: {str(e)}")
         if kb_charged:
             refund_agent_operation(request.user)
-        # Fallback to local Django KB search
+        # Fallback to local Django KB search, scoped to the caller's team like every
+        # other human-facing KB read path (see knowledge_base.views._article_queryset_for_request).
         from knowledge_base.views import KnowledgeBaseArticleViewSet
         from knowledge_base.serializers import KnowledgeBaseArticleSerializer
-        
+
         query = request.data.get('query', '').lower()
+        team_id = active_team_id_for_user(request.user)
+        team_scope = Q(team__isnull=True) | Q(team_id=team_id) if team_id else Q(team__isnull=True)
         articles = KnowledgeBaseArticle.objects.filter(
-            Q(title__icontains=query) | Q(content__icontains=query)
+            team_scope, Q(title__icontains=query) | Q(content__icontains=query)
         )[:limit]
         
         serializer = KnowledgeBaseArticleSerializer(articles, many=True)
@@ -1822,6 +1835,7 @@ def rollback_action(request, action_history_id):
         "reason": "Reason for rollback"
     }
     """
+    from django.db import transaction
     from .rollback import RollbackManager
 
     if not (request.user.is_staff or request.user.is_superuser):
@@ -1831,27 +1845,32 @@ def rollback_action(request, action_history_id):
         )
 
     try:
-        action_history = ActionHistory.objects.select_related("ticket").get(id=action_history_id)
+        # Hold the row lock for the check AND the execution: execute_rollback sets
+        # rolled_back=True itself as part of doing the actual state restore, so a
+        # concurrent second request must block until the first one's transaction
+        # commits, then see rolled_back=True and bail -- not race past the check.
+        with transaction.atomic():
+            action_history = ActionHistory.objects.select_related("ticket").select_for_update().get(
+                id=action_history_id
+            )
 
-        # Check if already rolled back
-        if action_history.rolled_back:
-            return Response(
-                {'error': 'This action was already rolled back'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Check if rollback is supported
-        if not RollbackManager.can_rollback(action_history.action_type):
-            return Response(
-                {'error': f'Action type {action_history.action_type} does not support rollback'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        reason = request.data.get('reason', 'Manual rollback by admin')
-        
-        # Execute rollback
-        success = RollbackManager.execute_rollback(action_history, request.user, reason)
-        
+            if action_history.rolled_back:
+                return Response(
+                    {'error': 'This action was already rolled back'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if not RollbackManager.can_rollback(action_history.action_type):
+                return Response(
+                    {'error': f'Action type {action_history.action_type} does not support rollback'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            reason = request.data.get('reason', 'Manual rollback by admin')
+
+            # Execute rollback while still holding the lock.
+            success = RollbackManager.execute_rollback(action_history, request.user, reason)
+
         if success:
             return Response({
                 'message': 'Action rolled back successfully',
@@ -1887,8 +1906,13 @@ def action_history(request, ticket_id):
     """
     try:
         ticket = Ticket.objects.get(ticket_id=ticket_id)
+        if not user_can_access_ticket(request.user, ticket):
+            return Response(
+                {"error": "You do not have permission to access this ticket."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         actions = ActionHistory.objects.filter(ticket=ticket).order_by('-executed_at')
-        
+
         history = []
         for action in actions:
             history.append({
@@ -1932,7 +1956,12 @@ def submit_resolution_feedback(request, ticket_id):
     """
     try:
         ticket = Ticket.objects.get(ticket_id=ticket_id)
-        
+        if not user_can_access_ticket(request.user, ticket):
+            return Response(
+                {"error": "You do not have permission to access this ticket."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         # Get or create resolution tracking
         resolution, created = TicketResolution.objects.get_or_create(
             ticket=ticket,

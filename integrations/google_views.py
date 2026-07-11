@@ -1,3 +1,4 @@
+import logging
 import urllib.parse
 
 from datetime import timedelta
@@ -13,6 +14,8 @@ from rest_framework.response import Response
 
 from .connector_scoping import team_from_request
 from .models import GoogleWorkspaceInstallation
+
+logger = logging.getLogger(__name__)
 
 
 @api_view(["GET"])
@@ -108,8 +111,9 @@ def google_workspace_oauth_redirect(request):
             body=body,
             headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
         )
-    except Exception as exc:
-        return HttpResponseBadRequest(f"Token exchange failed: {exc}")
+    except Exception:
+        logger.exception("Google Workspace token exchange failed for team %s", team_id)
+        return HttpResponseBadRequest("Authentication failed, please try again.")
     if response.status_code >= 400:
         return HttpResponseBadRequest(f"Token exchange failed (HTTP {response.status_code}).")
 
@@ -134,7 +138,11 @@ def google_workspace_oauth_redirect(request):
         if profile_resp.status_code == 200:
             admin_email = (profile_resp.json().get("email") or "")[:254]
     except Exception:
-        pass
+        logger.exception(
+            "Google Workspace profile lookup failed for team %s (user %s)",
+            team.id,
+            user_id,
+        )
 
     GoogleWorkspaceInstallation.objects.filter(resolvemeq_team=team, is_active=True).update(is_active=False)
     expires_in = data.get("expires_in")
