@@ -309,21 +309,20 @@ SLACK_LEGACY_INSTALL_FALLBACK = os.getenv("SLACK_LEGACY_INSTALL_FALLBACK", "").s
 
 # Okta read connector (P2-7) — workspace owners OAuth-link their org for auto_check steps.
 _api_base = os.getenv("API_BASE_URL", "https://api.resolvemeq.net" if not DEBUG else "http://localhost:8000").rstrip("/")
-OKTA_CLIENT_ID = os.getenv("OKTA_CLIENT_ID")
-OKTA_CLIENT_SECRET = os.getenv("OKTA_CLIENT_SECRET")
-OKTA_REDIRECT_URI = os.getenv("OKTA_REDIRECT_URI", f"{_api_base}/api/integrations/okta/oauth/redirect/")
+OKTA_CLIENT_ID = (os.getenv("OKTA_CLIENT_ID") or "").strip()
+OKTA_CLIENT_SECRET = (os.getenv("OKTA_CLIENT_SECRET") or "").strip()
+_okta_redirect = (os.getenv("OKTA_REDIRECT_URI") or "").strip()
+OKTA_REDIRECT_URI = _okta_redirect or f"{_api_base}/api/integrations/okta/oauth/redirect/"
 OKTA_SCOPES = os.getenv(
     "OKTA_SCOPES",
     "okta.users.read okta.groups.read offline_access openid",
 )
 
 # Google Workspace read connector (P2-8)
-GOOGLE_WORKSPACE_CLIENT_ID = os.getenv("GOOGLE_WORKSPACE_CLIENT_ID")
-GOOGLE_WORKSPACE_CLIENT_SECRET = os.getenv("GOOGLE_WORKSPACE_CLIENT_SECRET")
-GOOGLE_WORKSPACE_REDIRECT_URI = os.getenv(
-    "GOOGLE_WORKSPACE_REDIRECT_URI",
-    f"{_api_base}/api/integrations/google/oauth/redirect/",
-)
+GOOGLE_WORKSPACE_CLIENT_ID = (os.getenv("GOOGLE_WORKSPACE_CLIENT_ID") or "").strip()
+GOOGLE_WORKSPACE_CLIENT_SECRET = (os.getenv("GOOGLE_WORKSPACE_CLIENT_SECRET") or "").strip()
+_gw_redirect = (os.getenv("GOOGLE_WORKSPACE_REDIRECT_URI") or "").strip()
+GOOGLE_WORKSPACE_REDIRECT_URI = _gw_redirect or f"{_api_base}/api/integrations/google/oauth/redirect/"
 GOOGLE_WORKSPACE_SCOPES = os.getenv(
     "GOOGLE_WORKSPACE_SCOPES",
     "https://www.googleapis.com/auth/admin.directory.user.readonly "
@@ -331,12 +330,10 @@ GOOGLE_WORKSPACE_SCOPES = os.getenv(
 )
 
 # Microsoft 365 read connector (P2-8)
-MICROSOFT365_CLIENT_ID = os.getenv("MICROSOFT365_CLIENT_ID")
-MICROSOFT365_CLIENT_SECRET = os.getenv("MICROSOFT365_CLIENT_SECRET")
-MICROSOFT365_REDIRECT_URI = os.getenv(
-    "MICROSOFT365_REDIRECT_URI",
-    f"{_api_base}/api/integrations/microsoft/oauth/redirect/",
-)
+MICROSOFT365_CLIENT_ID = (os.getenv("MICROSOFT365_CLIENT_ID") or "").strip()
+MICROSOFT365_CLIENT_SECRET = (os.getenv("MICROSOFT365_CLIENT_SECRET") or "").strip()
+_m365_redirect = (os.getenv("MICROSOFT365_REDIRECT_URI") or "").strip()
+MICROSOFT365_REDIRECT_URI = _m365_redirect or f"{_api_base}/api/integrations/microsoft/oauth/redirect/"
 MICROSOFT365_SCOPES = os.getenv(
     "MICROSOFT365_SCOPES",
     "openid offline_access User.Read.All Directory.Read.All",

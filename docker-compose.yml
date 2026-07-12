@@ -1,7 +1,6 @@
 # ResolveMeQ Django Backend - Production Deployment
-# Compose loads `.env` from this directory for ${VAR} substitution — put EMAIL_* / DEFAULT_FROM_EMAIL there on the server.
-# After changing SMTP vars: recreate web AND celery_worker (and celery_beat if it sends mail), e.g.
-#   docker compose up -d --force-recreate web celery_worker celery_beat
+# Compose loads `.env` for ${VAR} substitution AND passes it into containers via env_file.
+# After changing .env or this file: docker compose up -d --force-recreate web celery_worker celery_beat
 # This deploys ONLY the Django application stack (web, celery, db, redis)
 # Deploy the Agent separately from its own repository
 # Use external network to communicate between projects on same VPS
@@ -44,6 +43,8 @@ services:
   web:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-web:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    env_file:
+      - .env
     volumes:
       # Do not mount a named volume over /app/staticfiles — an empty volume hides
       # files from `collectstatic` baked into the image (breaks admin/Jazzmin CSS).
@@ -80,10 +81,18 @@ services:
       - SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
       - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET:-}
       - SLACK_REDIRECT_URI=${SLACK_REDIRECT_URI:-}
-      - SLACK_ESCALATION_CHANNEL=${SLACK_ESCALATION_CHANNEL:-}
       - SLACK_BOT_SCOPES=${SLACK_BOT_SCOPES:-}
+      - SLACK_ESCALATION_CHANNEL=${SLACK_ESCALATION_CHANNEL:-}
       - SLACK_DIGEST_CHANNEL=${SLACK_DIGEST_CHANNEL:-}
       - SLACK_ESCALATION_ALERT_CHANNEL=${SLACK_ESCALATION_ALERT_CHANNEL:-}
+      # Microsoft Teams bot (Azure Bot Framework)
+      - TEAMS_APP_ID=${TEAMS_APP_ID:-}
+      - TEAMS_APP_PASSWORD=${TEAMS_APP_PASSWORD:-}
+      - TEAMS_APP_TENANT_ID=${TEAMS_APP_TENANT_ID:-}
+      - TEAMS_MESSAGING_ENDPOINT=${TEAMS_MESSAGING_ENDPOINT:-}
+      # Connector OAuth (OKTA_*, GOOGLE_WORKSPACE_*, MICROSOFT365_*) — loaded from env_file only.
+      # Do NOT add MICROSOFT365_CLIENT_ID=${MICROSOFT365_CLIENT_ID:-} here: empty substitution overrides env_file.
+      - API_BASE_URL=${API_BASE_URL:-https://api.resolvemeq.net}
       - EMAIL_HOST=${EMAIL_HOST:-smtp.gmail.com}
       - EMAIL_PORT=${EMAIL_PORT:-587}
       - EMAIL_USE_TLS=${EMAIL_USE_TLS:-True}
@@ -112,6 +121,23 @@ services:
       - MAX_AUTONOMOUS_ACTIONS_PER_DAY=${MAX_AUTONOMOUS_ACTIONS_PER_DAY:-500}
       - MAX_AUTONOMOUS_ACTIONS_PER_HOUR=${MAX_AUTONOMOUS_ACTIONS_PER_HOUR:-100}
       - SECURE_CROSS_ORIGIN_OPENER_POLICY=${SECURE_CROSS_ORIGIN_OPENER_POLICY:-}
+      # AI agent reliability + routing
+      - AI_AGENT_HTTP_TIMEOUT=${AI_AGENT_HTTP_TIMEOUT:-30}
+      - AI_AGENT_CIRCUIT_MAX_FAILURES=${AI_AGENT_CIRCUIT_MAX_FAILURES:-5}
+      - AI_AGENT_CIRCUIT_OPEN_SECONDS=${AI_AGENT_CIRCUIT_OPEN_SECONDS:-300}
+      - PREDICTIVE_ROUTING_ENABLED=${PREDICTIVE_ROUTING_ENABLED:-true}
+      - PREDICTIVE_ROUTING_AUTO_ASSIGN_MIN_CONFIDENCE=${PREDICTIVE_ROUTING_AUTO_ASSIGN_MIN_CONFIDENCE:-0.55}
+      - PREDICTIVE_ROUTING_LOOKBACK_DAYS=${PREDICTIVE_ROUTING_LOOKBACK_DAYS:-90}
+      # Daily AI blog + public site URLs (Celery beat task; settings read at worker startup)
+      - ENABLE_DAILY_BLOG_GENERATION=${ENABLE_DAILY_BLOG_GENERATION:-true}
+      - BLOG_GENERATION_HOUR_UTC=${BLOG_GENERATION_HOUR_UTC:-6}
+      - BLOG_GENERATION_MINUTE_UTC=${BLOG_GENERATION_MINUTE_UTC:-30}
+      - BLOG_AUTHOR_NAME=${BLOG_AUTHOR_NAME:-}
+      - PUBLIC_MARKETING_URL=${PUBLIC_MARKETING_URL:-https://resolvemeq.net}
+      - PUBLIC_APP_URL=${PUBLIC_APP_URL:-https://app.resolvemeq.net}
+      - ENABLE_SITEMAP_PING=${ENABLE_SITEMAP_PING:-true}
+      # Database pool (Supabase session pooler)
+      - DB_CONN_MAX_AGE=${DB_CONN_MAX_AGE:-60}
     depends_on:
       redis:
         condition: service_healthy
@@ -130,6 +156,8 @@ services:
   celery_worker:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-celery:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    env_file:
+      - .env
     command: ["/app/venv/bin/celery", "-A", "resolvemeq", "worker", "-l", "info", "--pool=prefork", "--concurrency=4"]
     volumes:
       - media_files:/app/media
@@ -155,9 +183,30 @@ services:
       - FORCE_SYNC_AGENT_PROCESSING=${FORCE_SYNC_AGENT_PROCESSING:-false}
       - FRONTEND_URL=${FRONTEND_URL:-https://app.resolvemeq.net}
       - APP_NAME=${APP_NAME:-ResolveMeQ}
+      - API_BASE_URL=${API_BASE_URL:-https://api.resolvemeq.net}
+      - SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
+      - SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
+      - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET:-}
       - SLACK_BOT_SCOPES=${SLACK_BOT_SCOPES:-}
       - SLACK_DIGEST_CHANNEL=${SLACK_DIGEST_CHANNEL:-}
+      - SLACK_ESCALATION_CHANNEL=${SLACK_ESCALATION_CHANNEL:-}
       - SLACK_ESCALATION_ALERT_CHANNEL=${SLACK_ESCALATION_ALERT_CHANNEL:-}
+      - TEAMS_APP_ID=${TEAMS_APP_ID:-}
+      - TEAMS_APP_PASSWORD=${TEAMS_APP_PASSWORD:-}
+      - TEAMS_APP_TENANT_ID=${TEAMS_APP_TENANT_ID:-}
+      # Connector OAuth — from env_file only (see web service comment)
+      - AI_AGENT_HTTP_TIMEOUT=${AI_AGENT_HTTP_TIMEOUT:-30}
+      - AI_AGENT_CIRCUIT_MAX_FAILURES=${AI_AGENT_CIRCUIT_MAX_FAILURES:-5}
+      - AI_AGENT_CIRCUIT_OPEN_SECONDS=${AI_AGENT_CIRCUIT_OPEN_SECONDS:-300}
+      - DEFAULT_AGENT_OPERATIONS_PER_MONTH=${DEFAULT_AGENT_OPERATIONS_PER_MONTH:-500}
+      - AGENT_OPS_TRIAL_EXPIRED=${AGENT_OPS_TRIAL_EXPIRED:-0}
+      - ENABLE_DAILY_BLOG_GENERATION=${ENABLE_DAILY_BLOG_GENERATION:-true}
+      - BLOG_GENERATION_HOUR_UTC=${BLOG_GENERATION_HOUR_UTC:-6}
+      - BLOG_GENERATION_MINUTE_UTC=${BLOG_GENERATION_MINUTE_UTC:-30}
+      - BLOG_AUTHOR_NAME=${BLOG_AUTHOR_NAME:-}
+      - PUBLIC_MARKETING_URL=${PUBLIC_MARKETING_URL:-https://resolvemeq.net}
+      - PUBLIC_APP_URL=${PUBLIC_APP_URL:-https://app.resolvemeq.net}
+      - ENABLE_SITEMAP_PING=${ENABLE_SITEMAP_PING:-true}
       - EMAIL_HOST=${EMAIL_HOST:-smtp.gmail.com}
       - EMAIL_PORT=${EMAIL_PORT:-587}
       - EMAIL_USE_TLS=${EMAIL_USE_TLS:-True}
@@ -186,6 +235,8 @@ services:
   celery_beat:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/resolvemeq-celery:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    env_file:
+      - .env
     command: ["/app/venv/bin/celery", "-A", "resolvemeq", "beat", "-l", "info"]
     environment:
       - DEBUG=${DEBUG:-False}
@@ -200,12 +251,27 @@ services:
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://:${REDIS_PASSWORD}@redis:6379/0}
       - SECRET_KEY=${SECRET_KEY}
+      - SENTRY_DSN=${SENTRY_DSN}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - APP_VERSION=${APP_VERSION:-2.0.0}
       - AGENT_API_KEY=${AGENT_API_KEY}
+      - AI_AGENT_URL=${AI_AGENT_URL}
+      - AI_AGENT_SERVICE_KEY=${AI_AGENT_SERVICE_KEY:-}
       - FRONTEND_URL=${FRONTEND_URL:-https://app.resolvemeq.net}
       - APP_NAME=${APP_NAME:-ResolveMeQ}
-      - SLACK_BOT_SCOPES=${SLACK_BOT_SCOPES:-}
-      - SLACK_DIGEST_CHANNEL=${SLACK_DIGEST_CHANNEL:-}
-      - SLACK_ESCALATION_ALERT_CHANNEL=${SLACK_ESCALATION_ALERT_CHANNEL:-}
+      - ENABLE_DAILY_BLOG_GENERATION=${ENABLE_DAILY_BLOG_GENERATION:-true}
+      - BLOG_GENERATION_HOUR_UTC=${BLOG_GENERATION_HOUR_UTC:-6}
+      - BLOG_GENERATION_MINUTE_UTC=${BLOG_GENERATION_MINUTE_UTC:-30}
+      - BLOG_AUTHOR_NAME=${BLOG_AUTHOR_NAME:-}
+      - PUBLIC_MARKETING_URL=${PUBLIC_MARKETING_URL:-https://resolvemeq.net}
+      - PUBLIC_APP_URL=${PUBLIC_APP_URL:-https://app.resolvemeq.net}
+      - ENABLE_SITEMAP_PING=${ENABLE_SITEMAP_PING:-true}
+      - ENABLE_DIGEST_EMAIL_SCHEDULE=${ENABLE_DIGEST_EMAIL_SCHEDULE:-true}
+      - DIGEST_EMAIL_HOUR_UTC=${DIGEST_EMAIL_HOUR_UTC:-8}
+      - ENABLE_SUBSCRIPTION_EXPIRED_EMAIL_SCHEDULE=${ENABLE_SUBSCRIPTION_EXPIRED_EMAIL_SCHEDULE:-true}
+      - ENABLE_SUBSCRIPTION_EXPIRING_SOON_SCHEDULE=${ENABLE_SUBSCRIPTION_EXPIRING_SOON_SCHEDULE:-true}
+      - DJANGO_ADMINS=${DJANGO_ADMINS:-}
+      - SUPPORT_ESCALATION_EMAILS=${SUPPORT_ESCALATION_EMAILS:-}
       - EMAIL_HOST=${EMAIL_HOST:-smtp.gmail.com}
       - EMAIL_PORT=${EMAIL_PORT:-587}
       - EMAIL_USE_TLS=${EMAIL_USE_TLS:-True}
@@ -214,8 +280,6 @@ services:
       - DEFAULT_FROM_EMAIL=${DEFAULT_FROM_EMAIL:-}
       - SUPPORT_EMAIL=${SUPPORT_EMAIL:-}
       - EMAIL_USE_CELERY=${EMAIL_USE_CELERY:-true}
-      - ENABLE_DIGEST_EMAIL_SCHEDULE=${ENABLE_DIGEST_EMAIL_SCHEDULE:-true}
-      - DIGEST_EMAIL_HOUR_UTC=${DIGEST_EMAIL_HOUR_UTC:-8}
     depends_on:
       redis:
         condition: service_healthy
@@ -234,4 +298,3 @@ volumes:
   redis_data:
     name: resolvemeq_redis_data
   media_files:
-    name: resolvemeq_media_files

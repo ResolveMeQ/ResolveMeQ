@@ -47,7 +47,19 @@ def microsoft365_oauth_start(request):
     client_id = settings.MICROSOFT365_CLIENT_ID
     redirect_uri = settings.MICROSOFT365_REDIRECT_URI
     if not client_id or not redirect_uri:
-        return Response({"detail": "Microsoft 365 OAuth is not configured."}, status=503)
+        missing = []
+        if not client_id:
+            missing.append("MICROSOFT365_CLIENT_ID")
+        if not redirect_uri:
+            missing.append("MICROSOFT365_REDIRECT_URI")
+        return Response(
+            {
+                "detail": "Microsoft 365 OAuth is not configured on the server.",
+                "missing_env": missing,
+                "hint": "Set MICROSOFT365_CLIENT_ID (and secret for callback) in the API .env and recreate the web container.",
+            },
+            status=503,
+        )
 
     signer = TimestampSigner(salt="microsoft365-oauth")
     state = signer.sign(f"{team.id}:{request.user.id}")
