@@ -81,3 +81,28 @@ class AutomationRuleEngineTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.data["can_manage"])
         self.assertGreaterEqual(len(resp.data["rules"]), 1)
+
+    def test_owner_can_update_rule_trigger_and_actions(self):
+        rule = Rule.objects.create(
+            name="Escalation notify",
+            team=self.team,
+            trigger="ticket.escalated",
+            conditions=[],
+            actions=normalize_actions([{"type": "notify_teams"}]),
+            priority=50,
+        )
+        resp = self.client.patch(
+            f"/api/automation/rules/{rule.id}/",
+            {
+                "trigger": "workflow.step.completed",
+                "actions": [{"type": "notify_slack", "channel_id": "C123"}],
+                "priority": 20,
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        rule.refresh_from_db()
+        self.assertEqual(rule.trigger, "workflow.step.completed")
+        self.assertEqual(rule.actions[0]["type"], "notify_slack")
+        self.assertEqual(rule.actions[0]["channel_id"], "C123")
+        self.assertEqual(rule.priority, 20)

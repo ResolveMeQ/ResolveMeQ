@@ -90,15 +90,15 @@ def _action_run_agent(action: dict, ctx: Dict[str, Any], *, dry_run: bool) -> Tu
 
 
 def _action_notify_slack(action: dict, ctx: Dict[str, Any], *, dry_run: bool) -> Tuple[bool, str]:
-    if dry_run:
-        return True, "Would send Slack notification."
-    return True, "Slack notify logged (channel fan-out uses integrations.notify)."
+    from integrations.automation_notify import deliver_automation_slack
+
+    return deliver_automation_slack(action, ctx, dry_run=dry_run)
 
 
 def _action_notify_teams(action: dict, ctx: Dict[str, Any], *, dry_run: bool) -> Tuple[bool, str]:
-    if dry_run:
-        return True, "Would send Teams notification."
-    return True, "Teams notify logged (channel fan-out uses integrations.notify)."
+    from integrations.automation_notify import deliver_automation_teams
+
+    return deliver_automation_teams(action, ctx, dry_run=dry_run)
 
 
 def _action_call_webhook(action: dict, ctx: Dict[str, Any], *, dry_run: bool) -> Tuple[bool, str]:

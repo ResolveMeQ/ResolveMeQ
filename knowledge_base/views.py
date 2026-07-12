@@ -596,11 +596,12 @@ def search_kb_for_agent(request):
     if not query:
         return Response({'error': 'Query parameter is required'}, status=400)
 
+    from knowledge_base.kb_search import build_kb_content_filter
+
     articles_qs = KnowledgeBaseArticle.objects.filter(
         _agent_article_team_scope(request), is_published=True
     ).filter(
-        Q(title__icontains=query) |
-        Q(content__icontains=query)
+        build_kb_content_filter(query, content_field="content")
     ).annotate(
         helpful_ratio=Case(
             When(total_votes__gt=0, then=(100.0 * F("helpful_votes")) / F("total_votes")),
@@ -612,7 +613,7 @@ def search_kb_for_agent(request):
     community_questions = KBQuestion.objects.filter(
         is_published=True
     ).filter(
-        Q(title__icontains=query) | Q(body__icontains=query)
+        build_kb_content_filter(query, content_field="body")
     ).annotate(
         comment_count=Count("comments", distinct=True),
     ).order_by("-score", "-answer_count", "-views", "-updated_at")[:limit]

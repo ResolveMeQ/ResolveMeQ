@@ -91,16 +91,13 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False, bill
         # Send to agent
         agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
         logger.info(f"Sending POST to FastAPI: {agent_url} with payload: {payload}")
-        try:
-            agent_response = call_agent_analyze(payload, timeout=30, url=agent_url)
-        except AgentCallError as exc:
-            if exc.circuit_open:
-                logger.warning("AI agent circuit open for ticket %s — using fallback", ticket_id)
-                if billing_user:
-                    refund_agent_operation(billing_user)
-                agent_response = build_ticket_analyze_fallback(ticket, reason=str(exc))
-            else:
-                raise requests.RequestException(str(exc)) from exc
+        agent_response, agent_error = try_call_agent_analyze(
+            payload, ticket=ticket, timeout=30, url=agent_url
+        )
+        if agent_error:
+            logger.warning("AI agent unavailable for ticket %s: %s", ticket_id, agent_error)
+            if billing_user:
+                refund_agent_operation(billing_user)
         logger.info("Received agent response for ticket %s", ticket_id)
 
         # Update ticket with agent response
