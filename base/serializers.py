@@ -1,8 +1,8 @@
 from datetime import timedelta
+from urllib.parse import quote
 
 from django.conf import settings
 from django.db.models import Q
-from django.urls import reverse
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare
 from rest_framework import serializers
@@ -15,10 +15,11 @@ from .utils import ImageProcessor, generate_secure_code
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True)
+    company = serializers.CharField(max_length=200, required=False, allow_blank=True, write_only=True)
 
     class Meta:
         model = User
-        fields = ['email', 'username', 'password', 'confirm_password']
+        fields = ['email', 'username', 'password', 'confirm_password', 'first_name', 'last_name', 'company']
 
     def validate(self, data):
         password = data['password']
@@ -91,7 +92,13 @@ class VerifyUserSerializer(serializers.Serializer):
                     "username": user.username,
                     "expiration": user.secure_code_expiry,
                     "app_name": "ResolveMeQ",
-                    "verification_link": settings.FRONTEND_URL + reverse('verify-user'),
+                    "verification_link": (
+                        f"{settings.FRONTEND_URL}/verify?token={quote(str(user.secure_code))}"
+                        f"&email={quote(user.email)}"
+                    ),
+                    "is_resend": True,
+                    "support_email": getattr(settings, "SUPPORT_EMAIL", "") or "",
+                    "frontend_url": getattr(settings, "FRONTEND_URL", "").rstrip("/"),
                 }
                 dispatch_send_email_with_template(data, 'welcome.html', context, [user.email])
                 error_message += " A new verification code has been sent."

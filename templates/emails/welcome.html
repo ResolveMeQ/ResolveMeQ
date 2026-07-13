@@ -241,16 +241,20 @@
 <body>
     <div class="email-container">
         <div class="header">
-            <div class="logo">J</div>
+            <div class="logo">R</div>
             <h1>{{app_name}}</h1>
             <p>Secure. Simple. Swift.</p>
         </div>
 
         <div class="content">
-            <div class="greeting">Hi {{username}}! 👋</div>
+            <div class="greeting">Hi {{username}}!</div>
 
             <div class="message">
-                We received a request to resend your verification code for your {{app_name}} account. Here's your new verification code:
+                {% if is_resend %}
+                We received a request to resend your verification code for your {{app_name}} account. Here is your new verification code:
+                {% else %}
+                Welcome to {{app_name}}. Use the verification code below or the button to activate your account:
+                {% endif %}
             </div>
 
             <div class="verification-code">
@@ -267,8 +271,16 @@
             </div>
 
             <center>
-                <a href="{{verification_link}}" class="cta-button">Verify My Account</a>
+                <a href="{{verification_link}}"
+                   style="background-color: #2563eb; color: #ffffff !important; padding: 16px 32px; text-decoration: none; border-radius: 50px; font-weight: 600; font-size: 16px; display: inline-block; border: 1px solid #1d4ed8;">
+                    Verify My Account
+                </a>
             </center>
+
+            <p style="font-size: 14px; color: #64748b; line-height: 1.6; margin: 20px 0 0; text-align: center;">
+                If the button does not work, copy this link into your browser:<br>
+                <a href="{{verification_link}}" style="color: #2563eb; word-break: break-all;">{{verification_link}}</a>
+            </p>
 
             <div class="divider"></div>
 

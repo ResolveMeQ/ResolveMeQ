@@ -92,6 +92,41 @@ def _send_team_invitation_email(invitation, team, invited_by):
         logger.exception('Team invitation email failed: %s', exc)
 
 
+def _unique_team_name(base_name: str, user) -> str:
+    """Pick a unique team name; append email local-part or counter on collision."""
+    from base.models import Team
+
+    name = (base_name or "").strip()[:200]
+    if not name:
+        name = f"{user.get_full_name() or user.username}'s workspace"[:200]
+    if not Team.objects.filter(name=name).exists():
+        return name
+    local = (user.email or "").split("@")[0] or str(user.pk)[:8]
+    candidate = f"{name} ({local})"[:200]
+    if not Team.objects.filter(name=candidate).exists():
+        return candidate
+    counter = 2
+    while True:
+        suffix = f" ({counter})"
+        candidate = f"{name[: 200 - len(suffix)]}{suffix}"
+        if not Team.objects.filter(name=candidate).exists():
+            return candidate
+        counter += 1
+
+
+def _provision_workspace_for_signup(user, company_name: str):
+    """Create the user's first workspace from signup company name and set it active."""
+    from base.models import Team, UserPreferences
+
+    name = _unique_team_name(company_name, user)
+    team = Team.objects.create(name=name, owner=user)
+    team.members.add(user)
+    prefs, _ = UserPreferences.objects.get_or_create(user=user)
+    prefs.active_team = team
+    prefs.save(update_fields=["active_team"])
+    return team
+
+
 def _notify_existing_user_team_invitation(invitation, team, invited_by):
     """Bell notification when the invitee already has an account."""
     from base.models import InAppNotification
@@ -140,7 +175,11 @@ class RegisterAPIView(GenericAPIView):
 
                 user.save()
 
-                # All database operations completed successfully
+                company = (serializer.validated_data.get("company") or "").strip()
+                if not company:
+                    company = (request.data.get("company") or request.data.get("department") or "").strip()
+                if company:
+                    _provision_workspace_for_signup(user, company)
 
             # Email sending outside transaction since it's an external operation
             data = {
@@ -153,10 +192,11 @@ class RegisterAPIView(GenericAPIView):
                 "expiration": user.secure_code_expiry,
                 "app_name": "ResolveMeQ",
                 "verification_link": f"{settings.FRONTEND_URL}/verify?token={quote(str(user.secure_code))}&email={quote(user.email)}",
+                "is_resend": False,
+                "support_email": getattr(settings, "SUPPORT_EMAIL", "") or "",
+                "frontend_url": getattr(settings, "FRONTEND_URL", "").rstrip("/"),
             }
             dispatch_send_email_with_template(data, 'welcome.html', context, [user.email])
-            print("Email sent to:", user.email)
-            print("With token:", user.secure_code)
 
             return Response({
                 "Message": "Successfully registered"
@@ -491,7 +531,10 @@ class ResendVerificationCodeAPIView(GenericAPIView):
             "username": user.username,
             "expiration": user.secure_code_expiry,
             "app_name": "ResolveMeQ",
-            "verification_link": settings.FRONTEND_URL + '/verify?token=' + str(user.secure_code) + '&email=' + quote(user.email),
+            "verification_link": f"{settings.FRONTEND_URL}/verify?token={quote(str(user.secure_code))}&email={quote(user.email)}",
+            "is_resend": True,
+            "support_email": getattr(settings, "SUPPORT_EMAIL", "") or "",
+            "frontend_url": getattr(settings, "FRONTEND_URL", "").rstrip("/"),
         }
         dispatch_send_email_with_template(data, 'welcome.html', context, [user.email])
         return Response({
