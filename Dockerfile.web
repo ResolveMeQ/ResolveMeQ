@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     postgresql-client \
     curl \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy application code
@@ -31,7 +32,12 @@ RUN DB_NAME=build DB_USER=build DB_PASSWORD=build DB_HOST=127.0.0.1 DB_PORT=5432
 RUN useradd -m -u 1000 django && \
     chown -R django:django /app
 
-USER django
+COPY docker/entrypoint-web.sh /entrypoint-web.sh
+RUN chmod +x /entrypoint-web.sh
+
+# Entrypoint runs as root to fix volume permissions, then drops to django via gosu.
+USER root
+ENTRYPOINT ["/entrypoint-web.sh"]
 
 # Expose port
 EXPOSE 8000

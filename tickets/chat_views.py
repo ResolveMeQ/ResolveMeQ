@@ -499,14 +499,23 @@ def submit_message_feedback(request, ticket_id, message_id):
             {"error": "Rating must be 'helpful' or 'not_helpful'"},
             status=status.HTTP_400_BAD_REQUEST
         )
+
+    was_helpful = rating == 'helpful'
+    if message.was_helpful is not None and message.was_helpful == was_helpful:
+        return Response({
+            'message': 'Feedback already recorded',
+            'message_id': str(message.id),
+            'was_helpful': message.was_helpful,
+            'already_recorded': True,
+        })
     
-    message.was_helpful = (rating == 'helpful')
+    message.was_helpful = was_helpful
     # JSON may send "comment": null; .get("comment", "") still returns None when the key exists.
     raw_comment = request.data.get("comment")
     message.feedback_comment = "" if raw_comment is None else str(raw_comment).strip()
     from django.utils import timezone
     message.feedback_at = timezone.now()
-    message.save()
+    message.save(update_fields=["was_helpful", "feedback_comment", "feedback_at"])
     
     return Response({
         'message': 'Feedback submitted successfully',
@@ -540,7 +549,18 @@ def submit_initial_solution_feedback(request, ticket_id):
         is_active=True,
         defaults={"summary": f"Chat about: {ticket.issue_type}"},
     )
-    conversation.initial_solution_was_helpful = rating == "helpful"
+    was_helpful = rating == "helpful"
+    previous = conversation.initial_solution_was_helpful
+    if previous is not None and previous == was_helpful:
+        return Response(
+            {
+                "initial_solution_was_helpful": conversation.initial_solution_was_helpful,
+                "conversation_id": str(conversation.id),
+                "already_recorded": True,
+            }
+        )
+
+    conversation.initial_solution_was_helpful = was_helpful
     conversation.save(update_fields=["initial_solution_was_helpful", "updated_at"])
 
     TicketInteraction.objects.create(
@@ -554,6 +574,7 @@ def submit_initial_solution_feedback(request, ticket_id):
         {
             "initial_solution_was_helpful": conversation.initial_solution_was_helpful,
             "conversation_id": str(conversation.id),
+            "already_recorded": False,
         }
     )
 

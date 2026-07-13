@@ -93,6 +93,9 @@ def _store_screenshot_upload(request, uploaded_file) -> tuple[str, str]:
     Save an image before the Ticket row exists. Returns (relative_storage_path, absolute_url).
     Uses ticket_pending/ so the agent task (queued on create) always sees a stable screenshot URL.
     """
+    from resolvemeq.media_dirs import ensure_media_subdirectories
+
+    ensure_media_subdirectories()
     ext = Path(uploaded_file.name).suffix.lower()
     if ext not in _ALLOWED_IMAGE_EXT:
         ext = ".jpg"
@@ -534,7 +537,20 @@ def create_ticket(request):
         uploaded_screenshot_url = None
         pending_rel = None
         if screenshot_file:
-            pending_rel, uploaded_screenshot_url = _store_screenshot_upload(request, screenshot_file)
+            try:
+                pending_rel, uploaded_screenshot_url = _store_screenshot_upload(request, screenshot_file)
+            except PermissionError:
+                logger.exception("Cannot write screenshot to MEDIA_ROOT (check volume permissions)")
+                return Response(
+                    {
+                        "error": (
+                            "Screenshot upload is temporarily unavailable. "
+                            "Please try again without an image or contact support."
+                        ),
+                        "screenshot": ["Upload storage is not writable on the server."],
+                    },
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
         urgency = (request.data.get("urgency") or "").strip().lower() or None
         issue_type = compose_issue_type(v["issue_type"], urgency)
         try:
@@ -883,6 +899,9 @@ def _save_ticket_upload_file(request, ticket, uploaded_file):
     so the agent can use vision on the next chat turn. Other files are stored generically.
     Returns dict: relative_path, file_url (absolute), is_ticket_screenshot.
     """
+    from resolvemeq.media_dirs import ensure_media_subdirectories
+
+    ensure_media_subdirectories()
     err = _screenshot_upload_error(uploaded_file)
     tid = ticket.ticket_id
     if err is None:
@@ -934,7 +953,17 @@ def upload_attachment(request, ticket_id):
     file = request.FILES.get("file")
     if not file:
         return Response({"error": "No file uploaded."}, status=400)
-    info = _save_ticket_upload_file(request, ticket, file)
+    try:
+        info = _save_ticket_upload_file(request, ticket, file)
+    except PermissionError:
+        logger.exception("Cannot write attachment to MEDIA_ROOT for ticket %s", ticket_id)
+        return Response(
+            {
+                "error": "File upload is temporarily unavailable. Please try again later.",
+                "file": ["Upload storage is not writable on the server."],
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
     TicketInteraction.objects.create(
         ticket=ticket,
         user=ticket.user,
