@@ -6,6 +6,7 @@ from rest_framework import status
 from .models import KnowledgeBaseArticle
 from tickets.models import Ticket
 import json
+from base.models import Team, UserPreferences
 from knowledge_base.views import _extract_mention_tokens, _resolve_mentioned_users
 
 User = get_user_model()
@@ -49,6 +50,11 @@ class KnowledgeBaseTests(TestCase):
             last_name="User",
             is_staff=True
         )
+        self.team = Team.objects.create(name="Test Workspace", owner=self.admin_user)
+        self.team.members.add(self.admin_user)
+        prefs, _ = UserPreferences.objects.get_or_create(user=self.admin_user)
+        prefs.active_team = self.team
+        prefs.save()
         self.client.force_authenticate(user=self.admin_user)
 
         # Create test KB articles
@@ -74,6 +80,9 @@ class KnowledgeBaseTests(TestCase):
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(KnowledgeBaseArticle.objects.count(), 3)
+        article = KnowledgeBaseArticle.objects.get(title="New KB Article")
+        self.assertEqual(article.team_id, self.team.id)
+        self.assertEqual(article.author_id, self.admin_user.id)
 
     def test_kb_article_search(self):
         """Test searching KB articles"""
