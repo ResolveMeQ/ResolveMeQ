@@ -12,6 +12,7 @@ from celery.exceptions import OperationalError
 from .models import Ticket, TicketInteraction, ActionHistory, TicketResolution
 from .scoping import (
     active_team_id_for_user,
+    escalation_queue_queryset_for_user,
     tickets_queryset_for_request,
     user_can_access_ticket,
     user_can_assign_agent,
@@ -1076,6 +1077,10 @@ def escalate_ticket(request, ticket_id):
     priority = derive_escalation_priority({"request_reason_key": reason})
     ticket.escalation_priority = priority
     ticket.sla_due_at = compute_sla_due_at(ticket.escalated_at, priority)
+    if not ticket.team_id:
+        tid = active_team_id_for_user(ticket.user)
+        if tid:
+            ticket.team_id = tid
     ticket.save()
 
     reason_text = REQUEST_REASON_LABEL.get(reason, "Requested human help")
@@ -1402,8 +1407,7 @@ def escalation_queue(request):
         output_field=IntegerField(),
     )
     queryset = (
-        _tickets_for_user(request)
-        .filter(status="escalated")
+        escalation_queue_queryset_for_user(request.user)
         .select_related("user", "assigned_to", "team")
         .annotate(_priority_rank=priority_rank)
         .order_by("_priority_rank", "escalated_at")

@@ -244,6 +244,85 @@ class EscalationQueueOrderingTest(TestCase):
         )
 
 
+class OwnerSeesMemberEscalationQueueTest(TestCase):
+    def setUp(self):
+        from base.models import Team, UserPreferences
+
+        self.client = APIClient()
+        self.owner = User.objects.create_user(username="alex", email="alex@example.com", password="testpass123")
+        self.member = User.objects.create_user(username="sam", email="sam@example.com", password="testpass123")
+        self.team = Team.objects.create(name="Acme", owner=self.owner)
+        self.team.members.add(self.member)
+
+        owner_prefs, _ = UserPreferences.objects.get_or_create(user=self.owner)
+        owner_prefs.active_team = self.team
+        owner_prefs.save()
+
+        member_prefs, _ = UserPreferences.objects.get_or_create(user=self.member)
+        member_prefs.active_team = self.team
+        member_prefs.save()
+
+        self.ticket = Ticket.objects.create(
+            user=self.member,
+            team=self.team,
+            issue_type="vpn (high)",
+            status="escalated",
+            description="Cannot connect",
+            category="vpn",
+        )
+        self.ticket.escalation_priority = "high"
+        self.ticket.escalated_at = timezone.now()
+        self.ticket.save()
+
+    def test_owner_sees_member_escalated_ticket_without_active_team_filter(self):
+        from base.models import UserPreferences
+
+        prefs = UserPreferences.objects.get(user=self.owner)
+        prefs.active_team = None
+        prefs.save()
+
+        self.client.force_authenticate(user=self.owner)
+        resp = self.client.get("/api/tickets/escalated/")
+        self.assertEqual(resp.status_code, 200)
+        ids = [t["ticket_id"] for t in resp.data["tickets"]]
+        self.assertIn(self.ticket.ticket_id, ids)
+
+    def test_owner_sees_teamless_member_ticket(self):
+        from base.models import UserPreferences
+
+        self.ticket.team = None
+        self.ticket.save()
+
+        prefs = UserPreferences.objects.get(user=self.owner)
+        prefs.active_team = None
+        prefs.save()
+
+        self.client.force_authenticate(user=self.owner)
+        resp = self.client.get("/api/tickets/escalated/")
+        self.assertEqual(resp.status_code, 200)
+        ids = [t["ticket_id"] for t in resp.data["tickets"]]
+        self.assertIn(self.ticket.ticket_id, ids)
+
+    @patch("tickets.user_email_notify.dispatch_ticket_status_emails")
+    def test_escalate_backfills_team_from_reporter_active_workspace(self, _mock_email):
+        self.client.force_authenticate(user=self.member)
+        orphan = Ticket.objects.create(
+            user=self.member,
+            issue_type="email (medium)",
+            status="in_progress",
+            description="Outlook sync",
+            category="email",
+        )
+        resp = self.client.post(
+            f"/api/tickets/{orphan.ticket_id}/escalate/",
+            {"reason": "talk_to_human"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        orphan.refresh_from_db()
+        self.assertEqual(orphan.team_id, self.team.pk)
+
+
 class RollbackWhitelistTest(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="rbuser", email="rb@example.com", password="testpass123")

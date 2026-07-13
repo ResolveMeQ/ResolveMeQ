@@ -12,6 +12,8 @@ Platform staff status itself is Django-admin managed, not self-serve.
 """
 from django.db.models import Q
 
+from base.models import User
+
 from .models import Ticket
 
 
@@ -75,6 +77,40 @@ def tickets_queryset_for_request(request):
     """Queryset of tickets the current user may list and aggregate."""
     user = getattr(request, "user", None)
     return tickets_queryset_for_user(user)
+
+
+def escalation_queue_queryset_for_user(user):
+    """
+    Escalated tickets for the dashboard queue.
+
+    - Platform agents: all escalated tickets (managed-support tier).
+    - Workspace owners: all escalated tickets in any workspace they own, regardless
+      of which workspace is currently selected in the UI. Also includes team-less
+      tickets filed by members of those workspaces.
+    """
+    if not user or not user.is_authenticated:
+        return Ticket.objects.none()
+
+    base = Ticket.objects.filter(status="escalated")
+
+    if getattr(user, "is_platform_agent", False):
+        return base
+
+    from base.models import Team
+
+    owned_ids = list(Team.objects.filter(owner=user).values_list("pk", flat=True))
+    if not owned_ids:
+        return Ticket.objects.none()
+
+    member_user_ids = (
+        User.objects.filter(Q(teams__pk__in=owned_ids) | Q(pk=user.pk))
+        .distinct()
+        .values_list("pk", flat=True)
+    )
+    return base.filter(
+        Q(team_id__in=owned_ids)
+        | Q(team__isnull=True, user_id__in=member_user_ids)
+    )
 
 
 def user_can_access_ticket(user, ticket):
