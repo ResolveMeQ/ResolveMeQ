@@ -40,12 +40,15 @@ class KnowledgeBaseEntryListSerializer(serializers.ModelSerializer):
 class TicketSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.SerializerMethodField()
     team_name = serializers.SerializerMethodField()
+    reporter_name = serializers.SerializerMethodField()
+    is_internal_request = serializers.SerializerMethodField()
     external_references = serializers.SerializerMethodField()
 
     class Meta:
         model = Ticket
         fields = [
-            'ticket_id', 'team', 'team_name', 'user', 'issue_type', 'status', 'description', 'screenshot',
+            'ticket_id', 'team', 'team_name', 'user', 'reporter_name', 'is_internal_request',
+            'issue_type', 'status', 'description', 'screenshot',
             'reported_platform',
             'assigned_to', 'assigned_to_name', 'category', 'tags', 'created_at', 'updated_at',
             'agent_response', 'agent_processed',
@@ -63,6 +66,25 @@ class TicketSerializer(serializers.ModelSerializer):
         if not obj.team_id:
             return None
         return obj.team.name
+
+    def get_reporter_name(self, obj):
+        if not obj.user_id:
+            return None
+        reporter = getattr(obj, "user", None)
+        if reporter is None:
+            from base.models import User
+            reporter = User.objects.filter(pk=obj.user_id).first()
+        if not reporter:
+            return None
+        return reporter.get_full_name() or reporter.email or reporter.username
+
+    def get_is_internal_request(self, obj):
+        request = self.context.get("request")
+        if not request or not getattr(request.user, "is_authenticated", False):
+            return False
+        from tickets.scoping import is_internal_workspace_request
+
+        return is_internal_workspace_request(request.user, obj)
 
     def get_assigned_to_name(self, obj):
         if not obj.assigned_to_id:

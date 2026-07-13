@@ -711,7 +711,7 @@ def get_ticket(request, ticket_id):
     Includes comments (user_message interactions) for the ticket panel.
     """
     ticket = get_object_or_404(
-        Ticket.objects.prefetch_related("external_references"),
+        Ticket.objects.select_related("user", "assigned_to", "team").prefetch_related("external_references"),
         ticket_id=ticket_id,
     )
     if not _can_access_ticket(request, ticket):
@@ -719,7 +719,7 @@ def get_ticket(request, ticket_id):
             {"error": "You do not have permission to access this ticket."},
             status=status.HTTP_403_FORBIDDEN,
         )
-    serializer = TicketSerializer(ticket)
+    serializer = TicketSerializer(ticket, context={"request": request})
     data = dict(serializer.data)
     # Include comments so the ticket panel can display them
     interactions = TicketInteraction.objects.filter(
@@ -1418,7 +1418,7 @@ def escalation_queue(request):
 
     tickets_data = []
     for ticket in queryset:
-        row = dict(TicketSerializer(ticket).data)
+        row = dict(TicketSerializer(ticket, context={"request": request}).data)
         row["routing_suggestion"] = routing_suggestion_for_api(ticket)
         tickets_data.append(row)
     return Response({

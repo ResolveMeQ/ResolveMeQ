@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
+from django.db.models import Prefetch
 from django.http import Http404
 from django.conf import settings
 from django.utils import timezone
@@ -357,6 +358,12 @@ def get_conversation_history(request, ticket_id):
     # create a conversation -- avoids an uncaught MultipleObjectsReturned.
     conversation = (
         Conversation.objects.filter(ticket=ticket, user=conversation_user, is_active=True)
+        .prefetch_related(
+            Prefetch(
+                "messages",
+                queryset=ChatMessage.objects.select_related("author").order_by("created_at"),
+            )
+        )
         .order_by('-updated_at')
         .first()
     )

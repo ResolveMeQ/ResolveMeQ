@@ -322,6 +322,38 @@ class OwnerSeesMemberEscalationQueueTest(TestCase):
         orphan.refresh_from_db()
         self.assertEqual(orphan.team_id, self.team.pk)
 
+    @patch("tickets.views.dispatch_ticket_claimed_email")
+    def test_owner_can_claim_member_escalated_ticket(self, mock_email):
+        from base.models import UserPreferences
+
+        prefs = UserPreferences.objects.get(user=self.owner)
+        prefs.active_team = None
+        prefs.save()
+
+        self.client.force_authenticate(user=self.owner)
+        resp = self.client.post(
+            f"/api/tickets/{self.ticket.ticket_id}/assign/",
+            {"agent_id": str(self.owner.id)},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.assigned_to_id, self.owner.id)
+        self.assertIsNotNone(self.ticket.claimed_at)
+        mock_email.assert_called_once()
+
+    def test_owner_viewing_member_ticket_is_internal_request(self):
+        from tickets.scoping import is_internal_workspace_request
+
+        self.assertTrue(is_internal_workspace_request(self.owner, self.ticket))
+        self.assertFalse(is_internal_workspace_request(self.member, self.ticket))
+
+        self.client.force_authenticate(user=self.owner)
+        resp = self.client.get(f"/api/tickets/{self.ticket.ticket_id}/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data.get("is_internal_request"))
+        self.assertEqual(resp.data.get("reporter_name"), "sam@example.com")
+
 
 class RollbackWhitelistTest(TestCase):
     def setUp(self):

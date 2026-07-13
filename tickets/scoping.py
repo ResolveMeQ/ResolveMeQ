@@ -113,11 +113,52 @@ def escalation_queue_queryset_for_user(user):
     )
 
 
+def user_owns_ticket_workspace(user, ticket) -> bool:
+    """Whether the user owns the workspace this ticket belongs to (portal lead access)."""
+    if not user or not user.is_authenticated or not ticket:
+        return False
+    from base.models import Team
+
+    if ticket.team_id:
+        return Team.objects.filter(pk=ticket.team_id, owner=user).exists()
+    owned_ids = Team.objects.filter(owner=user).values_list("pk", flat=True)
+    if not owned_ids:
+        return False
+    return User.objects.filter(pk=ticket.user_id, teams__pk__in=owned_ids).exists()
+
+
+def is_internal_workspace_request(viewer, ticket) -> bool:
+    """
+    True when the ticket reporter is a colleague in the viewer's workspace.
+
+    Used for UI copy (e.g. "Reply to teammate" vs "Reply to customer") and to distinguish
+    in-workspace escalations from ResolveMeQ platform support handling an external org.
+    """
+    if not viewer or not getattr(viewer, "is_authenticated", False) or not ticket:
+        return False
+    if getattr(viewer, "is_platform_agent", False):
+        return False
+    if ticket.user_id == viewer.id:
+        return False
+    if user_owns_ticket_workspace(viewer, ticket):
+        return True
+    tid = active_team_id_for_user(viewer)
+    if tid and ticket.team_id and str(ticket.team_id) == str(tid):
+        return True
+    if ticket.team_id:
+        team = ticket.team
+        if team and team.members.filter(pk=viewer.pk).exists():
+            return True
+    return False
+
+
 def user_can_access_ticket(user, ticket):
     """Whether the user may read or act on this ticket (portal)."""
     if not user or not user.is_authenticated:
         return False
     if _platform_agent_has_ticket_access(user, ticket):
+        return True
+    if user_owns_ticket_workspace(user, ticket):
         return True
     tid = active_team_id_for_user(user)
     if tid:
