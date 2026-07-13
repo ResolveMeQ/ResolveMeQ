@@ -87,15 +87,19 @@ class ChatAgentReplyTest(TestCase):
         )
         self.assertEqual(resp.status_code, 403)
 
-    def test_unclaimed_ticket_rejects_agent_reply(self):
-        # Not claimed -- self.agent is still a valid team member, just hasn't claimed it.
+    @patch("tickets.chat_views.dispatch_ticket_comment_email")
+    def test_unclaimed_ticket_reply_auto_claims_it(self, mock_email):
+        # Not claimed yet -- self.agent is a valid team member. Replying is an explicit
+        # act of taking ownership, so it should claim the ticket instead of blocking.
         self.client.force_authenticate(user=self.agent)
 
         resp = self.client.post(
             f"/api/tickets/{self.ticket.ticket_id}/chat/agent-reply/", {"message": "hi"}, format="json",
         )
-        self.assertEqual(resp.status_code, 403)
-        self.assertIn("Claim", resp.data["error"])
+        self.assertEqual(resp.status_code, 200)
+        self.ticket.refresh_from_db()
+        self.assertIsNotNone(self.ticket.claimed_at)
+        self.assertEqual(self.ticket.assigned_to_id, self.agent.id)
 
     @patch("tickets.chat_views.try_consume_agent_operation")
     def test_customer_message_on_claimed_ticket_skips_ai_and_quota(self, mock_quota):
@@ -155,6 +159,26 @@ class ChatAgentReplyTest(TestCase):
         types = [m["sender_type"] for m in resp.data["messages"]]
         self.assertEqual(types, ["user", "ai", "agent"])
         self.assertEqual(resp.data["messages"][-1]["author_name"], self.agent.get_full_name() or self.agent.email)
+
+    @patch("tickets.chat_views._get_ai_chat_response")
+    @patch("tickets.chat_views.try_consume_agent_operation")
+    def test_ai_unreachable_returns_200_with_fallback_message(self, mock_quota, mock_ai):
+        """Regression guard: the fallback message used to come back as HTTP 503,
+        which made the frontend discard it and show a generic client-side error
+        instead -- retries never recovered and the fallback was never persisted."""
+        mock_quota.return_value = type("Q", (), {"allowed": True, "used": 1, "limit": 100})()
+        mock_ai.side_effect = RuntimeError("agent unreachable")
+        self.client.force_authenticate(user=self.requester)
+
+        resp = self.client.post(
+            f"/api/tickets/{self.ticket.ticket_id}/chat/", {"message": "still broken"}, format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNotNone(resp.data["ai_message"])
+        self.assertEqual(resp.data["ai_message"]["sender_type"], "system")
+        conversation = Conversation.objects.get(ticket=self.ticket, user=self.requester)
+        self.assertTrue(conversation.messages.filter(sender_type="system").exists())
 
     @patch("tickets.chat_views.dispatch_ticket_comment_email")
     def test_agent_message_counts_as_persisted_chat_for_kb_sync(self, mock_email):

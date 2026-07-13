@@ -177,21 +177,25 @@ def _dedupe_users(users):
 
 
 def _conversation_recipients_for_comment(ticket, actor):
-    """Who should be notified when a comment is posted in a support thread."""
+    """
+    Who gets an in-app/email notification for an internal note. Internal notes
+    (add_comment / the ticket's "Internal notes" section) are never sent to the
+    ticket reporter, regardless of who wrote them -- that's what send_agent_reply
+    ("Reply to customer") is for. Both directions here just route to other staff:
+    assigned operator first, else the team owner.
+    """
     if not ticket or not actor:
         return []
-    if actor.id == ticket.user_id:
-        # Requester replied -> notify assigned operator, then fallback to team owner.
-        recipients = []
-        if ticket.assigned_to_id and ticket.assigned_to_id != actor.id:
-            recipients.append(ticket.assigned_to)
-        elif ticket.team_id and getattr(ticket.team, "owner_id", None) and ticket.team.owner_id != actor.id:
-            recipients.append(ticket.team.owner)
-        return _dedupe_users(recipients)
-    # Operator/teammate replied -> notify requester.
-    if ticket.user_id != actor.id:
-        return [ticket.user]
-    return []
+    recipients = []
+    if ticket.assigned_to_id and ticket.assigned_to_id != actor.id:
+        recipients.append(ticket.assigned_to)
+    elif ticket.team_id and getattr(ticket.team, "owner_id", None) and ticket.team.owner_id != actor.id:
+        recipients.append(ticket.team.owner)
+    # The reporter can coincidentally be the team owner (e.g. a small team's owner
+    # filing their own ticket) -- exclude them explicitly so this never degrades
+    # into notifying the requester via the team-owner fallback.
+    recipients = [r for r in recipients if r.id != ticket.user_id]
+    return _dedupe_users(recipients)
 
 
 def _conversation_state_for_actor(ticket, actor):
@@ -1024,14 +1028,8 @@ def add_comment(request, ticket_id):
             logger.warning("Failed to create comment notification: %s", exc)
     if recipients:
         dispatch_ticket_comment_email(ticket, recipients, commenter=request.user, comment_text=comment)
-    from integrations.notify import notify_ticket_reporter_message
-
-    notify_ticket_reporter_message(
-        ticket,
-        title=f"New reply on Ticket #{ticket.ticket_id}",
-        body=(comment or "").strip()[:500],
-        actor_name=actor_name,
-    )
+    # Internal notes never reach the ticket reporter (see _conversation_recipients_for_comment) --
+    # use send_agent_reply ("Reply to customer") to actually message them.
     return Response({"message": "Comment added."})
 
 @api_view(["POST"])

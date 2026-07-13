@@ -308,7 +308,12 @@ def _send_chat_message_impl(request, ticket_id):
         except Exception as refund_err:
             logger.exception("refund_agent_operation failed after chat error: %s", refund_err)
 
-        # Create fallback message
+        # Create fallback message. This IS a successful response as far as the caller
+        # is concerned (a real message was created and returned) -- returning it with
+        # an error status made the frontend discard the body entirely and show a
+        # generic client-side message instead, so retries never actually recovered
+        # and this fallback text (and the fact it happened at all) was never
+        # persisted/visible in the conversation history.
         try:
             fallback_message = ChatMessage.objects.create(
                 conversation=conversation,
@@ -322,7 +327,7 @@ def _send_chat_message_impl(request, ticket_id):
                 'ai_message': ChatMessageSerializer(fallback_message).data,
                 'ticket_status': ticket.status,
                 'initial_solution_was_helpful': conversation.initial_solution_was_helpful,
-            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            })
         except Exception as fallback_err:
             logger.exception("Could not persist fallback chat message: %s", fallback_err)
             return Response(
@@ -394,9 +399,11 @@ def send_agent_reply(request, ticket_id):
 
     A teammate's reply to the customer, landing as a 'agent' message in the SAME
     chat thread the customer's been using (Conversation keyed by ticket.user) --
-    not the separate Comments/TicketInteraction thread. Requires the ticket to
-    already be claimed (see assign_ticket / the Escalation Queue's Claim button)
-    so replying doesn't silently make the replier the permanent owner.
+    not the separate Comments/TicketInteraction thread. If nobody has claimed
+    the ticket yet, replying claims it for the replier (race-safe, same
+    conditional-UPDATE pattern as assign_ticket's claim path) -- sending an
+    explicit reply is a clear act of taking ownership, not a silent side effect,
+    so there's always a working way to actually reach the customer.
     """
     ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
     if not user_can_access_ticket(request.user, ticket):
@@ -410,10 +417,10 @@ def send_agent_reply(request, ticket_id):
             status=status.HTTP_403_FORBIDDEN,
         )
     if not ticket.claimed_at:
-        return Response(
-            {"error": "Claim this ticket before replying to the customer."},
-            status=status.HTTP_403_FORBIDDEN,
+        Ticket.objects.filter(pk=ticket.pk, claimed_at__isnull=True).update(
+            claimed_at=timezone.now(), assigned_to=request.user,
         )
+        ticket.refresh_from_db()
 
     text = (request.data.get("message") or "").strip()
     if not text:
