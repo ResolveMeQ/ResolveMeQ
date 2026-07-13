@@ -12,7 +12,10 @@ from automation.validation import normalize_actions, normalize_conditions
 DEFAULT_RULES = [
     {
         "name": "Auto-start onboarding workflow",
-        "description": "When a ticket is created with category onboarding, start the Employee onboarding playbook.",
+        "description": (
+            "Platform starter (read-only). When a ticket category is onboarding, starts the "
+            "Employee onboarding playbook. Copy to your workspace to customize."
+        ),
         "trigger": "ticket.created",
         "conditions": [{"field": "category", "op": "equals", "value": "onboarding"}],
         "actions": [{"type": "start_workflow", "template_trigger_category": "onboarding"}],
@@ -20,6 +23,10 @@ DEFAULT_RULES = [
     },
     {
         "name": "Auto-start provisioning workflow",
+        "description": (
+            "Platform starter (read-only). Starts equipment & software provisioning for "
+            "provisioning tickets. Copy to your workspace to customize."
+        ),
         "trigger": "ticket.created",
         "conditions": [{"field": "category", "op": "equals", "value": "provisioning"}],
         "actions": [{"type": "start_workflow", "template_trigger_category": "provisioning"}],
@@ -27,6 +34,10 @@ DEFAULT_RULES = [
     },
     {
         "name": "Auto-start offboarding workflow",
+        "description": (
+            "Platform starter (read-only). Starts employee offboarding for offboarding tickets. "
+            "Copy to your workspace to customize."
+        ),
         "trigger": "ticket.created",
         "conditions": [{"field": "category", "op": "equals", "value": "offboarding"}],
         "actions": [{"type": "start_workflow", "template_trigger_category": "offboarding"}],

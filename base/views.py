@@ -116,6 +116,7 @@ def _unique_team_name(base_name: str, user) -> str:
 
 def _provision_workspace_for_signup(user, company_name: str):
     """Create the user's first workspace from signup company name and set it active."""
+    from automation.workspace_starter import seed_starter_rules_for_team
     from base.models import Team, UserPreferences
 
     name = _unique_team_name(company_name, user)
@@ -124,6 +125,7 @@ def _provision_workspace_for_signup(user, company_name: str):
     prefs, _ = UserPreferences.objects.get_or_create(user=user)
     prefs.active_team = team
     prefs.save(update_fields=["active_team"])
+    seed_starter_rules_for_team(team)
     return team
 
 
@@ -587,7 +589,9 @@ class CurrentUserPreferencesView(GenericAPIView):
         return preferences
 
     def get(self, request):
-        preferences = self.get_object()
+        from tickets.active_team import maybe_auto_select_active_team
+
+        preferences = maybe_auto_select_active_team(request.user)
         serializer = self.get_serializer(preferences)
         return Response(serializer.data)
 
@@ -860,7 +864,8 @@ class TeamCreateView(generics.CreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def perform_create(self, serializer):
-        from base.models import Team
+        from automation.workspace_starter import seed_starter_rules_for_team
+        from base.models import Team, UserPreferences
         from base.billing_views import get_max_teams_for_user
         max_teams = get_max_teams_for_user(self.request.user)
         current_count = Team.objects.filter(owner=self.request.user).count()
@@ -871,6 +876,10 @@ class TeamCreateView(generics.CreateAPIView):
             )
         team = serializer.save(owner=self.request.user)
         team.members.add(self.request.user)
+        prefs, _ = UserPreferences.objects.get_or_create(user=self.request.user)
+        prefs.active_team = team
+        prefs.save(update_fields=["active_team"])
+        seed_starter_rules_for_team(team)
 
 
 class TeamUpdateView(generics.UpdateAPIView):
@@ -1078,6 +1087,9 @@ class TeamInvitationAcceptView(GenericAPIView):
         inv.team.members.add(request.user)
         inv.status = TeamInvitation.Status.ACCEPTED
         inv.save(update_fields=['status'])
+        from tickets.active_team import set_active_team_if_unset
+
+        set_active_team_if_unset(request.user, inv.team)
         return Response({'message': f'You joined {inv.team.name}.'})
 
 
