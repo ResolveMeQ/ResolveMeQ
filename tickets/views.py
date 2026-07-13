@@ -103,8 +103,9 @@ def _store_screenshot_upload(request, uploaded_file) -> tuple[str, str]:
         f"ticket_pending/{uuid.uuid4().hex}{ext}",
         uploaded_file,
     )
-    url = default_storage.url(rel)
-    abs_url = url if url.startswith(("http://", "https://")) else request.build_absolute_uri(url)
+    from resolvemeq.media_dirs import absolute_media_url
+
+    abs_url = absolute_media_url(rel, request)
     return rel, abs_url
 
 
@@ -899,7 +900,7 @@ def _save_ticket_upload_file(request, ticket, uploaded_file):
     so the agent can use vision on the next chat turn. Other files are stored generically.
     Returns dict: relative_path, file_url (absolute), is_ticket_screenshot.
     """
-    from resolvemeq.media_dirs import ensure_media_subdirectories
+    from resolvemeq.media_dirs import ensure_media_subdirectories, absolute_media_url
 
     ensure_media_subdirectories()
     err = _screenshot_upload_error(uploaded_file)
@@ -912,24 +913,14 @@ def _save_ticket_upload_file(request, ticket, uploaded_file):
             f"ticket_{tid}/chat_{uuid.uuid4().hex}{ext}",
             uploaded_file,
         )
-        url = default_storage.url(rel)
-        abs_url = (
-            url
-            if url.startswith(("http://", "https://"))
-            else request.build_absolute_uri(url)
-        )
+        abs_url = absolute_media_url(rel, request)
         ticket.screenshot = abs_url
         ticket.save(update_fields=["screenshot"])
         return {"relative_path": rel, "file_url": abs_url, "is_ticket_screenshot": True}
 
     safe = get_valid_filename(uploaded_file.name or "attachment")
     rel = default_storage.save(f"ticket_{tid}/{safe}", uploaded_file)
-    url = default_storage.url(rel)
-    abs_url = (
-        url
-        if url.startswith(("http://", "https://"))
-        else request.build_absolute_uri(url)
-    )
+    abs_url = absolute_media_url(rel, request)
     return {"relative_path": rel, "file_url": abs_url, "is_ticket_screenshot": False}
 
 

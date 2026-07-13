@@ -6,6 +6,7 @@ from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
 from django.conf import settings
 from django.conf.urls.static import static
+from django.views.static import serve
 from base.views import NewsletterSubscribeView, ContactRequestView
 from base.blog_views import BlogPostListView, BlogPostDetailView
 from base.public_seo_views import public_sitemap_xml, public_blog_rss_xml, public_robots_txt
@@ -65,6 +66,16 @@ urlpatterns = [
       name='schema-json',
    ),
 ]
+
+# Production nginx proxies all paths (including /media/) to Gunicorn — serve uploads here.
+if not settings.DEBUG:
+    urlpatterns = [
+        re_path(
+            r"^media/(?P<path>.*)$",
+            serve,
+            {"document_root": settings.MEDIA_ROOT},
+        ),
+    ] + urlpatterns
 
 # Serve static / media during development (production: reverse proxy serves /media/ from MEDIA_ROOT)
 if settings.DEBUG:

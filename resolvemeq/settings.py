@@ -309,6 +309,11 @@ SLACK_LEGACY_INSTALL_FALLBACK = os.getenv("SLACK_LEGACY_INSTALL_FALLBACK", "").s
 
 # Okta read connector (P2-7) — workspace owners OAuth-link their org for auto_check steps.
 _api_base = os.getenv("API_BASE_URL", "https://api.resolvemeq.net" if not DEBUG else "http://localhost:8000").rstrip("/")
+API_BASE_URL = _api_base
+
+# Behind TLS-terminating reverse proxy (nginx) — correct scheme/host for absolute URLs.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = True
 OKTA_CLIENT_ID = (os.getenv("OKTA_CLIENT_ID") or "").strip()
 OKTA_CLIENT_SECRET = (os.getenv("OKTA_CLIENT_SECRET") or "").strip()
 _okta_redirect = (os.getenv("OKTA_REDIRECT_URI") or "").strip()
