@@ -125,6 +125,13 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False, bill
         # Execute the autonomous action
         execute_autonomous_action.delay(ticket_id, action.value, params)
 
+        try:
+            from workflows.services import maybe_start_workflow_backstop
+
+            maybe_start_workflow_backstop(ticket)
+        except Exception as exc:
+            logger.warning("maybe_start_workflow_backstop failed for ticket %s: %s", ticket_id, exc)
+
         # --- Create Solution if agent provided steps or resolution ---
         agent_data = ticket.agent_response
         steps = None
@@ -247,6 +254,13 @@ def process_ticket_with_agent_sync(ticket, billing_user, force=False, billing_pr
         logger.info(f"Autonomous agent decided: {action.value} for ticket {ticket.ticket_id} (sync path)")
         # Run in-process: Celery's broker may be exactly what's unavailable right now.
         execute_autonomous_action(ticket.ticket_id, action.value, params)
+
+        try:
+            from workflows.services import maybe_start_workflow_backstop
+
+            maybe_start_workflow_backstop(ticket)
+        except Exception as exc:
+            logger.warning("maybe_start_workflow_backstop failed for ticket %s: %s", ticket.ticket_id, exc)
 
         step_list = steps_from_agent_response(agent_response)
         steps = "\n".join(step_list) if step_list else None

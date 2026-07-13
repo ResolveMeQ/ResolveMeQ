@@ -71,9 +71,6 @@ def dispatch_event(
     if trigger not in VALID_TRIGGERS:
         logger.warning("Unknown automation trigger: %s", trigger)
         return []
-    if trigger == "schedule.cron":
-        logger.debug("schedule.cron not implemented in v1 executor.")
-        return []
 
     team_id = _team_id_from_context(context)
     if rule_id:
@@ -84,19 +81,21 @@ def dispatch_event(
     log_ids = []
     for rule in qs.order_by("priority", "id"):
         if not evaluate_conditions(rule.conditions, context):
-            if rule_id:
-                log = RuleExecutionLog.objects.create(
-                    rule=rule,
-                    trigger=trigger,
-                    team_id=team_id,
-                    ticket=context.get("ticket"),
-                    workflow=context.get("workflow"),
-                    status="skipped",
-                    message="Conditions did not match.",
-                    actions_planned=rule.actions,
-                    context_snapshot=_snapshot_context(context),
-                )
-                log_ids.append(log.id)
+            # Log the skip in real dispatch too (not just admin dry-run) — otherwise
+            # a rule that never matches is indistinguishable in "Recent executions"
+            # from a trigger that never fired at all.
+            log = RuleExecutionLog.objects.create(
+                rule=rule,
+                trigger=trigger,
+                team_id=team_id,
+                ticket=context.get("ticket"),
+                workflow=context.get("workflow"),
+                status="skipped",
+                message="Conditions did not match.",
+                actions_planned=rule.actions,
+                context_snapshot=_snapshot_context(context),
+            )
+            log_ids.append(log.id)
             continue
 
         status, messages = execute_actions(rule.actions, context, dry_run=dry_run)
@@ -139,3 +138,42 @@ def dispatch_event(
             break
 
     return log_ids
+
+
+def run_due_cron_rules(now=None) -> list:
+    """
+    Called every minute by Celery Beat (automation.tasks.run_due_cron_rules_task).
+    Finds active schedule.cron rules whose cron_expression matches the current
+    minute and haven't already fired for it, dispatches each individually (so
+    per-rule conditions/actions/logging behave exactly like any other trigger),
+    and stamps cron_last_fired_at so a slow/duplicate beat tick can't double-fire.
+    """
+    from croniter import croniter
+    from django.utils import timezone
+
+    if now is None:
+        now = timezone.now()
+    now_minute = now.replace(second=0, microsecond=0)
+
+    fired_rule_ids = []
+    qs = Rule.objects.filter(is_active=True, trigger="schedule.cron").exclude(cron_expression="")
+    for rule in qs:
+        try:
+            if not croniter.match(rule.cron_expression, now_minute):
+                continue
+        except (ValueError, KeyError):
+            logger.warning("Rule %s has an invalid cron_expression: %r", rule.id, rule.cron_expression)
+            continue
+        if rule.cron_last_fired_at and rule.cron_last_fired_at.replace(second=0, microsecond=0) == now_minute:
+            continue
+
+        dispatch_event(
+            "schedule.cron",
+            {"team_id": str(rule.team_id) if rule.team_id else None},
+            rule_id=rule.id,
+        )
+        rule.cron_last_fired_at = now_minute
+        rule.save(update_fields=["cron_last_fired_at"])
+        fired_rule_ids.append(rule.id)
+
+    return fired_rule_ids

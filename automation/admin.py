@@ -5,7 +5,7 @@ from .models import Rule, RuleExecutionLog
 
 @admin.register(Rule)
 class RuleAdmin(admin.ModelAdmin):
-    list_display = ("name", "trigger", "team", "is_active", "priority", "updated_at")
+    list_display = ("name", "trigger", "cron_expression", "team", "is_active", "priority", "updated_at")
     list_filter = ("trigger", "is_active", "team")
     search_fields = ("name", "description")
 

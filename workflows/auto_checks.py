@@ -128,7 +128,7 @@ def run_auto_check(step, workflow) -> Tuple[bool, str]:
                 connector="okta",
                 check_type=check_type,
                 status="skipped",
-                message="Okta is not connected for this workspace.",
+                message="Connect Okta in Settings → Integrations to run this check.",
             )
             return False, "Connect Okta in Settings → Integrations to run this check."
 
@@ -176,7 +176,7 @@ def run_auto_check(step, workflow) -> Tuple[bool, str]:
                 connector="google_workspace",
                 check_type=check_type,
                 status="skipped",
-                message="Google Workspace is not connected for this workspace.",
+                message="Connect Google Workspace in Settings → Integrations to run this check.",
             )
             return False, "Connect Google Workspace in Settings → Integrations to run this check."
         try:
@@ -223,7 +223,7 @@ def run_auto_check(step, workflow) -> Tuple[bool, str]:
                 connector="microsoft365",
                 check_type=check_type,
                 status="skipped",
-                message="Microsoft 365 is not connected for this workspace.",
+                message="Connect Microsoft 365 in Settings → Integrations to run this check.",
             )
             return False, "Connect Microsoft 365 in Settings → Integrations to run this check."
         try:

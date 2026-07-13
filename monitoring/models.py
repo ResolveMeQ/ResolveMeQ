@@ -14,6 +14,7 @@ class ComplianceAuditEvent(models.Model):
         ("ticket.escalated", "Ticket escalated"),
         ("ticket.resolved", "Ticket resolved"),
         ("workflow.step.completed", "Workflow step completed"),
+        ("workflow.autostarted_by_agent", "Workflow auto-started (no rule matched)"),
         ("rule.executed", "Rule executed"),
         ("rule.created", "Rule created"),
         ("rule.updated", "Rule updated"),

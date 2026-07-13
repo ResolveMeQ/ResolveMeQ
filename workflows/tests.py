@@ -10,7 +10,7 @@ from tickets.services import create_ticket_with_reporter
 
 from .models import Workflow, WorkflowTemplate
 from .scoping import user_can_access_workflow
-from .services import maybe_start_workflow_for_ticket, start_workflow
+from .services import maybe_start_workflow_backstop, maybe_start_workflow_for_ticket, start_workflow
 
 User = get_user_model()
 
@@ -105,6 +105,54 @@ class WorkflowTriggerTest(TestCase):
         )
         workflow = Workflow.objects.get(ticket=ticket)
         self.assertEqual(workflow.template_id, team_template.id)
+
+
+class WorkflowBackstopTest(TestCase):
+    """AI-processing safety net (workflows/services.py:maybe_start_workflow_backstop) —
+    starts a workflow when a WorkflowTemplate matches the ticket's category but no
+    automation Rule did it at creation (missing/paused/never configured)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="backstop1", email="backstop1@example.com", password="pw")
+        self.team = Team.objects.create(name="Backstop Co", owner=self.user)
+        self.team.members.add(self.user)
+        self.template = WorkflowTemplate.objects.create(
+            name="Offboarding",
+            trigger_category="offboarding",
+            team=None,
+            steps=[{"title": "Revoke access", "description": "", "assignee_team": "IT"}],
+        )
+        # Deliberately no automation Rule for "offboarding" — that's the gap being tested.
+        self.ticket = Ticket.objects.create(
+            user=self.user, team=self.team, issue_type="Employee leaving",
+            status="new", category="offboarding",
+        )
+
+    def test_maybe_start_workflow_for_ticket_is_idempotent(self):
+        first = maybe_start_workflow_for_ticket(self.ticket)
+        self.assertIsNotNone(first)
+        second = maybe_start_workflow_for_ticket(self.ticket)
+        self.assertIsNone(second)
+        self.assertEqual(Workflow.objects.filter(ticket=self.ticket).count(), 1)
+
+    def test_backstop_starts_workflow_when_no_rule_matched(self):
+        from monitoring.models import ComplianceAuditEvent
+
+        workflow = maybe_start_workflow_backstop(self.ticket)
+        self.assertIsNotNone(workflow)
+        self.assertEqual(workflow.template_id, self.template.id)
+        self.assertTrue(
+            ComplianceAuditEvent.objects.filter(
+                event_type="workflow.autostarted_by_agent", resource_id=str(workflow.id)
+            ).exists()
+        )
+
+    def test_backstop_is_a_noop_when_a_workflow_already_exists(self):
+        start_workflow(template=self.template, ticket=self.ticket, team=self.team, started_by=self.user)
+        self.assertEqual(Workflow.objects.filter(ticket=self.ticket).count(), 1)
+        result = maybe_start_workflow_backstop(self.ticket)
+        self.assertIsNone(result)
+        self.assertEqual(Workflow.objects.filter(ticket=self.ticket).count(), 1)
 
 
 class WorkflowStepFlowTest(TestCase):

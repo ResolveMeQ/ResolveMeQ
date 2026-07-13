@@ -2,6 +2,7 @@
 Shared workflow instantiation, used by both the manual "start workflow" endpoint
 and the automatic ticket-creation trigger (tickets/services.py).
 """
+import logging
 from datetime import timedelta
 
 from django.utils import timezone
@@ -9,6 +10,8 @@ from django.utils import timezone
 from .assignee_roles import role_label
 from .branching import should_skip_step
 from .models import Workflow, WorkflowStep, WorkflowTemplate
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_STEP_DUE_DAYS = 2
 
@@ -191,11 +194,14 @@ def start_workflow(*, template: WorkflowTemplate, ticket=None, team=None, starte
 def maybe_start_workflow_for_ticket(ticket):
     """
     If the ticket's category matches a WorkflowTemplate.trigger_category (team-scoped first,
-    else the global fallback), instantiate that workflow. No-op if no template matches.
+    else the global fallback), instantiate that workflow. No-op if no template matches, or if
+    the ticket already has a workflow (safe to call more than once for the same ticket).
 
     Production ticket creation uses automation rules (ticket.created → start_workflow action);
-    this helper remains for direct calls and tests.
+    this helper remains for direct calls, tests, and the AI-processing backstop below.
     """
+    if ticket.workflows.exists():
+        return None
     if not ticket.category:
         return None
     template = (
@@ -205,3 +211,38 @@ def maybe_start_workflow_for_ticket(ticket):
     if not template:
         return None
     return start_workflow(template=template, ticket=ticket, team=ticket.team, started_by=ticket.user)
+
+
+def maybe_start_workflow_backstop(ticket):
+    """
+    Called after AI ticket processing (tickets/tasks.py). Automation rules are the primary
+    ticket.created → start_workflow path, but a Rule is a separate object a team could delete,
+    pause, or simply never create even though a matching WorkflowTemplate exists — in which
+    case the category/template match would otherwise be silently missed forever. This is a
+    deterministic backstop (same category-to-template matching, not free-form AI judgment),
+    so it only ever does what a correctly-configured rule would already have done.
+    """
+    workflow = maybe_start_workflow_for_ticket(ticket)
+    if not workflow:
+        return None
+    logger.info(
+        "AI-processing backstop started workflow %s (template %s) for ticket %s",
+        workflow.id, workflow.template_id, ticket.ticket_id,
+    )
+    try:
+        from monitoring.audit import record_audit_event
+
+        record_audit_event(
+            event_type="workflow.autostarted_by_agent",
+            team=ticket.team,
+            resource_type="workflow",
+            resource_id=str(workflow.id),
+            summary=(
+                f"Workflow '{workflow.template.name}' auto-started for ticket #{ticket.ticket_id} "
+                "(no automation rule had matched)"
+            ),
+            metadata={"ticket_id": ticket.ticket_id, "template_id": workflow.template_id},
+        )
+    except Exception:
+        logger.warning("Audit log for backstop workflow start failed for ticket %s", ticket.ticket_id)
+    return workflow

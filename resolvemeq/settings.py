@@ -496,6 +496,17 @@ if ENABLE_DAILY_BLOG_GENERATION:
         "schedule": crontab(hour=BLOG_GENERATION_HOUR_UTC, minute=BLOG_GENERATION_MINUTE_UTC),
     }
 
+# Automation rules with trigger=schedule.cron (Rule.cron_expression). Ticks every
+# minute; each due rule is dispatched individually via automation.engine.
+ENABLE_AUTOMATION_CRON_RULES = os.getenv(
+    "ENABLE_AUTOMATION_CRON_RULES", "true"
+).strip().lower() in ("1", "true", "yes", "")
+if ENABLE_AUTOMATION_CRON_RULES:
+    CELERY_BEAT_SCHEDULE["automation-cron-rules"] = {
+        "task": "automation.tasks.run_due_cron_rules_task",
+        "schedule": crontab(minute="*"),
+    }
+
 # Optional: token for GET /api/monitoring/health/complete/ (uptime checks without admin JWT)
 MONITORING_HEALTH_SECRET = os.getenv("MONITORING_HEALTH_SECRET", "").strip()
 

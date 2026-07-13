@@ -58,3 +58,17 @@ def validate_trigger(trigger: str) -> str:
     if t not in VALID_TRIGGERS:
         raise ValueError("invalid trigger")
     return t
+
+
+def normalize_cron_expression(trigger: str, cron_expression) -> str:
+    """cron_expression is only meaningful (and required) for schedule.cron rules."""
+    expr = (cron_expression or "").strip()
+    if trigger != "schedule.cron":
+        return ""
+    if not expr:
+        raise ValueError("cron_expression is required when trigger is schedule.cron")
+    from croniter import croniter
+
+    if not croniter.is_valid(expr):
+        raise ValueError("cron_expression must be a valid 5-field cron expression, e.g. '0 9 * * 1'")
+    return expr

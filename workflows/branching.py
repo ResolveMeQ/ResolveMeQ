@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from base.condition_eval import matches
+
 
 def _ticket_field_value(ticket, field_name: str):
     if not ticket or not field_name:
@@ -23,9 +25,9 @@ def should_skip_step(step_def: dict, ticket) -> bool:
     field = (skip.get("ticket_field") or "category").strip()
     value = _ticket_field_value(ticket, field)
     if "equals" in skip:
-        return str(value) == str(skip["equals"])
+        return matches("equals", value, skip["equals"])
     if "in" in skip and isinstance(skip["in"], list):
-        return value in skip["in"]
+        return matches("in", value, skip["in"])
     if "not_equals" in skip:
-        return str(value) != str(skip["not_equals"])
+        return matches("not_equals", value, skip["not_equals"])
     return False

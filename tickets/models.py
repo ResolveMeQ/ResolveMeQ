@@ -16,6 +16,20 @@ class Ticket(models.Model):
         ("support", "Support"),
         ("user", "User"),
     ]
+    # Documents the canonical set already enforced by
+    # tickets/views.py's ALLOWED_TICKET_STATUSES/CANONICAL_STATUS (which normalizes
+    # the legacy "in-progress" spelling to "in_progress" on write). Choices on a
+    # CharField only affect form/admin validation, not the DB column or existing
+    # rows, so this is additive and doesn't require a migration.
+    STATUS_CHOICES = [
+        ("new", "New"),
+        ("open", "Open"),
+        ("assigned", "Assigned"),
+        ("in_progress", "In Progress"),
+        ("pending_clarification", "Pending Clarification"),
+        ("escalated", "Escalated"),
+        ("resolved", "Resolved"),
+    ]
     CATEGORY_CHOICES = [
         ("wifi", "Wi-Fi"),
         ("laptop", "Laptop"),
@@ -52,7 +66,7 @@ class Ticket(models.Model):
     )
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     issue_type = models.CharField(max_length=100)
-    status = models.CharField(max_length=50)
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES)
     description = models.TextField(blank=True, null=True)  # <-- Add this line
     screenshot = models.URLField(blank=True, null=True)  # Optional screenshot URL
     PLATFORM_CHOICES = [

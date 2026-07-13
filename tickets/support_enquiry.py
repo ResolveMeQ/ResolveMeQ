@@ -104,6 +104,13 @@ def create_billing_support_ticket(
         acting_user=user,
     )
 
+    try:
+        from automation.hooks import on_ticket_escalated
+
+        on_ticket_escalated(ticket)
+    except Exception:
+        pass
+
     submission.ticket = ticket
     submission.status = SupportContactSubmission.Status.OPEN
     submission.save(update_fields=["ticket", "status"])

@@ -2,6 +2,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from base.condition_eval import ticket_condition_fields
 from base.models import Team
 from tickets.models import Ticket
 from tickets.scoping import active_team_id_for_user
@@ -10,7 +11,7 @@ from .constants import ACTION_LABELS, TRIGGER_LABELS, VALID_ACTION_TYPES, VALID_
 from .engine import dispatch_event
 from .models import Rule, RuleExecutionLog
 from .scoping import rules_queryset_for_user, user_can_edit_rule, user_can_dry_run_rule, user_can_manage_rules
-from .validation import normalize_actions, normalize_conditions, validate_trigger
+from .validation import normalize_actions, normalize_conditions, normalize_cron_expression, validate_trigger
 from monitoring.audit import audit_from_request
 
 
@@ -24,6 +25,7 @@ def _rule_to_dict(rule: Rule, *, can_edit: bool) -> dict:
         "actions": rule.actions or [],
         "is_active": rule.is_active,
         "priority": rule.priority,
+        "cron_expression": rule.cron_expression,
         "team_id": str(rule.team_id) if rule.team_id else None,
         "is_global": rule.team_id is None,
         "can_edit": can_edit,
@@ -57,6 +59,14 @@ def automation_metadata(request):
             {"value": "not_equals", "label": "Not equals"},
             {"value": "in", "label": "In list"},
         ],
+        "condition_fields": [
+            {
+                "value": field,
+                "label": label,
+                "choices": [{"value": c[0], "label": c[1]} for c in choices],
+            }
+            for field, label, choices in ticket_condition_fields()
+        ],
     })
 
 
@@ -81,6 +91,7 @@ def rule_list_create(request):
         trigger = validate_trigger(request.data.get("trigger"))
         conditions = normalize_conditions(request.data.get("conditions"))
         actions = normalize_actions(request.data.get("actions"))
+        cron_expression = normalize_cron_expression(trigger, request.data.get("cron_expression"))
     except ValueError as exc:
         return Response({"error": str(exc)}, status=400)
 
@@ -98,6 +109,7 @@ def rule_list_create(request):
         trigger=trigger,
         conditions=conditions,
         actions=actions,
+        cron_expression=cron_expression,
         is_active=bool(request.data.get("is_active", True)),
         priority=int(request.data.get("priority") or 100),
     )
@@ -158,6 +170,10 @@ def rule_detail(request, rule_id):
             updates["conditions"] = normalize_conditions(request.data.get("conditions"))
         if "actions" in request.data:
             updates["actions"] = normalize_actions(request.data.get("actions"))
+        if "trigger" in request.data or "cron_expression" in request.data:
+            effective_trigger = updates.get("trigger", rule.trigger)
+            cron_expression = request.data.get("cron_expression", rule.cron_expression)
+            updates["cron_expression"] = normalize_cron_expression(effective_trigger, cron_expression)
     except ValueError as exc:
         return Response({"error": str(exc)}, status=400)
 

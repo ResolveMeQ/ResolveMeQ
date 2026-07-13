@@ -87,7 +87,7 @@ Honest inventory — **built**, **partial**, **missing**:
 | Escalation queue + SLA display | Built | Platform agents, claim, priority |
 | Workflows v1 | Built | Sequential; templates; Slack/Teams notify; step due dates |
 | Workflow template admin UI | Built | Team owner CRUD at `/workflows/templates` |
-| Rules / trigger engine | Missing | `automation/` app is stub |
+| Rules / trigger engine | Built | Trigger→conditions→actions engine, dry-run, execution log, admin UI |
 | Slack integration | Built | OAuth, slash, modals, DMs |
 | Microsoft Teams | Partial | Backend + tests; Settings UI hidden |
 | Okta / AD / Jira / ServiceNow | Missing | Roadmap only |

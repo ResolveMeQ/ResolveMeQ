@@ -29,9 +29,9 @@ class RollbackManager:
         try:
             # Restore previous state
             if action_history.before_state:
-                ticket.status = action_history.before_state.get('status', 'in-progress')
+                ticket.status = action_history.before_state.get('status', 'in_progress')
             else:
-                ticket.status = 'in-progress'
+                ticket.status = 'in_progress'
             
             ticket.save()
             

@@ -37,6 +37,19 @@ class Rule(models.Model):
         default=100,
         help_text="Lower numbers run first.",
     )
+    cron_expression = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text=(
+            "5-field cron expression, UTC (e.g. '0 9 * * 1' = every Monday 09:00 UTC). "
+            "Required when trigger is schedule.cron."
+        ),
+    )
+    cron_last_fired_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Set by the cron dispatcher; prevents firing twice for the same due minute.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

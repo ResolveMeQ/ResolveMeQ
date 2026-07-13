@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from base.condition_eval import matches
+
 from .constants import VALID_CONDITION_OPS
 
 
@@ -39,15 +41,6 @@ def evaluate_conditions(conditions: List[dict], ctx: Dict[str, Any]) -> bool:
         if op not in VALID_CONDITION_OPS:
             return False
         actual = _context_value(ctx, field)
-        if op == "equals":
-            if str(actual) != str(expected):
-                return False
-        elif op == "not_equals":
-            if str(actual) == str(expected):
-                return False
-        elif op == "in":
-            if not isinstance(expected, list):
-                return False
-            if actual not in expected and str(actual) not in [str(x) for x in expected]:
-                return False
+        if not matches(op, actual, expected):
+            return False
     return True
