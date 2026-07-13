@@ -12,18 +12,30 @@ from .models import (
 class KnowledgeBaseArticleSerializer(serializers.ModelSerializer):
     helpfulness_score = serializers.FloatField(read_only=True)
     user_vote = serializers.SerializerMethodField()
+    can_edit = serializers.SerializerMethodField()
+    is_global = serializers.SerializerMethodField()
 
     class Meta:
         model = KnowledgeBaseArticle
         fields = [
             'kb_id', 'title', 'content', 'tags', 'author', 'team', 'is_published', 'is_verified',
             'created_at', 'updated_at', 'views', 'helpful_votes', 'total_votes',
-            'helpfulness_score', 'user_vote'
+            'helpfulness_score', 'user_vote', 'can_edit', 'is_global',
         ]
         read_only_fields = [
-            'kb_id', 'team', 'created_at', 'updated_at', 'views',
-            'helpful_votes', 'total_votes', 'helpfulness_score', 'user_vote'
+            'kb_id', 'team', 'author', 'created_at', 'updated_at', 'views',
+            'helpful_votes', 'total_votes', 'helpfulness_score', 'user_vote', 'can_edit', 'is_global',
         ]
+
+    def get_can_edit(self, obj):
+        request = self.context.get("request")
+        if not request or not getattr(request, "user", None):
+            return False
+        from knowledge_base.permissions import user_can_edit_kb_article
+        return user_can_edit_kb_article(request.user, obj)
+
+    def get_is_global(self, obj):
+        return obj.team_id is None
 
     def get_user_vote(self, obj):
         request = self.context.get("request")

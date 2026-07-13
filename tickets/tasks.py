@@ -32,6 +32,7 @@ from base.agent_usage import (
     refund_agent_operation,
     try_consume_agent_operation,
 )
+from .agent_payload import build_ticket_agent_payload
 
 logger = logging.getLogger(__name__)
 
@@ -71,24 +72,7 @@ def process_ticket_with_agent(self, ticket_id, thread_ts=None, force=False, bill
                 return False
 
         # Prepare the payload as expected by FastAPI
-        payload = {
-            "ticket_id": ticket.ticket_id,
-            "issue_type": ticket.issue_type,
-            "description": ticket.description,
-            "category": ticket.category,
-            "tags": ticket.tags,
-            "user": {
-                "id": str(ticket.user.id),
-                "name": ticket.user.username,
-                "department": getattr(ticket.user, "department", "")
-            },
-        }
-        if ticket.screenshot:
-            payload["screenshot"] = ticket.screenshot
-        if ticket.reported_platform:
-            payload["reported_platform"] = ticket.reported_platform
-
-        # Send to agent
+        payload = build_ticket_agent_payload(ticket)
         agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
         logger.info(f"Sending POST to FastAPI: {agent_url} with payload: {payload}")
         agent_response, agent_error = try_call_agent_analyze(
@@ -226,22 +210,7 @@ def process_ticket_with_agent_sync(ticket, billing_user, force=False, billing_pr
 
     agent_saved = False
     try:
-        payload = {
-            "ticket_id": ticket.ticket_id,
-            "issue_type": ticket.issue_type,
-            "description": ticket.description,
-            "category": ticket.category,
-            "tags": ticket.tags,
-            "user": {
-                "id": str(ticket.user.id),
-                "name": ticket.user.username,
-                "department": getattr(ticket.user, "department", ""),
-            },
-        }
-        if ticket.screenshot:
-            payload["screenshot"] = ticket.screenshot
-        if ticket.reported_platform:
-            payload["reported_platform"] = ticket.reported_platform
+        payload = build_ticket_agent_payload(ticket)
 
         agent_url = getattr(settings, 'AI_AGENT_URL', 'https://agent.resolvemeq.net/tickets/analyze/')
         agent_response, agent_error = try_call_agent_analyze(

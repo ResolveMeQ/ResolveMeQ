@@ -26,7 +26,7 @@ def _linked_kb_for_step(workflow, step) -> List[Dict[str, Any]]:
     idx = step.order_index
     if idx < 0 or idx >= len(steps):
         return []
-    return resolve_kb_articles_by_titles(steps[idx].get("kb_links") or [])
+    return resolve_kb_articles_by_titles(steps[idx].get("kb_links") or [], team_id=workflow.team_id)
 
 
 def _resolution_template_hints(workflow) -> List[Dict[str, Any]]:

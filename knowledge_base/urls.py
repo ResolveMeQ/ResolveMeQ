@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     KnowledgeBaseArticleViewSet,
     LLMResponseViewSet,
+    kb_metadata,
     kb_articles_for_agent,
     search_kb_for_agent,
     kb_article_by_id,
@@ -23,6 +24,7 @@ router.register(r'articles', KnowledgeBaseArticleViewSet)
 router.register(r'responses', LLMResponseViewSet)
 
 urlpatterns = [
+    path('metadata/', kb_metadata, name='kb-metadata'),
     path('', include(router.urls)),
     # API endpoints for FastAPI agent
     path('api/articles/', kb_articles_for_agent, name='kb-articles-for-agent'),

@@ -159,11 +159,8 @@ class Ticket(models.Model):
         """
         Create or update a KnowledgeBaseArticle from this ticket when resolved.
 
-        When the ticket has AI chat, **first** asks the FastAPI agent ``POST /tickets/kb-article/``
-        to synthesize **Problem / Solution / Notes** markdown from the **full transcript**
-        (best quality). If that fails or chat is too short, falls back to heuristics
-        (``_kb_pick_final_assistant_text`` and related helpers), then Solution text, then
-        analyze ``agent_response``.
+        Prefers FastAPI ``POST /tickets/kb-article/`` for a full runbook-style article
+        from transcript + agent analysis. Falls back to heuristics if synthesis fails.
         """
         from knowledge_base.models import KnowledgeBaseArticle
 
@@ -171,24 +168,24 @@ class Ticket(models.Model):
             return
 
         has_chat = _ticket_has_persisted_ai_chat(self)
-        if not self.agent_response and not has_chat:
+        ar = self.agent_response if isinstance(self.agent_response, dict) else {}
+        if not ar and not has_chat and not (self.description or "").strip():
             return
 
-        title = f"Resolved: {self.issue_type}"
-        parts = [f"## Description\n{self.description or 'N/A'}"]
-        ar = self.agent_response if isinstance(self.agent_response, dict) else {}
-
-        if has_chat:
-            synthesized = _kb_fetch_synthesized_kb_markdown(self)
-            if synthesized:
-                parts.append("\n" + synthesized.strip())
-            else:
+        synthesized_title, synthesized_body = _kb_fetch_synthesized_kb_markdown(self)
+        if synthesized_body:
+            title = synthesized_title or _kb_default_article_title(self)
+            content = synthesized_body.strip()
+        else:
+            title = _kb_default_article_title(self)
+            parts = [f"## Description\n{self.description or 'N/A'}"]
+            if has_chat:
                 from .chat_models import Conversation
 
                 conv = Conversation.objects.filter(ticket=self).order_by("-updated_at").first()
                 summary = (conv.summary or "").strip() if conv else ""
                 if summary:
-                    parts.append(f"\n## Summary\n{summary[:6000]}")
+                    parts.append(f"\n## Summary\n{summary[:12000]}")
 
                 final_text, final_msg = _kb_pick_final_assistant_text(self)
                 meta_steps = _kb_metadata_steps_block(final_msg) or _kb_metadata_steps_from_recent_ticket(
@@ -204,33 +201,39 @@ class Ticket(models.Model):
                 if not used_chat_resolution:
                     sol_text = _kb_solution_text_for_ticket(self)
                     if sol_text:
-                        parts.append(f"\n## Resolution\n{sol_text[:12000]}")
+                        parts.append(f"\n## Resolution\n{sol_text[:24000]}")
                         used_chat_resolution = True
 
                 if not used_chat_resolution:
                     _kb_append_agent_analyze_sections(parts, self.agent_response)
 
-            if isinstance(ar, dict):
-                sol = ar.get("solution") or {}
-                if isinstance(sol, dict) and sol.get("preventive_measures"):
-                    parts.append("\n## Prevention")
-                    for pm in (sol["preventive_measures"] or [])[:5]:
-                        parts.append(f"- {pm}")
-        else:
-            _kb_append_agent_analyze_sections(parts, self.agent_response)
+                if isinstance(ar, dict):
+                    sol = ar.get("solution") or {}
+                    if isinstance(sol, dict) and sol.get("preventive_measures"):
+                        parts.append("\n## Prevention")
+                        for pm in (sol["preventive_measures"] or [])[:10]:
+                            parts.append(f"- {pm}")
+            else:
+                _kb_append_agent_analyze_sections(parts, self.agent_response)
+            content = "\n".join(parts)
 
-        content = "\n".join(parts)
-        tags = [self.category] + (self.tags if self.tags else [])
+        tags = list(dict.fromkeys([self.category] + (self.tags if self.tags else [])))
+        lookup = {"title": title, "team": self.team}
         article, created = KnowledgeBaseArticle.objects.get_or_create(
-            title=title,
+            **lookup,
             defaults={
                 "content": content,
                 "tags": tags,
+                "author": self.user,
+                "is_published": True,
+                "is_verified": False,
             },
         )
         if not created:
             article.content = content
             article.tags = tags
+            if self.user_id and not article.author_id:
+                article.author = self.user
             article.save()
 
     def save(self, *args, **kwargs):
@@ -292,7 +295,7 @@ def _kb_conversation_history_payload(ticket):
 
     try:
         msgs = list(
-            ChatMessage.objects.filter(conversation__ticket=ticket).order_by("created_at")[:120]
+            ChatMessage.objects.filter(conversation__ticket=ticket).order_by("created_at")[:200]
         )
     except DatabaseError:
         return []
@@ -307,23 +310,49 @@ def _kb_conversation_history_payload(ticket):
         t = (m.text or "").strip()
         if not t:
             continue
-        if len(t) > 2000:
-            t = t[:1997] + "..."
+        if len(t) > 4000:
+            t = t[:3997] + "..."
         out.append({"role": role, "text": t})
     return out
 
 
+def _kb_default_article_title(ticket):
+    issue = (ticket.issue_type or "").strip()
+    category = (ticket.category or "").strip()
+    if issue and category and category.lower() not in issue.lower():
+        return f"{issue} ({category})"[:200]
+    return (issue or category or "IT support resolution")[:200]
+
+
 def _kb_fetch_synthesized_kb_markdown(ticket):
     """
-    Full-transcript KB body via FastAPI ``/tickets/kb-article/`` (preferred over heuristics).
+    Full runbook via FastAPI ``/tickets/kb-article/`` (preferred over heuristics).
+    Returns (suggested_title, markdown) or (None, None).
     """
     history = _kb_conversation_history_payload(ticket)
-    if len(history) < 2:
-        return None
+    ar = ticket.agent_response if isinstance(ticket.agent_response, dict) else None
+    has_context = bool(
+        history
+        or (ticket.description or "").strip()
+        or ar
+    )
+    if not has_context:
+        return None, None
+
+    conversation_summary = ""
+    try:
+        from .chat_models import Conversation
+
+        conv = Conversation.objects.filter(ticket=ticket).order_by("-updated_at").first()
+        if conv and (conv.summary or "").strip():
+            conversation_summary = conv.summary.strip()
+    except Exception:
+        pass
+
     kb_url = _kb_agent_kb_article_url()
     if "kb-article" not in kb_url.lower():
         logger.warning("KB article URL missing kb-article path (AI_AGENT_URL may be misconfigured)")
-        return None
+        return None, None
     try:
         from base.agent_http import get_agent_service_headers
 
@@ -335,23 +364,28 @@ def _kb_fetch_synthesized_kb_markdown(ticket):
                 "description": ticket.description or "",
                 "category": ticket.category or "",
                 "conversation_history": history,
+                "agent_analysis": ar,
+                "tags": ticket.tags or [],
+                "reported_platform": ticket.reported_platform or "",
+                "conversation_summary": conversation_summary,
             },
             headers=get_agent_service_headers(),
-            timeout=60,
+            timeout=90,
         )
         resp.raise_for_status()
         data = resp.json() or {}
         md = (data.get("markdown") or "").strip()
-        if len(md) < 40:
-            return None
-        return md[:24000]
+        if len(md) < 80:
+            return None, None
+        title = (data.get("title") or "").strip()[:200] or None
+        return title, md[:48000]
     except Exception as e:
         logger.warning(
             "KB synthesis from agent failed ticket_id=%s: %s",
             getattr(ticket, "ticket_id", None),
             e,
         )
-        return None
+        return None, None
 
 
 def _ticket_has_persisted_ai_chat(ticket):
@@ -404,13 +438,13 @@ def _kb_pick_final_assistant_text(ticket):
     if typed:
         picked = max(typed, key=lambda m: m.created_at)
         text = (picked.text or "").strip()
-        return (text[:12000] if text else None), picked
+        return (text[:24000] if text else None), picked
 
     helpful = [m for m in pool if m.was_helpful is True]
     if helpful:
         picked = max(helpful, key=lambda m: m.created_at)
         text = (picked.text or "").strip()
-        return (text[:12000] if text else None), picked
+        return (text[:24000] if text else None), picked
 
     picked = max(pool, key=lambda m: (_kb_chat_message_kb_score(m), m.created_at.timestamp()))
     text = (picked.text or "").strip()

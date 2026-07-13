@@ -25,7 +25,7 @@ def _kb_articles_for_step(workflow, order_index: int):
     steps = template.steps or []
     if order_index < 0 or order_index >= len(steps):
         return []
-    return resolve_kb_articles_by_titles(steps[order_index].get("kb_links") or [])
+    return resolve_kb_articles_by_titles(steps[order_index].get("kb_links") or [], team_id=workflow.team_id)
 
 
 def _step_is_overdue(step, now=None):

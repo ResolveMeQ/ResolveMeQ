@@ -9,6 +9,7 @@ from django.contrib.auth import get_user_model
 from pathlib import Path
 import uuid
 import re
+from rest_framework.exceptions import PermissionDenied
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes, parser_classes
 from rest_framework.response import Response
@@ -38,6 +39,7 @@ from .serializers import (
     KBAttachmentSerializer,
 )
 from .services import KnowledgeBaseService
+from .permissions import user_can_manage_kb_articles, user_can_edit_kb_article
 import logging
 
 logger = logging.getLogger(__name__)
@@ -387,6 +389,10 @@ def _attach_uploaded_files(*, attachment_ids, user, question=None, answer=None, 
         attachment.save(update_fields=["question", "answer", "comment"])
 
 
+def _user_can_edit_article(user, article) -> bool:
+    return user_can_edit_kb_article(user, article)
+
+
 class KnowledgeBaseArticleViewSet(viewsets.ModelViewSet):
     queryset = KnowledgeBaseArticle.objects.all()
     serializer_class = KnowledgeBaseArticleSerializer
@@ -398,6 +404,32 @@ class KnowledgeBaseArticleViewSet(viewsets.ModelViewSet):
         if self.action == "rate":
             return [IsAuthenticated()]
         return [IsAuthenticated()]
+
+    def create(self, request, *args, **kwargs):
+        if not user_can_manage_kb_articles(request.user):
+            return Response(
+                {"error": "Only the workspace owner or an admin with Playbooks permission can create articles."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        article = self.get_object()
+        if not _user_can_edit_article(request.user, article):
+            return Response({"error": "You do not have permission to edit this article."}, status=status.HTTP_403_FORBIDDEN)
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        article = self.get_object()
+        if not _user_can_edit_article(request.user, article):
+            return Response({"error": "You do not have permission to edit this article."}, status=status.HTTP_403_FORBIDDEN)
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        article = self.get_object()
+        if not _user_can_edit_article(request.user, article):
+            return Response({"error": "You do not have permission to delete this article."}, status=status.HTTP_403_FORBIDDEN)
+        return super().destroy(request, *args, **kwargs)
 
     def get_serializer_context(self):
         ctx = super().get_serializer_context()
@@ -413,7 +445,9 @@ class KnowledgeBaseArticleViewSet(viewsets.ModelViewSet):
             from base.models import Team
 
             team_obj = Team.objects.filter(pk=tid).first()
-        serializer.save(team=team_obj)
+        if not team_obj:
+            raise PermissionDenied("Select an active workspace before creating a knowledge base article.")
+        serializer.save(team=team_obj, author=self.request.user)
 
     @action(detail=False, methods=['post'])
     def search(self, request):
@@ -566,6 +600,14 @@ def _agent_article_team_scope(request):
     if team_id:
         return Q(team__isnull=True) | Q(team_id=team_id)
     return Q(team__isnull=True)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def kb_metadata(request):
+    return Response({
+        "can_manage": user_can_manage_kb_articles(request.user),
+    })
 
 
 @api_view(['GET'])

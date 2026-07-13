@@ -30,6 +30,7 @@ from .outcome_helpers import log_agent_confidence_snapshot, touch_first_ai_at
 from .user_email_notify import dispatch_ticket_comment_email
 from .chat_models import Conversation, ChatMessage, QuickReply
 from .chat_context import enrich_agent_chat_payload
+from .agent_payload import build_ticket_agent_payload
 from .chat_intent import user_message_indicates_resolution_success
 from .chat_serializers import (
     ConversationSerializer, ChatMessageSerializer, QuickReplySerializer
@@ -670,23 +671,8 @@ def _get_ai_chat_response(ticket, message, conversation, user, billing_user=None
         billing_user = get_billing_user_for_ticket(ticket)
     # Conversation context for the agent (retrieval query vs latest message are separate).
     resolution_state = _build_resolution_state(ticket, conversation, current_message=message)
-    base_payload = {
-        'ticket_id': ticket.ticket_id,
-        'issue_type': ticket.issue_type,
-        'description': ticket.description or '',
-        'category': ticket.category,
-        'tags': ticket.tags or [],
-        'user': {
-            'id': str(user.id),
-            'name': user.username,
-            'department': getattr(user, 'department', ''),
-        },
-        'resolution_state': resolution_state,
-    }
-    if ticket.screenshot:
-        base_payload['screenshot'] = ticket.screenshot
-    if ticket.reported_platform:
-        base_payload['reported_platform'] = ticket.reported_platform
+    base_payload = build_ticket_agent_payload(ticket)
+    base_payload["resolution_state"] = resolution_state
     payload = enrich_agent_chat_payload(
         base_payload,
         ticket=ticket,
