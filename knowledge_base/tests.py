@@ -120,6 +120,18 @@ class KnowledgeBaseTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['title'], 'VPN Connection Issue')
 
+    def test_kb_article_retrieval_increments_views(self):
+        """Regression guard: article popularity (used to rank search results) was
+        never actually tracked -- the views counter stayed 0 forever."""
+        self.assertEqual(self.kb_article1.views, 0)
+        url = reverse('knowledgebasearticle-detail', args=[self.kb_article1.kb_id])
+        response = self.client.get(url)
+        self.assertEqual(response.data['views'], 1)
+        response = self.client.get(url)
+        self.assertEqual(response.data['views'], 2)
+        self.kb_article1.refresh_from_db()
+        self.assertEqual(self.kb_article1.views, 2)
+
     def test_unauthorized_access(self):
         """Test KB articles are accessible (AllowAny for FastAPI agent)"""
         self.client.force_authenticate(user=self.user)  # Non-admin user

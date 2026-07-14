@@ -7,12 +7,73 @@ from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
 from django.db.models import QuerySet
+from django.utils import timezone
+
+OPEN_STATUSES = ("new", "open", "pending", "escalated", "in_progress", "assigned", "pending_clarification")
 
 
 def _median(xs: List[float]) -> Optional[float]:
     if not xs:
         return None
     return float(statistics.median(xs))
+
+
+def get_stuck_items(ticket_qs: QuerySet, workflow_qs: QuerySet, *, limit: int = 5) -> Dict[str, Any]:
+    """
+    "What's stuck right now" for the Dashboard: open tickets nobody has touched in a
+    while, and active workflow steps whose due_at has already passed. Reuses the same
+    scoped querysets outcome_metrics already builds -- no extra permission logic.
+    """
+    from workflows.models import WorkflowStep
+
+    now = timezone.now()
+    stuck_cutoff = now - timezone.timedelta(hours=24)
+
+    stuck_qs = (
+        ticket_qs.filter(status__in=OPEN_STATUSES, updated_at__lt=stuck_cutoff)
+        .select_related("assigned_to")
+        .order_by("updated_at")[:limit]
+    )
+    stuck_tickets = [
+        {
+            "ticket_id": t.ticket_id,
+            "issue_type": t.issue_type,
+            "status": t.status,
+            "hours_idle": round((now - t.updated_at).total_seconds() / 3600.0, 1),
+            "assigned_to_name": (t.assigned_to.get_full_name() or t.assigned_to.email) if t.assigned_to else None,
+        }
+        for t in stuck_qs
+    ]
+
+    workflow_ids = list(workflow_qs.filter(status="in_progress").values_list("id", flat=True))
+    stalled_steps = []
+    if workflow_ids:
+        overdue_steps = (
+            WorkflowStep.objects.filter(
+                workflow_id__in=workflow_ids, status="active", due_at__lt=now,
+            )
+            .select_related("workflow", "workflow__ticket")
+            .order_by("due_at")[:limit]
+        )
+        stalled_steps = [
+            {
+                "workflow_id": str(s.workflow_id),
+                "ticket_id": s.workflow.ticket_id if s.workflow.ticket_id else None,
+                "step_title": s.title,
+                "hours_overdue": round((now - s.due_at).total_seconds() / 3600.0, 1),
+            }
+            for s in overdue_steps
+        ]
+
+    return {
+        "stuck_tickets": stuck_tickets,
+        "stuck_ticket_count": ticket_qs.filter(status__in=OPEN_STATUSES, updated_at__lt=stuck_cutoff).count(),
+        "stalled_steps": stalled_steps,
+        "stalled_step_count": (
+            WorkflowStep.objects.filter(workflow_id__in=workflow_ids, status="active", due_at__lt=now).count()
+            if workflow_ids else 0
+        ),
+    }
 
 
 def compute_outcome_metrics(queryset: QuerySet) -> Dict[str, Any]:

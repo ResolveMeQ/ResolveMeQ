@@ -393,6 +393,19 @@ def _user_can_edit_article(user, article) -> bool:
     return user_can_edit_kb_article(user, article)
 
 
+def _rank_articles_by_relevance(articles):
+    """Most helpful, most voted, most viewed, most recently updated -- in that order."""
+    return sorted(
+        articles,
+        key=lambda a: (
+            -(a.helpfulness_score if a.total_votes else 0),
+            -a.helpful_votes,
+            -a.views,
+            -(a.updated_at.timestamp() if a.updated_at else 0),
+        ),
+    )
+
+
 class KnowledgeBaseArticleViewSet(viewsets.ModelViewSet):
     queryset = KnowledgeBaseArticle.objects.all()
     serializer_class = KnowledgeBaseArticleSerializer
@@ -436,6 +449,13 @@ class KnowledgeBaseArticleViewSet(viewsets.ModelViewSet):
         ctx["request"] = self.request
         return ctx
 
+    def retrieve(self, request, *args, **kwargs):
+        article = self.get_object()
+        KnowledgeBaseArticle.objects.filter(pk=article.pk).update(views=F("views") + 1)
+        article.refresh_from_db(fields=["views"])
+        serializer = self.get_serializer(article)
+        return Response(serializer.data)
+
     def perform_create(self, serializer):
         from tickets.scoping import active_team_id_for_user
 
@@ -462,15 +482,7 @@ class KnowledgeBaseArticleViewSet(viewsets.ModelViewSet):
             query in a.content.lower() or
             any(query in str(tag).lower() for tag in a.tags)
         )]
-        articles = sorted(
-            articles,
-            key=lambda a: (
-                -(a.helpfulness_score if a.total_votes else 0),
-                -a.helpful_votes,
-                -a.views,
-                -(a.updated_at.timestamp() if a.updated_at else 0),
-            ),
-        )
+        articles = _rank_articles_by_relevance(articles)
         serializer = self.get_serializer(articles, many=True)
         return Response({'results': serializer.data})
 
@@ -493,15 +505,7 @@ class KnowledgeBaseArticleViewSet(viewsets.ModelViewSet):
             queryset = [
                 a for a in queryset if tag in [str(t).lower() for t in (a.tags or [])]
             ]
-            return sorted(
-                queryset,
-                key=lambda a: (
-                    -(a.helpfulness_score if a.total_votes else 0),
-                    -a.helpful_votes,
-                    -a.views,
-                    -(a.updated_at.timestamp() if a.updated_at else 0),
-                ),
-            )
+            return _rank_articles_by_relevance(queryset)
         return queryset
 
     @action(detail=True, methods=['post'])

@@ -5,6 +5,7 @@ Slack workspace installations: token lookup per Slack team, DM channel resolutio
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import requests
@@ -12,9 +13,30 @@ from django.conf import settings
 
 from base.models import User
 
+from integrations.connectors.base import should_retry
 from integrations.models import SlackToken
 
 logger = logging.getLogger(__name__)
+
+
+def _request_with_retry(method: str, url: str, *, retry_delay: float = 1.0, **kwargs) -> requests.Response | None:
+    """One retry on a transient failure (network error, 5xx, 429) -- Slack has no
+    persisted circuit breaker (unlike the Okta/Google/M365 connectors), but a single
+    short-backoff retry absorbs the common transient-blip case cheaply."""
+    for attempt in range(2):
+        try:
+            resp = requests.request(method, url, **kwargs)
+        except requests.RequestException as exc:
+            if attempt == 0:
+                time.sleep(retry_delay)
+                continue
+            logger.warning("Slack API %s %s failed: %s", method, url, exc)
+            return None
+        if attempt == 0 and should_retry(resp.status_code):
+            time.sleep(retry_delay)
+            continue
+        return resp
+    return None
 
 
 def looks_like_slack_member_id(value: str | None) -> bool:
@@ -77,11 +99,7 @@ def slack_api_get(
         return None
     url = f"https://slack.com/api/{method}"
     headers = {"Authorization": f"Bearer {installation.access_token}"}
-    try:
-        return requests.get(url, headers=headers, params=params, timeout=timeout)
-    except requests.RequestException as exc:
-        logger.warning("Slack API GET %s failed: %s", method, exc)
-        return None
+    return _request_with_retry("GET", url, headers=headers, params=params, timeout=timeout)
 
 
 def _slack_real_name_from_users_info(resp: requests.Response | None) -> str | None:
@@ -336,11 +354,7 @@ def slack_api_post(
         "Authorization": f"Bearer {installation.access_token}",
         "Content-Type": "application/json",
     }
-    try:
-        return requests.post(url, headers=headers, json=json_body, timeout=timeout)
-    except requests.RequestException as exc:
-        logger.warning("Slack API %s failed: %s", method, exc)
-        return None
+    return _request_with_retry("POST", url, headers=headers, json=json_body, timeout=timeout)
 
 
 def escalation_channel_id() -> str:

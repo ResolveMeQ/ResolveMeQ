@@ -552,23 +552,60 @@ def handle_assign_to_team(ticket, params):
     return True
 
 def handle_schedule_followup(ticket, params):
-    """Schedule a follow-up check."""
-    # Schedule another task to check on this ticket later
+    """
+    Schedule a follow-up check, and record it in ActionHistory (task_id captured)
+    so a human who takes the ticket over differently can cancel the pending
+    follow-up-triggered auto-escalation (see RollbackManager.rollback_schedule_followup).
+    """
     followup_time = params.get("followup_time")
+    task_id = None
     if followup_time:
-        check_ticket_followup.apply_async(
+        result = check_ticket_followup.apply_async(
             args=[ticket.ticket_id, params],
             eta=followup_time
         )
-    
+        task_id = result.id
+
+        confidence = ticket.agent_response.get('confidence', 0.0) if isinstance(ticket.agent_response, dict) else 0.0
+        reasoning = ticket.agent_response.get('reasoning', '') if isinstance(ticket.agent_response, dict) else ''
+        ActionHistory.objects.create(
+            ticket=ticket,
+            action_type='SCHEDULE_FOLLOWUP',
+            action_params=params,
+            confidence_score=confidence,
+            agent_reasoning=reasoning,
+            rollback_possible=True,
+            rollback_steps={'handler': 'rollback_schedule_followup', 'task_id': task_id},
+            before_state={'task_id': task_id},
+            after_state={'task_id': task_id},
+        )
+
     # Solution text is already sent via notify_user_agent_response from process_ticket_with_agent.
     # Keep only the scheduled follow-up check.
     logger.info(f"Scheduled follow-up for ticket {ticket.ticket_id}")
     return True
 
 def handle_create_kb_article(ticket, params):
-    """Create knowledge base article from resolved ticket."""
-    ticket.sync_to_knowledge_base()
+    """
+    Create knowledge base article from resolved ticket, and record it in
+    ActionHistory (article kb_id captured) so it can be unpublished later if the
+    AI-authored content turns out wrong (RollbackManager.rollback_create_kb_article).
+    """
+    article = ticket.sync_to_knowledge_base()
+    if article is not None:
+        confidence = ticket.agent_response.get('confidence', 0.0) if isinstance(ticket.agent_response, dict) else 0.0
+        reasoning = ticket.agent_response.get('reasoning', '') if isinstance(ticket.agent_response, dict) else ''
+        ActionHistory.objects.create(
+            ticket=ticket,
+            action_type='CREATE_KB_ARTICLE',
+            action_params=params,
+            confidence_score=confidence,
+            agent_reasoning=reasoning,
+            rollback_possible=True,
+            rollback_steps={'handler': 'rollback_create_kb_article'},
+            before_state={},
+            after_state={'kb_id': article.kb_id},
+        )
     logger.info(f"Created KB article from ticket {ticket.ticket_id}")
     return True
 
@@ -631,6 +668,53 @@ def schedule_resolution_followup(ticket_id):
         logger.error(f"Ticket {ticket_id} not found for follow-up")
     except Exception as e:
         logger.error(f"Error sending follow-up for ticket {ticket_id}: {str(e)}")
+
+
+@app.task
+def escalate_overdue_tickets():
+    """
+    SLA breach ladder: an escalated ticket whose sla_due_at has passed and isn't
+    already 'critical' gets bumped one priority tier and a fresh (shorter) SLA
+    window from now, so it stays visible and doesn't just sit at its original
+    priority forever. Self-limiting: the next check only re-fires once the new,
+    shorter deadline also passes, and stops once priority reaches 'critical'.
+    """
+    from .escalation_copy import bump_priority_tier, build_escalation_message, compute_sla_due_at
+    from .notifications import notify_support_escalation
+
+    now = timezone.now()
+    overdue = Ticket.objects.filter(
+        status="escalated", sla_due_at__lt=now,
+    ).exclude(escalation_priority="critical")
+
+    bumped = 0
+    for ticket in overdue:
+        old_priority = ticket.escalation_priority or "medium"
+        new_priority = bump_priority_tier(old_priority)
+        if new_priority == old_priority:
+            continue
+
+        ticket.escalation_priority = new_priority
+        ticket.sla_due_at = compute_sla_due_at(now, new_priority)
+        ticket.save(update_fields=["escalation_priority", "sla_due_at", "updated_at"])
+
+        msg = build_escalation_message(ticket, new_priority, "SLA breached — auto-escalated")
+        try:
+            notify_support_escalation(ticket, {
+                "escalation_reason": f"SLA breached at {old_priority} priority — auto-escalated to {new_priority}.",
+                "priority": new_priority,
+                "suggested_team": msg["suggested_team"],
+            })
+        except Exception as exc:
+            logger.warning("SLA-breach re-notify failed for ticket %s: %s", ticket.ticket_id, exc)
+
+        logger.info(
+            "Ticket %s SLA breached at %s -> auto-escalated to %s",
+            ticket.ticket_id, old_priority, new_priority,
+        )
+        bumped += 1
+
+    return bumped
 
 
 @app.task(bind=True)

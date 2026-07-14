@@ -13,6 +13,17 @@ from django.utils import timezone
 from .sla_settings import escalation_sla_hours
 
 _VALID_PRIORITIES = {"critical", "high", "medium", "low"}
+PRIORITY_LADDER = ["low", "medium", "high", "critical"]
+
+
+def bump_priority_tier(priority):
+    """One tier more urgent (low -> medium -> high -> critical). Already-critical
+    (or unrecognized) priority is returned unchanged -- there's nowhere higher to go."""
+    try:
+        idx = PRIORITY_LADDER.index(priority)
+    except ValueError:
+        return priority
+    return PRIORITY_LADDER[min(idx + 1, len(PRIORITY_LADDER) - 1)]
 
 # Manual escalation modal's `reason` dropdown values (Tickets.jsx escalateForm.reason)
 # mapped to a priority -- reuses a signal the UI already collects instead of guessing.

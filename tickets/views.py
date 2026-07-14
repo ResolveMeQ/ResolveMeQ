@@ -263,7 +263,7 @@ def outcome_metrics(request):
     """
     Outcome metrics for visible tickets: time to first AI, deflection-style rates, per-team breakdown.
     """
-    from .outcome_metrics import compute_outcome_metrics
+    from .outcome_metrics import compute_outcome_metrics, get_stuck_items
     from workflows.playbook_metrics import compute_onboarding_playbook_metrics
     from workflows.scoping import workflows_queryset_for_user
 
@@ -274,6 +274,7 @@ def outcome_metrics(request):
     payload["workflows_completed_count"] = wf_qs.filter(status="completed").count()
     payload["workflows_in_progress_count"] = wf_qs.filter(status="in_progress").count()
     payload["onboarding_playbook"] = compute_onboarding_playbook_metrics(wf_qs)
+    payload["stuck_items"] = get_stuck_items(base_qs, wf_qs)
     return Response(payload)
 
 

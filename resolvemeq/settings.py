@@ -507,6 +507,18 @@ if ENABLE_AUTOMATION_CRON_RULES:
         "schedule": crontab(minute="*"),
     }
 
+# SLA breach ladder: bump an escalated ticket's priority (and give it a fresh,
+# shorter SLA window) once its current deadline passes, instead of leaving it
+# at its original priority forever.
+ENABLE_SLA_ESCALATION_LADDER = os.getenv(
+    "ENABLE_SLA_ESCALATION_LADDER", "true"
+).strip().lower() in ("1", "true", "yes", "")
+if ENABLE_SLA_ESCALATION_LADDER:
+    CELERY_BEAT_SCHEDULE["escalate-overdue-tickets"] = {
+        "task": "tickets.tasks.escalate_overdue_tickets",
+        "schedule": crontab(minute="*/15"),
+    }
+
 # Optional: token for GET /api/monitoring/health/complete/ (uptime checks without admin JWT)
 MONITORING_HEALTH_SECRET = os.getenv("MONITORING_HEALTH_SECRET", "").strip()
 

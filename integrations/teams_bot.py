@@ -15,6 +15,7 @@ see the Teams integration plan for the full reasoning:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import requests
@@ -22,7 +23,28 @@ from django.conf import settings
 from django.core.cache import cache
 
 from base.models import User
+from integrations.connectors.base import should_retry
 from integrations.models import TeamsInstallation
+
+
+def _request_with_retry(method: str, url: str, *, retry_delay: float = 1.0, **kwargs) -> requests.Response | None:
+    """One retry on a transient failure (network error, 5xx, 429) -- mirrors
+    slack_installation.py's helper; Teams has no persisted circuit breaker either."""
+    for attempt in range(2):
+        try:
+            resp = requests.request(method, url, **kwargs)
+        except requests.RequestException as exc:
+            if attempt == 0:
+                time.sleep(retry_delay)
+                continue
+            logger.warning("Teams API %s %s failed: %s", method, url, exc)
+            return None
+        if attempt == 0 and should_retry(resp.status_code):
+            time.sleep(retry_delay)
+            continue
+        return resp
+    return None
+
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +204,8 @@ def teams_api_post_activity(
 ) -> dict | None:
     """
     POST an activity into a Bot Framework conversation. Best-effort: returns None on any
-    request failure or missing token, same contract as slack_api_post (no retry).
+    request failure or missing token, same contract as slack_api_post. Retries once on a
+    transient failure (network error, 5xx, 429) via _request_with_retry.
     """
     token = get_app_access_token()
     if not token or not service_url or not conversation_id:
@@ -192,8 +215,10 @@ def teams_api_post_activity(
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
+    resp = _request_with_retry("POST", url, headers=headers, json=activity_body, timeout=timeout)
+    if resp is None:
+        return None
     try:
-        resp = requests.post(url, headers=headers, json=activity_body, timeout=timeout)
         resp.raise_for_status()
         return resp.json() if resp.content else {}
     except requests.RequestException as exc:

@@ -387,3 +387,103 @@ class RollbackWhitelistTest(TestCase):
         self.assertIsNone(self.ticket.claimed_at)
         action.refresh_from_db()
         self.assertTrue(action.rolled_back)
+
+    def test_schedule_followup_now_rollback_capable_and_revokes_task(self):
+        self.assertTrue(RollbackManager.can_rollback("SCHEDULE_FOLLOWUP"))
+        action = ActionHistory.objects.create(
+            ticket=self.ticket,
+            action_type="SCHEDULE_FOLLOWUP",
+            rollback_steps={"handler": "rollback_schedule_followup", "task_id": "abc-123"},
+            before_state={"task_id": "abc-123"},
+            after_state={"task_id": "abc-123"},
+            executed_by="agent",
+        )
+        with patch("resolvemeq.celery.app.control.revoke") as mock_revoke:
+            success = RollbackManager.execute_rollback(action, self.user, "human took over")
+        self.assertTrue(success)
+        mock_revoke.assert_called_once_with("abc-123")
+        action.refresh_from_db()
+        self.assertTrue(action.rolled_back)
+
+    def test_create_kb_article_now_rollback_capable_and_unpublishes(self):
+        from knowledge_base.models import KnowledgeBaseArticle
+
+        article = KnowledgeBaseArticle.objects.create(
+            title="AI-authored article", content="steps...", is_published=True,
+        )
+        self.assertTrue(RollbackManager.can_rollback("CREATE_KB_ARTICLE"))
+        action = ActionHistory.objects.create(
+            ticket=self.ticket,
+            action_type="CREATE_KB_ARTICLE",
+            after_state={"kb_id": str(article.kb_id)},
+            executed_by="agent",
+        )
+        success = RollbackManager.execute_rollback(action, self.user, "inaccurate content")
+        self.assertTrue(success)
+        article.refresh_from_db()
+        self.assertFalse(article.is_published)
+        action.refresh_from_db()
+        self.assertTrue(action.rolled_back)
+
+
+class SlaEscalationLadderTest(TestCase):
+    """tickets.tasks.escalate_overdue_tickets -- bump priority + fresh SLA window
+    once an escalated ticket's deadline passes, instead of leaving it forever."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="ladderuser", email="ladder@example.com", password="testpass123")
+
+    def _overdue_ticket(self, priority):
+        return Ticket.objects.create(
+            user=self.user, issue_type="vpn (high)", status="escalated", description="d",
+            category="vpn", escalation_priority=priority,
+            sla_due_at=timezone.now() - timezone.timedelta(hours=1),
+        )
+
+    def test_bump_priority_tier(self):
+        from .escalation_copy import bump_priority_tier
+
+        self.assertEqual(bump_priority_tier("low"), "medium")
+        self.assertEqual(bump_priority_tier("medium"), "high")
+        self.assertEqual(bump_priority_tier("high"), "critical")
+        self.assertEqual(bump_priority_tier("critical"), "critical")
+
+    @patch("tickets.notifications.notify_support_escalation")
+    def test_overdue_ticket_bumped_and_renotified(self, mock_notify):
+        from .tasks import escalate_overdue_tickets
+
+        ticket = self._overdue_ticket("medium")
+        bumped = escalate_overdue_tickets()
+        self.assertEqual(bumped, 1)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.escalation_priority, "high")
+        self.assertGreater(ticket.sla_due_at, timezone.now())
+        mock_notify.assert_called_once()
+
+    @patch("tickets.notifications.notify_support_escalation")
+    def test_critical_ticket_is_not_touched(self, mock_notify):
+        from .tasks import escalate_overdue_tickets
+
+        ticket = self._overdue_ticket("critical")
+        old_due = ticket.sla_due_at
+        bumped = escalate_overdue_tickets()
+        self.assertEqual(bumped, 0)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.escalation_priority, "critical")
+        self.assertEqual(ticket.sla_due_at, old_due)
+        mock_notify.assert_not_called()
+
+    @patch("tickets.notifications.notify_support_escalation")
+    def test_ticket_not_yet_due_is_not_touched(self, mock_notify):
+        from .tasks import escalate_overdue_tickets
+
+        ticket = Ticket.objects.create(
+            user=self.user, issue_type="vpn (high)", status="escalated", description="d",
+            category="vpn", escalation_priority="medium",
+            sla_due_at=timezone.now() + timezone.timedelta(hours=1),
+        )
+        bumped = escalate_overdue_tickets()
+        self.assertEqual(bumped, 0)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.escalation_priority, "medium")
+        mock_notify.assert_not_called()

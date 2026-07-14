@@ -187,6 +187,73 @@ class RollbackManager:
             return False
 
     @staticmethod
+    def rollback_schedule_followup(ticket, action_history, rollback_by, reason):
+        """
+        Cancel the pending follow-up check (see handle_schedule_followup /
+        check_ticket_followup) so it doesn't fire a "did this resolve it?"
+        auto-escalation later, e.g. because a human already took the ticket
+        somewhere else. Celery's revoke() is safe to call even if the task
+        already ran or doesn't exist -- it just marks the id as revoked.
+        """
+        try:
+            task_id = (action_history.rollback_steps or {}).get('task_id')
+            if task_id:
+                from resolvemeq.celery import app as celery_app
+
+                celery_app.control.revoke(task_id)
+
+            TicketInteraction.objects.create(
+                ticket=ticket,
+                user=rollback_by,
+                interaction_type='agent_response',
+                content=f"🔄 Scheduled follow-up check was cancelled.\n\nReason: {reason}"
+            )
+
+            action_history.rolled_back = True
+            action_history.rolled_back_at = timezone.now()
+            action_history.rolled_back_by = rollback_by
+            action_history.rollback_reason = reason
+            action_history.save()
+
+            logger.info(f"Successfully cancelled scheduled follow-up for ticket {ticket.ticket_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Follow-up rollback failed for ticket {ticket.ticket_id}: {str(e)}")
+            return False
+
+    @staticmethod
+    def rollback_create_kb_article(ticket, action_history, rollback_by, reason):
+        """Unpublish the KB article the AI created from this ticket (soft revert --
+        keeps votes/history, just removes it from AI-citable/agent-facing search)."""
+        try:
+            from knowledge_base.models import KnowledgeBaseArticle
+
+            kb_id = (action_history.after_state or {}).get('kb_id')
+            if kb_id:
+                KnowledgeBaseArticle.objects.filter(pk=kb_id).update(is_published=False)
+
+            TicketInteraction.objects.create(
+                ticket=ticket,
+                user=rollback_by,
+                interaction_type='agent_response',
+                content=f"🔄 AI-generated KB article was unpublished.\n\nReason: {reason}"
+            )
+
+            action_history.rolled_back = True
+            action_history.rolled_back_at = timezone.now()
+            action_history.rolled_back_by = rollback_by
+            action_history.rollback_reason = reason
+            action_history.save()
+
+            logger.info(f"Successfully unpublished KB article for ticket {ticket.ticket_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"KB article rollback failed for ticket {ticket.ticket_id}: {str(e)}")
+            return False
+
+    @staticmethod
     def rollback_predictive_route(ticket, action_history, rollback_by, reason):
         before = action_history.before_state or {}
         ticket.assigned_to_id = before.get("assigned_to_id")
@@ -220,6 +287,7 @@ class RollbackManager:
             'MANUAL_RESOLVE',
         'CLAIM',
         'PREDICTIVE_ROUTE',
+        'CREATE_KB_ARTICLE',
     ]
         return action_type in ROLLBACK_SUPPORTED
     
@@ -252,6 +320,10 @@ class RollbackManager:
             return RollbackManager.rollback_claim(ticket, action_history, rollback_by, reason)
         elif action_type == 'PREDICTIVE_ROUTE':
             return RollbackManager.rollback_predictive_route(ticket, action_history, rollback_by, reason)
+        elif action_type == 'SCHEDULE_FOLLOWUP':
+            return RollbackManager.rollback_schedule_followup(ticket, action_history, rollback_by, reason)
+        elif action_type == 'CREATE_KB_ARTICLE':
+            return RollbackManager.rollback_create_kb_article(ticket, action_history, rollback_by, reason)
         else:
             logger.warning(f"No rollback handler for action type: {action_type}")
             return False

@@ -249,6 +249,7 @@ class Ticket(models.Model):
             if self.user_id and not article.author_id:
                 article.author = self.user
             article.save()
+        return article
 
     def save(self, *args, **kwargs):
         # If ticket is being marked as resolved and has agent_response, sync to KB and create Solution

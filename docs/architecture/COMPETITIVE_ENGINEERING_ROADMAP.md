@@ -89,9 +89,11 @@ Honest inventory — **built**, **partial**, **missing**:
 | Workflow template admin UI | Built | Team owner CRUD at `/workflows/templates` |
 | Rules / trigger engine | Built | Trigger→conditions→actions engine, dry-run, execution log, admin UI |
 | Slack integration | Built | OAuth, slash, modals, DMs |
-| Microsoft Teams | Partial | Backend + tests; Settings UI hidden |
-| Okta / AD / Jira / ServiceNow | Missing | Roadmap only |
-| Automation / deflection metrics | Missing | Cannot prove “30–50%” in product |
+| Microsoft Teams | Built | Settings UI at feature parity with Slack; Adaptive Cards, linking flow, ticket lifecycle |
+| Okta | Partial | Read-only checks (user_exists, group_member) for workflow auto-checks; no provisioning |
+| Jira | Built | Read-write: create/transition issues on escalate, synced back to ticket |
+| Active Directory / ServiceNow | Missing | Roadmap only |
+| Automation / deflection metrics | Built | Dashboard "AI Deflection" stat card, `outcome_metrics.deflection_rate_percent` |
 | Compliance audit log | Partial | TicketInteraction; not enterprise-grade |
 | Blog / marketing SEO | Built | Dynamic sitemap, daily AI posts |
 
