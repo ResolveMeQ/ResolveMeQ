@@ -87,6 +87,7 @@ class EncryptExistingCredentialsCommandTest(TestCase):
         token.refresh_from_db()
         self.assertEqual(token.access_token, "xoxb-backfill-me")
 
+    @override_settings(ENABLE_FIELD_ENCRYPTION=False, FIELD_ENCRYPTION_KEY="")
     def test_command_no_ops_when_encryption_not_configured(self):
         from io import StringIO
 
