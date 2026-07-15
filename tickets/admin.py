@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import AgentConfidenceLog, Ticket, ResolutionTemplate, ExternalReference
+from .models import AgentConfidenceLog, Ticket, ResolutionTemplate, ExternalReference, Incident
 from integrations.notify import notify_user_ticket_resolved
 import csv
 from django.http import HttpResponse
@@ -80,6 +80,13 @@ class TicketAdmin(admin.ModelAdmin):
     )
     actions = [mark_as_resolved, respond_via_bot, export_tickets_csv]
     autocomplete_fields = ["user", "assigned_to"]
+
+
+@admin.register(Incident)
+class IncidentAdmin(admin.ModelAdmin):
+    list_display = ("id", "title", "team", "category", "created_at")
+    list_filter = ("team", "category")
+    search_fields = ("title",)
 
 
 @admin.register(ExternalReference)

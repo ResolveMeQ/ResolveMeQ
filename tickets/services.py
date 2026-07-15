@@ -98,4 +98,11 @@ def create_ticket_with_reporter(
     except Exception as exc:
         logger.warning("Duplicate-ticket check failed for ticket %s: %s", ticket.ticket_id, exc)
 
+    try:
+        from tickets.incident_clustering import find_or_join_incident
+
+        find_or_join_incident(ticket)
+    except Exception as exc:
+        logger.warning("Incident clustering failed for ticket %s: %s", ticket.ticket_id, exc)
+
     return ticket

@@ -10,6 +10,35 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 # Create your models here.
 
+
+class Incident(models.Model):
+    """
+    Auto-created when several different reporters on the same team file
+    similar tickets within a short window (see tickets/incident_clustering.py) --
+    signals a likely shared outage instead of N separate investigations.
+    Purely informational: never blocks or changes any member ticket's behavior.
+    "Resolved" is derived (all member tickets resolved), not stored, so there's
+    no separate resolve action to keep in sync with ticket status.
+    """
+
+    team = models.ForeignKey(
+        "base.Team",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="incidents",
+    )
+    category = models.CharField(max_length=30, blank=True, default="")
+    title = models.CharField(max_length=200, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.title or f"Incident {self.pk}"
+
+
 class Ticket(models.Model):
     AWAITING_RESPONSE_CHOICES = [
         ("", "None"),
@@ -100,6 +129,16 @@ class Ticket(models.Model):
         help_text="Set automatically at creation when this looks like the same issue "
                    "as another open ticket from the same reporter (see tickets/services.py). "
                    "Informational only -- never blocks or changes ticket behavior.",
+    )
+    incident = models.ForeignKey(
+        Incident,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="tickets",
+        help_text="Set automatically when this ticket clusters with several other "
+                   "reporters' similar tickets on the same team (see "
+                   "tickets/incident_clustering.py). Informational only.",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

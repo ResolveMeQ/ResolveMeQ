@@ -408,6 +408,12 @@ PREDICTIVE_ROUTING_LOOKBACK_DAYS = int(os.getenv('PREDICTIVE_ROUTING_LOOKBACK_DA
 # Duplicate-ticket flagging at creation (tickets/services.py, tickets/similarity.py) --
 # same threshold the existing "similar tickets" reference feature already uses by default.
 DUPLICATE_TICKET_SIMILARITY_THRESHOLD = float(os.getenv('DUPLICATE_TICKET_SIMILARITY_THRESHOLD', '0.7'))
+# Incident clustering at creation (tickets/services.py, tickets/incident_clustering.py) --
+# groups similar tickets from DIFFERENT reporters on the same team within a short window,
+# signalling a likely shared outage instead of N separate investigations.
+INCIDENT_CLUSTER_WINDOW_MINUTES = int(os.getenv('INCIDENT_CLUSTER_WINDOW_MINUTES', '60'))
+INCIDENT_CLUSTER_MIN_SIZE = int(os.getenv('INCIDENT_CLUSTER_MIN_SIZE', '3'))
+INCIDENT_CLUSTER_SIMILARITY_THRESHOLD = float(os.getenv('INCIDENT_CLUSTER_SIMILARITY_THRESHOLD', '0.6'))
 # No hardcoded fallback: an unset key must fail authentication, not silently accept a
 # well-known default. See base.authentication.AgentAPIKeyAuthentication.
 AGENT_API_KEY = os.getenv('AGENT_API_KEY', '')
