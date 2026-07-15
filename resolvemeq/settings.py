@@ -405,6 +405,9 @@ AI_AGENT_CIRCUIT_OPEN_SECONDS = int(os.getenv('AI_AGENT_CIRCUIT_OPEN_SECONDS', '
 PREDICTIVE_ROUTING_ENABLED = os.getenv('PREDICTIVE_ROUTING_ENABLED', 'true').strip().lower() in ('1', 'true', 'yes')
 PREDICTIVE_ROUTING_AUTO_ASSIGN_MIN_CONFIDENCE = float(os.getenv('PREDICTIVE_ROUTING_AUTO_ASSIGN_MIN_CONFIDENCE', '0.55'))
 PREDICTIVE_ROUTING_LOOKBACK_DAYS = int(os.getenv('PREDICTIVE_ROUTING_LOOKBACK_DAYS', '90'))
+# Duplicate-ticket flagging at creation (tickets/services.py, tickets/similarity.py) --
+# same threshold the existing "similar tickets" reference feature already uses by default.
+DUPLICATE_TICKET_SIMILARITY_THRESHOLD = float(os.getenv('DUPLICATE_TICKET_SIMILARITY_THRESHOLD', '0.7'))
 # No hardcoded fallback: an unset key must fail authentication, not silently accept a
 # well-known default. See base.authentication.AgentAPIKeyAuthentication.
 AGENT_API_KEY = os.getenv('AGENT_API_KEY', '')

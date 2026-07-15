@@ -91,6 +91,16 @@ class Ticket(models.Model):
     )
     category = models.CharField(max_length=30, choices=CATEGORY_CHOICES, default="other")
     tags = models.JSONField(default=list, blank=True)
+    duplicate_of = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="duplicates",
+        help_text="Set automatically at creation when this looks like the same issue "
+                   "as another open ticket from the same reporter (see tickets/services.py). "
+                   "Informational only -- never blocks or changes ticket behavior.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     agent_response = models.JSONField(null=True, blank=True, help_text="Response from the AI agent analyzing this ticket")

@@ -12,6 +12,7 @@ from django.db.models import Q, Count
 
 from tickets.models import Ticket
 from tickets.scoping import user_can_access_ticket
+from tickets.similarity import score_similarity
 from solutions.models import KnowledgeBaseEntry
 from tickets.cache_decorators import cache_api_response
 
@@ -252,45 +253,8 @@ def get_similar_tickets(request, ticket_id):
     scored_tickets = []
     
     for similar_ticket in similar_tickets:
-        score = 0.0
-        
-        # Category match (30%)
-        if similar_ticket.category == ticket.category:
-            score += 0.30
-        
-        # Issue type similarity (30%)
-        if ticket.issue_type and similar_ticket.issue_type:
-            # Simple keyword matching
-            ticket_keywords = set(ticket.issue_type.lower().split())
-            similar_keywords = set(similar_ticket.issue_type.lower().split())
-            
-            if ticket_keywords and similar_keywords:
-                keyword_overlap = len(ticket_keywords & similar_keywords) / len(ticket_keywords | similar_keywords)
-                score += keyword_overlap * 0.30
-        
-        # Description similarity (20%)
-        if ticket.description and similar_ticket.description:
-            ticket_desc_words = set(ticket.description.lower().split())
-            similar_desc_words = set(similar_ticket.description.lower().split())
-            
-            if ticket_desc_words and similar_desc_words:
-                desc_overlap = len(ticket_desc_words & similar_desc_words) / len(ticket_desc_words | similar_desc_words)
-                score += desc_overlap * 0.20
-        
-        # Same assigned team/person (10%)
-        if ticket.assigned_to and similar_ticket.assigned_to:
-            if ticket.assigned_to == similar_ticket.assigned_to:
-                score += 0.10
-        
-        # Tags overlap (10%)
-        if ticket.tags and similar_ticket.tags:
-            ticket_tags = set(ticket.tags)
-            similar_tags = set(similar_ticket.tags)
-            
-            if ticket_tags and similar_tags:
-                tag_overlap = len(ticket_tags & similar_tags) / len(ticket_tags | similar_tags)
-                score += tag_overlap * 0.10
-        
+        score = score_similarity(ticket, similar_ticket)
+
         # Only include if above threshold
         if score >= threshold:
             # Calculate resolution time if resolved

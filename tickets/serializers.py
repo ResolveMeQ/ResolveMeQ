@@ -43,6 +43,7 @@ class TicketSerializer(serializers.ModelSerializer):
     reporter_name = serializers.SerializerMethodField()
     is_internal_request = serializers.SerializerMethodField()
     external_references = serializers.SerializerMethodField()
+    duplicates = serializers.SerializerMethodField()
 
     class Meta:
         model = Ticket
@@ -54,12 +55,17 @@ class TicketSerializer(serializers.ModelSerializer):
             'agent_response', 'agent_processed',
             'first_ai_at', 'escalated_at', 'awaiting_response_from', 'last_message_at', 'last_message_by',
             'escalation_priority', 'claimed_at', 'sla_due_at', 'external_references',
+            'duplicate_of', 'duplicates',
         ]
         read_only_fields = [
             'ticket_id', 'team', 'created_at', 'updated_at', 'agent_response', 'agent_processed',
             'first_ai_at', 'escalated_at', 'awaiting_response_from', 'last_message_at', 'last_message_by',
-            'escalation_priority', 'claimed_at', 'sla_due_at',
+            'escalation_priority', 'claimed_at', 'sla_due_at', 'duplicate_of', 'duplicates',
         ]
+
+    def get_duplicates(self, obj):
+        """Other tickets flagged (at their creation) as looking like this one."""
+        return list(obj.duplicates.values_list('ticket_id', flat=True))
 
     def get_team_name(self, obj):
         """Lets ResolveMeQ platform agents tell customers apart in a cross-tenant queue."""
