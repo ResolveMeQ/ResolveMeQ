@@ -1462,6 +1462,8 @@ def bulk_update_tickets(request):
     status_val = request.data.get("status")
     if not ids or not status_val:
         return Response({"error": "ticket_ids and status are required."}, status=400)
+    if status_val not in dict(Ticket.STATUS_CHOICES):
+        return Response({"error": f"Invalid status: {status_val}."}, status=400)
     allowed = set(_tickets_for_user(request).values_list("ticket_id", flat=True))
     try:
         filtered = [int(i) for i in ids if int(i) in allowed]
