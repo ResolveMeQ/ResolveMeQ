@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from .assignee_roles import VALID_ASSIGNEE_ROLE_SLUGS
+from .auto_action_validation import normalize_auto_action
 from .auto_check_validation import normalize_auto_check
 
-VALID_STEP_TYPES = frozenset({"manual", "approval", "auto_check"})
+VALID_STEP_TYPES = frozenset({"manual", "approval", "auto_check", "auto_action"})
 VALID_AUTO_ASSIGN = frozenset({"", "started_by", "ticket_reporter"})
 
 
@@ -64,6 +65,11 @@ def normalize_template_steps(raw_steps: Any) -> List[Dict[str, Any]]:
             normalized["auto_check"] = normalize_auto_check(auto_check, step_index=idx)
         elif step_type == "auto_check":
             raise ValueError(f"step {idx + 1} auto_check step requires auto_check config")
+        auto_action = step.get("auto_action")
+        if auto_action is not None:
+            normalized["auto_action"] = normalize_auto_action(auto_action, step_index=idx)
+        elif step_type == "auto_action":
+            raise ValueError(f"step {idx + 1} auto_action step requires auto_action config")
         if step.get("spawn_child_ticket"):
             normalized["spawn_child_ticket"] = True
             child_cat = (step.get("child_ticket_category") or "").strip()

@@ -342,6 +342,67 @@ class ConnectorCheckLog(models.Model):
         return f"{self.connector}.{self.check_type} ({self.status})"
 
 
+class ConnectorActionLog(models.Model):
+    """
+    Audit log for connector write actions (deactivate/reset password/remove from
+    group/revoke license). Unlike ConnectorCheckLog, these only ever run when a
+    staff member explicitly confirms -- executed_by records who.
+    """
+
+    team = models.ForeignKey(
+        "base.Team",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="connector_action_logs",
+    )
+    workflow = models.ForeignKey(
+        "workflows.Workflow",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="connector_action_logs",
+    )
+    workflow_step = models.ForeignKey(
+        "workflows.WorkflowStep",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="connector_action_logs",
+    )
+    connector = models.CharField(max_length=32, db_index=True)
+    action_type = models.CharField(max_length=64)
+    status = models.CharField(
+        max_length=16,
+        choices=[
+            ("success", "Success"),
+            ("failed", "Failed"),
+            ("error", "Error"),
+            ("skipped", "Skipped"),
+        ],
+    )
+    message = models.TextField(blank=True, default="")
+    detail = models.JSONField(default=dict, blank=True)
+    executed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="connector_actions_executed",
+    )
+    ran_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-ran_at"]
+        indexes = [
+            models.Index(fields=["workflow_step", "ran_at"]),
+            models.Index(fields=["team", "connector", "ran_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.connector}.{self.action_type} ({self.status})"
+
+
 class GoogleWorkspaceInstallation(models.Model):
     """OAuth-linked Google Workspace admin for directory/license read checks (P2-8)."""
 

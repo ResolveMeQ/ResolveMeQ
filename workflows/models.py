@@ -144,12 +144,15 @@ class WorkflowStep(models.Model):
         ("manual", "Manual"),
         ("approval", "Approval"),
         ("auto_check", "Auto check"),
+        ("auto_action", "Auto action (staff-confirmed)"),
     ]
     step_type = models.CharField(
         max_length=20,
         choices=STEP_TYPE_CHOICES,
         default="manual",
-        help_text="Copied from template at creation. Approval steps use an Approve action in UI.",
+        help_text="Copied from template at creation. Approval steps use an Approve action in UI. "
+                   "Auto action steps propose a directory write (e.g. deactivate user) that a "
+                   "staff member must explicitly confirm -- never runs automatically.",
     )
     child_ticket = models.ForeignKey(
         "tickets.Ticket",

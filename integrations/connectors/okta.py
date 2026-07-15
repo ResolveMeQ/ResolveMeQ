@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import urllib.parse
 from datetime import timedelta
@@ -13,6 +14,7 @@ from django.utils import timezone
 from integrations.connectors.base import (
     ConnectorError,
     circuit_is_open,
+    http_delete_json,
     http_get_json,
     http_post_json,
     record_delivery_failure,
@@ -22,6 +24,7 @@ from integrations.connectors.base import (
 logger = logging.getLogger(__name__)
 
 VALID_OKTA_CHECKS = frozenset({"user_exists", "group_member"})
+VALID_OKTA_ACTIONS = frozenset({"deactivate_user", "reset_password", "remove_from_group"})
 
 
 def normalize_okta_domain(raw: str) -> str:
@@ -137,6 +140,44 @@ def okta_api_get(installation, path: str, *, params: Optional[dict] = None) -> A
     return response.json()
 
 
+def okta_api_post(installation, path: str, body: Optional[dict] = None) -> Any:
+    token = _ensure_token(installation)
+    base = org_base_url(installation.okta_domain)
+    url = f"{base}{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    payload = json.dumps(body or {}).encode("utf-8")
+    response = http_post_json(url, body=payload, headers=headers)
+    if response.status_code == 401:
+        refresh_access_token(installation)
+        headers["Authorization"] = f"Bearer {installation.access_token}"
+        response = http_post_json(url, body=payload, headers=headers)
+    if response.status_code >= 400:
+        record_delivery_failure(installation)
+        raise ConnectorError(f"Okta API error (HTTP {response.status_code}).")
+    record_delivery_success(installation)
+    return response.json() if response.content else {}
+
+
+def okta_api_delete(installation, path: str) -> None:
+    token = _ensure_token(installation)
+    base = org_base_url(installation.okta_domain)
+    url = f"{base}{path}"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    response = http_delete_json(url, headers=headers)
+    if response.status_code == 401:
+        refresh_access_token(installation)
+        headers["Authorization"] = f"Bearer {installation.access_token}"
+        response = http_delete_json(url, headers=headers)
+    if response.status_code >= 400:
+        record_delivery_failure(installation)
+        raise ConnectorError(f"Okta API error (HTTP {response.status_code}).")
+    record_delivery_success(installation)
+
+
 def find_user_by_email(installation, email: str) -> Optional[dict]:
     email = (email or "").strip().lower()
     if not email:
@@ -183,3 +224,44 @@ def run_okta_check(installation, check: str, *, email: str, group_id: str = "") 
         return ok, msg, {"email": email}
     ok, msg = user_in_group(installation, email, group_id)
     return ok, msg, {"email": email, "group_id": group_id}
+
+
+def deactivate_user(installation, email: str) -> Tuple[bool, str, dict]:
+    user = find_user_by_email(installation, email)
+    if not user:
+        return False, f"No Okta user with email {email}.", {"email": email}
+    user_id = user.get("id")
+    okta_api_post(installation, f"/api/v1/users/{user_id}/lifecycle/deactivate")
+    return True, f"Okta user {email} deactivated.", {"email": email, "user_id": user_id}
+
+
+def reset_password(installation, email: str) -> Tuple[bool, str, dict]:
+    user = find_user_by_email(installation, email)
+    if not user:
+        return False, f"No Okta user with email {email}.", {"email": email}
+    user_id = user.get("id")
+    okta_api_post(installation, f"/api/v1/users/{user_id}/lifecycle/reset_password?sendEmail=true")
+    return True, f"Password reset email sent to Okta user {email}.", {"email": email, "user_id": user_id}
+
+
+def remove_from_group(installation, email: str, group_id: str) -> Tuple[bool, str, dict]:
+    group_id = (group_id or "").strip()
+    if not group_id:
+        return False, "group_id is required for remove_from_group.", {"email": email}
+    user = find_user_by_email(installation, email)
+    if not user:
+        return False, f"No Okta user with email {email}.", {"email": email}
+    user_id = user.get("id")
+    okta_api_delete(installation, f"/api/v1/groups/{group_id}/users/{user_id}")
+    return True, f"Okta user {email} removed from group {group_id}.", {"email": email, "user_id": user_id, "group_id": group_id}
+
+
+def run_okta_action(installation, action: str, *, email: str, group_id: str = "") -> Tuple[bool, str, dict]:
+    action = (action or "").strip()
+    if action not in VALID_OKTA_ACTIONS:
+        return False, f"Unknown Okta action: {action}", {}
+    if action == "deactivate_user":
+        return deactivate_user(installation, email)
+    if action == "reset_password":
+        return reset_password(installation, email)
+    return remove_from_group(installation, email, group_id)

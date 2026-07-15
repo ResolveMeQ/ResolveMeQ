@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import secrets
+import string
 from datetime import timedelta
 from typing import Optional
 
@@ -43,6 +45,45 @@ def http_get_json(
         return requests.get(url, headers=headers, timeout=timeout)
     except requests.RequestException as exc:
         raise ConnectorError(str(exc)) from exc
+
+
+def http_patch_json(
+    url: str,
+    *,
+    body: bytes,
+    headers: dict,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+) -> requests.Response:
+    try:
+        return requests.patch(url, data=body, headers=headers, timeout=timeout)
+    except requests.RequestException as exc:
+        raise ConnectorError(str(exc)) from exc
+
+
+def http_delete_json(
+    url: str,
+    *,
+    headers: dict,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+) -> requests.Response:
+    try:
+        return requests.delete(url, headers=headers, timeout=timeout)
+    except requests.RequestException as exc:
+        raise ConnectorError(str(exc)) from exc
+
+
+def generate_temp_password(length: int = 16) -> str:
+    """One-time temp password satisfying typical upper/lower/digit/symbol complexity rules."""
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+    while True:
+        pwd = "".join(secrets.choice(alphabet) for _ in range(length))
+        if (
+            any(c.islower() for c in pwd)
+            and any(c.isupper() for c in pwd)
+            and any(c.isdigit() for c in pwd)
+            and any(c in "!@#$%^&*" for c in pwd)
+        ):
+            return pwd
 
 
 def circuit_is_open(endpoint) -> bool:

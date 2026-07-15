@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from integrations.models import SlackToken, WebhookDelivery, WebhookEndpoint, OktaInstallation, ConnectorCheckLog, GoogleWorkspaceInstallation, Microsoft365Installation, JiraInstallation
+from integrations.models import SlackToken, WebhookDelivery, WebhookEndpoint, OktaInstallation, ConnectorCheckLog, ConnectorActionLog, GoogleWorkspaceInstallation, Microsoft365Installation, JiraInstallation
 
 
 def _masked(value) -> str:
@@ -77,6 +77,14 @@ class OktaInstallationAdmin(admin.ModelAdmin):
 class ConnectorCheckLogAdmin(admin.ModelAdmin):
     list_display = ("connector", "check_type", "status", "workflow_step", "team", "ran_at")
     list_filter = ("connector", "status", "check_type")
+    search_fields = ("message",)
+    readonly_fields = ("ran_at", "detail")
+
+
+@admin.register(ConnectorActionLog)
+class ConnectorActionLogAdmin(admin.ModelAdmin):
+    list_display = ("connector", "action_type", "status", "executed_by", "workflow_step", "team", "ran_at")
+    list_filter = ("connector", "status", "action_type")
     search_fields = ("message",)
     readonly_fields = ("ran_at", "detail")
 

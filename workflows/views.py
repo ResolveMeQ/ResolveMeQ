@@ -14,6 +14,7 @@ from .scoping import user_can_access_workflow, user_can_claim_step, workflows_qu
 from .services import _activate_next_steps, maybe_notify_workflow_sla_breach, start_workflow
 from .assignee_roles import role_label
 from .kb_links import resolve_kb_articles_by_titles
+from .auto_actions import get_auto_action_config, latest_action_result, run_auto_action
 from .auto_checks import get_auto_check_config, latest_check_result, run_auto_check
 from .step_assistant import accept_step_assistant_suggestion, get_step_assistant_suggestions
 
@@ -72,6 +73,8 @@ def _step_to_dict(step, now=None, user=None):
             and step.step_type == "auto_check"
             and (latest_check_result(step) or {}).get("status") == "success"
         ),
+        "auto_action": get_auto_action_config(step.workflow, step),
+        "auto_action_result": latest_action_result(step),
         "claimed_by": step.claimed_by_id and {
             "id": str(step.claimed_by_id),
             "name": step.claimed_by.get_full_name() or step.claimed_by.email or step.claimed_by.username,
@@ -276,6 +279,52 @@ def rerun_auto_check(request, workflow_id, step_id):
         "message": message,
         "workflow": _workflow_to_dict(workflow, user=request.user),
     })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def execute_auto_action(request, workflow_id, step_id):
+    """
+    Execute a directory write action (deactivate user, reset password, remove
+    from group, revoke license) for an active auto_action step. Never fires on
+    its own -- requires an explicit confirm=true in the request body on top of
+    the normal step-claim permission check, so this can't be triggered by
+    accident even by someone with API access.
+    """
+    workflow = get_object_or_404(Workflow, pk=workflow_id)
+    if not user_can_access_workflow(request.user, workflow):
+        return Response({"error": "You do not have permission to access this workflow."}, status=403)
+    step = get_object_or_404(WorkflowStep, pk=step_id, workflow=workflow)
+
+    if step.step_type != "auto_action":
+        return Response({"error": "This step is not an auto_action step."}, status=400)
+    if step.status != "active":
+        return Response({"error": "This action can only run on the active step.", "step": _step_to_dict(step, user=request.user)}, status=409)
+    if step.claimed_by_id and step.claimed_by_id != request.user.pk and not user_can_claim_step(request.user, step):
+        return Response({"error": "You are not assigned to this step.", "step": _step_to_dict(step, user=request.user)}, status=403)
+    if not request.data.get("confirm"):
+        return Response({"error": "This action must be explicitly confirmed (confirm: true)."}, status=400)
+
+    passed, message, generated_password = run_auto_action(step, workflow, user=request.user)
+    if passed:
+        step.status = "done"
+        step.completed_at = timezone.now()
+        step.save(update_fields=["status", "completed_at"])
+        try:
+            from automation.hooks import on_workflow_step_completed
+            on_workflow_step_completed(workflow, step)
+        except Exception:
+            pass
+        _activate_next_steps(workflow)
+
+    response = {
+        "passed": passed,
+        "message": message,
+        "workflow": _workflow_to_dict(workflow, user=request.user),
+    }
+    if generated_password:
+        response["generated_password"] = generated_password
+    return Response(response)
 
 
 @api_view(["GET"])

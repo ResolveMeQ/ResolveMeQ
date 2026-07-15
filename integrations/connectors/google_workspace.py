@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import urllib.parse
 from datetime import timedelta
@@ -13,7 +14,10 @@ from django.utils import timezone
 from integrations.connectors.base import (
     ConnectorError,
     circuit_is_open,
+    generate_temp_password,
+    http_delete_json,
     http_get_json,
+    http_patch_json,
     http_post_json,
     record_delivery_failure,
     record_delivery_success,
@@ -22,6 +26,7 @@ from integrations.connectors.base import (
 logger = logging.getLogger(__name__)
 
 VALID_GOOGLE_CHECKS = frozenset({"user_exists", "has_license"})
+VALID_GOOGLE_ACTIONS = frozenset({"deactivate_user", "reset_password", "remove_from_group", "revoke_license"})
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_DIRECTORY_API = "https://admin.googleapis.com/admin/directory/v1"
@@ -110,6 +115,40 @@ def google_api_get(installation, url: str) -> Any:
     return response.json()
 
 
+def google_api_patch(installation, url: str, body: dict) -> Any:
+    token = _ensure_token(installation)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    payload = json.dumps(body).encode("utf-8")
+    response = http_patch_json(url, body=payload, headers=headers)
+    if response.status_code == 401:
+        refresh_access_token(installation)
+        headers["Authorization"] = f"Bearer {installation.access_token}"
+        response = http_patch_json(url, body=payload, headers=headers)
+    if response.status_code >= 400:
+        record_delivery_failure(installation)
+        raise ConnectorError(f"Google API error (HTTP {response.status_code}).")
+    record_delivery_success(installation)
+    return response.json() if response.content else {}
+
+
+def google_api_delete(installation, url: str) -> None:
+    token = _ensure_token(installation)
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    response = http_delete_json(url, headers=headers)
+    if response.status_code == 401:
+        refresh_access_token(installation)
+        headers["Authorization"] = f"Bearer {installation.access_token}"
+        response = http_delete_json(url, headers=headers)
+    if response.status_code >= 400:
+        record_delivery_failure(installation)
+        raise ConnectorError(f"Google API error (HTTP {response.status_code}).")
+    record_delivery_success(installation)
+
+
 def find_user_by_email(installation, email: str) -> Optional[dict]:
     email = (email or "").strip().lower()
     if not email:
@@ -162,3 +201,69 @@ def run_google_check(
         return ok, msg, {"email": email}
     ok, msg = user_has_license(installation, email, sku_id)
     return ok, msg, {"email": email, "sku_id": sku_id}
+
+
+def deactivate_user(installation, email: str) -> Tuple[bool, str, dict]:
+    user = find_user_by_email(installation, email)
+    if not user:
+        return False, f"No Google Workspace user with email {email}.", {"email": email}
+    encoded = urllib.parse.quote(email, safe="")
+    google_api_patch(installation, f"{GOOGLE_DIRECTORY_API}/users/{encoded}", {"suspended": True})
+    return True, f"Google Workspace user {email} suspended.", {"email": email}
+
+
+def reset_password(installation, email: str) -> Tuple[bool, str, dict]:
+    user = find_user_by_email(installation, email)
+    if not user:
+        return False, f"No Google Workspace user with email {email}.", {"email": email}
+    temp_password = generate_temp_password()
+    encoded = urllib.parse.quote(email, safe="")
+    google_api_patch(
+        installation,
+        f"{GOOGLE_DIRECTORY_API}/users/{encoded}",
+        {"password": temp_password, "changePasswordAtNextLogin": True},
+    )
+    return True, f"Password reset for Google Workspace user {email}.", {"email": email, "temp_password": temp_password}
+
+
+def remove_from_group(installation, email: str, group_id: str) -> Tuple[bool, str, dict]:
+    group_id = (group_id or "").strip()
+    if not group_id:
+        return False, "group_id is required for remove_from_group.", {"email": email}
+    encoded_group = urllib.parse.quote(group_id, safe="")
+    encoded_member = urllib.parse.quote(email, safe="")
+    google_api_delete(installation, f"{GOOGLE_DIRECTORY_API}/groups/{encoded_group}/members/{encoded_member}")
+    return True, f"Google Workspace user {email} removed from group {group_id}.", {"email": email, "group_id": group_id}
+
+
+def revoke_license(installation, email: str, sku_id: str) -> Tuple[bool, str, dict]:
+    sku_id = (sku_id or "").strip()
+    if not sku_id:
+        return False, "sku_id is required for revoke_license.", {"email": email}
+    encoded_email = urllib.parse.quote(email, safe="")
+    encoded_sku = urllib.parse.quote(sku_id, safe="")
+    google_api_delete(
+        installation,
+        f"{GOOGLE_LICENSING_API}/product/Google-Apps/sku/{encoded_sku}/user/{encoded_email}",
+    )
+    return True, f"Google license {sku_id} revoked for {email}.", {"email": email, "sku_id": sku_id}
+
+
+def run_google_action(
+    installation,
+    action: str,
+    *,
+    email: str,
+    group_id: str = "",
+    sku_id: str = "",
+) -> Tuple[bool, str, dict]:
+    action = (action or "").strip()
+    if action not in VALID_GOOGLE_ACTIONS:
+        return False, f"Unknown Google action: {action}", {}
+    if action == "deactivate_user":
+        return deactivate_user(installation, email)
+    if action == "reset_password":
+        return reset_password(installation, email)
+    if action == "remove_from_group":
+        return remove_from_group(installation, email, group_id)
+    return revoke_license(installation, email, sku_id)
