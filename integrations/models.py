@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.db import models
 
+from base.encrypted_fields import EncryptedTextField
+
 
 class SlackToken(models.Model):
     """
@@ -9,7 +11,7 @@ class SlackToken(models.Model):
     `resolvemeq_team` is the ResolveMeQ Team this workspace is linked to after install.
     """
 
-    access_token = models.TextField(help_text="Slack bot token (xoxb-...)")
+    access_token = EncryptedTextField(help_text="Slack bot token (xoxb-...)")
     team_id = models.CharField(
         max_length=32,
         blank=True,
@@ -164,7 +166,7 @@ class WebhookEndpoint(models.Model):
     )
     name = models.CharField(max_length=120, blank=True, default="")
     url = models.URLField(max_length=512)
-    secret = models.CharField(max_length=128)
+    secret = EncryptedTextField()
     events = models.JSONField(
         default=list,
         blank=True,
@@ -207,7 +209,7 @@ class WebhookDelivery(models.Model):
     event_type = models.CharField(max_length=64, db_index=True)
     team_id = models.UUIDField(null=True, blank=True, db_index=True)
     url = models.URLField(max_length=512)
-    secret = models.CharField(max_length=128)
+    secret = EncryptedTextField()
     payload = models.JSONField(default=dict)
     status = models.CharField(
         max_length=16,
@@ -250,8 +252,8 @@ class OktaInstallation(models.Model):
         max_length=512,
         help_text="OAuth issuer, typically https://{domain}.okta.com/oauth2/default",
     )
-    access_token = models.TextField(blank=True, default="")
-    refresh_token = models.TextField(blank=True, default="")
+    access_token = EncryptedTextField(blank=True, default="")
+    refresh_token = EncryptedTextField(blank=True, default="")
     token_expires_at = models.DateTimeField(null=True, blank=True)
     scopes = models.CharField(max_length=256, blank=True, default="")
     installed_by = models.ForeignKey(
@@ -342,8 +344,8 @@ class GoogleWorkspaceInstallation(models.Model):
         related_name="google_workspace_installations",
     )
     admin_email = models.CharField(max_length=254, blank=True, default="")
-    access_token = models.TextField(blank=True, default="")
-    refresh_token = models.TextField(blank=True, default="")
+    access_token = EncryptedTextField(blank=True, default="")
+    refresh_token = EncryptedTextField(blank=True, default="")
     token_expires_at = models.DateTimeField(null=True, blank=True)
     scopes = models.CharField(max_length=512, blank=True, default="")
     installed_by = models.ForeignKey(
@@ -384,8 +386,8 @@ class Microsoft365Installation(models.Model):
         related_name="microsoft365_installations",
     )
     tenant_id = models.CharField(max_length=64, blank=True, default="")
-    access_token = models.TextField(blank=True, default="")
-    refresh_token = models.TextField(blank=True, default="")
+    access_token = EncryptedTextField(blank=True, default="")
+    refresh_token = EncryptedTextField(blank=True, default="")
     token_expires_at = models.DateTimeField(null=True, blank=True)
     scopes = models.CharField(max_length=512, blank=True, default="")
     installed_by = models.ForeignKey(
@@ -427,7 +429,7 @@ class JiraInstallation(models.Model):
     )
     site_url = models.URLField(max_length=256, help_text="https://your-org.atlassian.net")
     user_email = models.CharField(max_length=254, help_text="Atlassian account email for API token auth")
-    api_token = models.TextField(help_text="Jira Cloud API token")
+    api_token = EncryptedTextField(help_text="Jira Cloud API token")
     project_key = models.CharField(max_length=32, default="SUP")
     issue_type = models.CharField(max_length=64, default="Task")
     sync_on_escalate = models.BooleanField(default=True)

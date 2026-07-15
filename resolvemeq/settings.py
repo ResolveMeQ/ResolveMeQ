@@ -50,6 +50,16 @@ if not SECRET_KEY:
     else:
         raise ImproperlyConfigured("SECRET_KEY environment variable must be set when DEBUG=False")
 
+# Encrypts OAuth/API credentials at rest (integrations/models.py) via
+# base.encrypted_fields.EncryptedTextField. Both must be set for encryption to
+# activate -- absent either, affected fields behave as plain text (safe default,
+# see base/encrypted_fields.py for the full rollout story). Generate a key with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+ENABLE_FIELD_ENCRYPTION = os.getenv("ENABLE_FIELD_ENCRYPTION", "false").strip().lower() in (
+    "1", "true", "yes",
+)
+FIELD_ENCRYPTION_KEY = os.getenv("FIELD_ENCRYPTION_KEY", "").strip()
+
 raw_hosts = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1")
 if raw_hosts == "*":
     ALLOWED_HOSTS = ["*"]
