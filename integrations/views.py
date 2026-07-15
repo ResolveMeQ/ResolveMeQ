@@ -159,7 +159,39 @@ def slack_integration_status(request):
         {
             "connected": bool(inst),
             "slack_team_id": inst.team_id if inst else None,
+            "escalation_channel_id": inst.escalation_channel_id if inst else "",
             "updated_at": inst.updated_at.isoformat() if inst and inst.updated_at else None,
+        }
+    )
+
+
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated])
+def slack_update_settings(request):
+    """Configure per-team Slack settings (currently: escalation_channel_id)."""
+    from integrations.connector_scoping import team_from_request
+
+    team, err = team_from_request(
+        request,
+        require_owner=True,
+        owner_detail="Only the workspace owner can configure Slack.",
+    )
+    if err:
+        return err
+    inst = SlackToken.objects.filter(resolvemeq_team=team, is_active=True).order_by("-updated_at").first()
+    if not inst:
+        return Response({"detail": "Slack is not connected for this team."}, status=404)
+
+    if "escalation_channel_id" in request.data:
+        inst.escalation_channel_id = (request.data.get("escalation_channel_id") or "").strip()[:32]
+        inst.save(update_fields=["escalation_channel_id", "updated_at"])
+
+    return Response(
+        {
+            "connected": True,
+            "slack_team_id": inst.team_id,
+            "escalation_channel_id": inst.escalation_channel_id,
+            "updated_at": inst.updated_at.isoformat() if inst.updated_at else None,
         }
     )
 
@@ -1290,14 +1322,14 @@ def notify_escalation(user_id, ticket_id, params):
 def notify_support_escalation_slack(ticket, params):
     """
     Post escalated ticket to a dedicated Slack channel for support visibility.
-    Requires SLACK_ESCALATION_CHANNEL to be set (channel ID, e.g. C01234ABCD).
+    Uses the ticket's team's configured escalation channel (SlackToken.escalation_channel_id)
+    if set, else falls back to the deployment-wide SLACK_ESCALATION_CHANNEL setting.
     """
-    from django.conf import settings
-    channel = getattr(settings, "SLACK_ESCALATION_CHANNEL", "") or ""
-    if not channel:
-        return
     inst = slack_inst.get_installation_for_ticket(ticket)
     if not inst:
+        return
+    channel = slack_inst.escalation_channel_id(inst)
+    if not channel:
         return
     user_name = getattr(ticket.user, "name", None) or getattr(ticket.user, "username", None) or str(ticket.user.id)
     if hasattr(ticket.user, "get_full_name") and ticket.user.get_full_name():

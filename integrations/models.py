@@ -20,6 +20,13 @@ class SlackToken(models.Model):
         help_text="Slack workspace ID (T...)",
     )
     bot_user_id = models.CharField(max_length=32, blank=True, null=True)
+    escalation_channel_id = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="Slack channel ID (e.g. C01234ABCD) escalations for this team post to. "
+                   "Falls back to the deployment-wide SLACK_ESCALATION_CHANNEL setting when blank.",
+    )
     resolvemeq_team = models.ForeignKey(
         "base.Team",
         on_delete=models.SET_NULL,

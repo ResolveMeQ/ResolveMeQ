@@ -51,16 +51,12 @@ def deliver_automation_slack(action: dict, ctx: Dict[str, Any], *, dry_run: bool
     message = (action.get("message") or "").strip() or _default_message(ctx)
     title = (action.get("title") or "").strip() or "ResolveMeQ automation"
     channel = (action.get("channel_id") or "").strip()
-    if not channel:
-        channel = (
-            getattr(settings, "SLACK_ESCALATION_ALERT_CHANNEL", "") or ""
-        ).strip() or (getattr(settings, "SLACK_ESCALATION_CHANNEL", "") or "").strip()
 
     if dry_run:
         target = channel or "ops channel (from settings)"
         return True, f"Would post Slack message to {target}."
 
-    if ticket and not (action.get("channel_id") or "").strip():
+    if ticket and not channel:
         from integrations.views import notify_support_escalation_slack
 
         notify_support_escalation_slack(
@@ -76,7 +72,11 @@ def deliver_automation_slack(action: dict, ctx: Dict[str, Any], *, dry_run: bool
     if not inst:
         return False, "No active Slack workspace connected for this team."
     if not channel:
-        return False, "No Slack channel configured (set channel_id or SLACK_ESCALATION_CHANNEL)."
+        channel = (
+            getattr(settings, "SLACK_ESCALATION_ALERT_CHANNEL", "") or ""
+        ).strip() or slack_inst.escalation_channel_id(inst)
+    if not channel:
+        return False, "No Slack channel configured (set channel_id, the team's escalation channel, or SLACK_ESCALATION_CHANNEL)."
 
     blocks = [
         {

@@ -357,7 +357,10 @@ def slack_api_post(
     return _request_with_retry("POST", url, headers=headers, json=json_body, timeout=timeout)
 
 
-def escalation_channel_id() -> str:
+def escalation_channel_id(installation: SlackToken | None = None) -> str:
+    """Per-team channel (SlackToken.escalation_channel_id) if set, else the deployment-wide default."""
+    if installation and installation.escalation_channel_id:
+        return installation.escalation_channel_id.strip()
     return (getattr(settings, "SLACK_ESCALATION_CHANNEL", "") or "").strip()
 
 

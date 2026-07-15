@@ -3,6 +3,7 @@ from .views import (
     slack_oauth_start,
     slack_oauth_redirect,
     slack_integration_status,
+    slack_update_settings,
     slack_disconnect,
     slack_events,
     slack_slash_command,
@@ -23,6 +24,7 @@ from . import jira_views
 
 urlpatterns = [
     path("slack/status/", slack_integration_status, name="slack_integration_status"),
+    path("slack/settings/", slack_update_settings, name="slack_update_settings"),
     path("slack/disconnect/", slack_disconnect, name="slack_disconnect"),
     path("slack/oauth/start/", slack_oauth_start, name="slack_oauth_start"),
     path("slack/oauth/redirect/", slack_oauth_redirect, name="slack_oauth_redirect"),
