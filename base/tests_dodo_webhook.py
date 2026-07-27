@@ -332,3 +332,27 @@ class DodoWebhookViewTests(TestCase):
             ).count(),
             2,
         )
+
+    # -- 6. unknown customer: acknowledge (200), do not 500 / retry-loop ------
+
+    def test_unresolvable_subscription_event_returns_200_and_records_delivery(self):
+        """
+        Test-mode or otherwise unknown customers must not return 500 (that triggers
+        Django admin mail + endless Dodo retries). Acknowledge and record delivery.
+        """
+        body = self._subscription_body(
+            subscription_id='sub_unknown_customer',
+            status='active',
+            customer={
+                'customer_id': 'cus_unknown',
+                'email': 'nobody-in-our-db@example.com',
+                'name': 'Ghost',
+            },
+            metadata={},  # no resolvemeq_user_id
+        )
+        resp = self._post_signed(body, 'msg_sub_unresolved_1')
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(Subscription.objects.filter(gateway_subscription_id='sub_unknown_customer').exists())
+        self.assertTrue(
+            BillingWebhookDelivery.objects.filter(delivery_id='msg_sub_unresolved_1').exists()
+        )

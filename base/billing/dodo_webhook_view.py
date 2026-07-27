@@ -101,8 +101,18 @@ class DodoWebhookView(View):
         except IntegrityError:
             return HttpResponse(status=200)
         except SubscriptionSyncError as exc:
-            logger.warning('Dodo webhook: %s (delivery_id=%s)', exc, wid)
-            return HttpResponseServerError('sync failed')
+            # Permanent for this delivery: unknown/test customer, missing metadata, etc.
+            # Acknowledge so Dodo stops retrying and AdminEmailHandler is not spammed.
+            logger.warning('Dodo webhook: %s (delivery_id=%s event=%s)', exc, wid, event_type)
+            try:
+                BillingWebhookDelivery.objects.create(
+                    delivery_id=wid,
+                    provider=BillingWebhookDelivery.Provider.DODO,
+                    event_type=event_type or 'subscription.unresolved',
+                )
+            except IntegrityError:
+                pass
+            return HttpResponse(status=200)
         except Exception:
             logger.exception('Dodo webhook handler failed (delivery_id=%s)', wid)
             return HttpResponseServerError('handler error')
