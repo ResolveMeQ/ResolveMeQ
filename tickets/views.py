@@ -1561,9 +1561,13 @@ def my_ticket_reply_needed_count(request):
     Count of tickets that currently await a reply from the requester.
     Used for a lightweight global banner so users don't miss support replies.
     """
-    # Supabase/PgBouncer can drop connections between requests; retry once on transient DB errors.
+    # Supabase/PgBouncer and Docker DNS can flap between polls; soft-fail instead of 500.
+    import logging
+
     from django.db import close_old_connections
-    from django.db.utils import OperationalError as DjangoOperationalError
+    from django.db.utils import InterfaceError, OperationalError as DjangoOperationalError
+
+    logger = logging.getLogger(__name__)
 
     def _count() -> int:
         qs = Ticket.objects.filter(user=request.user)
@@ -1572,9 +1576,15 @@ def my_ticket_reply_needed_count(request):
 
     try:
         return Response({"count": _count()})
-    except DjangoOperationalError:
+    except (DjangoOperationalError, InterfaceError) as exc:
+        logger.warning("reply-needed-count DB error (first attempt): %s", exc)
         close_old_connections()
-        return Response({"count": _count()})
+        try:
+            return Response({"count": _count()})
+        except (DjangoOperationalError, InterfaceError) as retry_exc:
+            logger.warning("reply-needed-count DB error (retry failed): %s", retry_exc)
+            # Soft degrade: banner stays hidden rather than emailing admins on every poll.
+            return Response({"count": 0, "degraded": True})
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])

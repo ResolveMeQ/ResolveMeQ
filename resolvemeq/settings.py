@@ -71,6 +71,12 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "https://app.resolvemeq.net").rstrip("/
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {
+        "suppress_transient_db_admin_email": {
+            "()": "resolvemeq.logging_filters.SuppressTransientDbAdminEmailFilter",
+            "rate_limit_seconds": 3600,
+        },
+    },
     "handlers": {
         "console": {"class": "logging.StreamHandler"},
         "null": {"class": "logging.NullHandler"},
@@ -78,6 +84,7 @@ LOGGING = {
             "level": "ERROR",
             "class": "django.utils.log.AdminEmailHandler",
             "include_html": True,
+            "filters": ["suppress_transient_db_admin_email"],
         },
     },
     "loggers": {

@@ -148,8 +148,8 @@ services:
       - PUBLIC_MARKETING_URL=${PUBLIC_MARKETING_URL:-https://resolvemeq.net}
       - PUBLIC_APP_URL=${PUBLIC_APP_URL:-https://app.resolvemeq.net}
       - ENABLE_SITEMAP_PING=${ENABLE_SITEMAP_PING:-true}
-      # Database pool (Supabase session pooler)
-      - DB_CONN_MAX_AGE=${DB_CONN_MAX_AGE:-60}
+      # Database pool (Supabase session pooler) — keep 0 with PgBouncer; reuse causes stale sockets
+      - DB_CONN_MAX_AGE=${DB_CONN_MAX_AGE:-0}
     depends_on:
       redis:
         condition: service_healthy
@@ -159,6 +159,10 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    # Avoid Docker embedded DNS flaps resolving *.pooler.supabase.com
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     networks:
       - resolvemeq-backend
       - resolvemeq-shared  # Can communicate with agent via this network
@@ -247,6 +251,9 @@ services:
         condition: service_healthy
       web:
         condition: service_healthy
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     networks:
       - resolvemeq-backend
       - resolvemeq-shared
@@ -304,6 +311,9 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     networks:
       - resolvemeq-backend
 
