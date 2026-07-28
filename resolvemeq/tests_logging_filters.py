@@ -38,7 +38,9 @@ class TransientDatabaseErrorMiddlewareTests(SimpleTestCase):
             )
             self.assertIsInstance(response, JsonResponse)
             self.assertEqual(response.status_code, 503)
-            self.assertTrue(response.json().get("degraded"))
+            import json
+
+            self.assertTrue(json.loads(response.content).get("degraded"))
 
     def test_process_exception_ignores_non_transient(self):
         factory = RequestFactory()
