@@ -5,24 +5,7 @@ import logging
 import threading
 import time
 
-# Transient Postgres / Docker DNS failures that flood ADMINS when a poll endpoint retries.
-_DNS_PATTERNS = (
-    "could not translate host name",
-    "name or service not known",
-    "temporary failure in name resolution",
-    "nodename nor servname provided",
-)
-
-_TRANSIENT_DB_PATTERNS = (
-    "connection refused",
-    "server closed the connection unexpectedly",
-    "ssl connection has been closed unexpectedly",
-    "connection already closed",
-    "terminating connection due to administrator command",
-    "too many connections",
-    "timeout expired",
-    "could not connect to server",
-)
+from resolvemeq.db_errors import DNS_PATTERNS, TRANSIENT_DB_PATTERNS
 
 
 class SuppressTransientDbAdminEmailFilter(logging.Filter):
@@ -41,9 +24,9 @@ class SuppressTransientDbAdminEmailFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         text = self._record_text(record).lower()
-        if any(p in text for p in _DNS_PATTERNS):
+        if any(p in text for p in DNS_PATTERNS):
             return False
-        if any(p in text for p in _TRANSIENT_DB_PATTERNS):
+        if any(p in text for p in TRANSIENT_DB_PATTERNS):
             return self._allow_rate_limited()
         return True
 

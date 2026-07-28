@@ -130,6 +130,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Outermost app middleware: catch DB/DNS failures from auth + every API view.
+    "resolvemeq.middleware.TransientDatabaseErrorMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
