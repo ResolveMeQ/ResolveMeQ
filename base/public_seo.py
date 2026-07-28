@@ -68,6 +68,22 @@ _MARKETING_SECTIONS = (
 
 _MARKETING_LEGAL = ("privacy", "terms", "cookies")
 
+# Keep in sync with resolvemeqWeb/scripts/generate-sitemap.js and productManual.js
+_MARKETING_DOC_SLUGS = (
+    "overview",
+    "getting-started",
+    "tickets-and-ai",
+    "knowledge-base",
+    "workflows",
+    "automation-rules",
+    "integrations",
+    "analytics",
+    "msp-mode",
+    "workspace-permissions",
+    "security-and-audit",
+    "partner-api",
+)
+
 
 def _iso_lastmod(value) -> Optional[str]:
     if value is None:
@@ -118,6 +134,19 @@ def build_sitemap_url_lines(app_base: str, marketing_base: str) -> List[str]:
     lines.append(
         _sitemap_entry(f"{marketing_base}/blog", lastmod=today, changefreq="daily", priority="0.85")
     )
+    lines.append(
+        _sitemap_entry(f"{marketing_base}/docs", lastmod=today, changefreq="weekly", priority="0.9")
+    )
+    for doc_slug in _MARKETING_DOC_SLUGS:
+        priority = "0.85" if doc_slug in ("overview", "partner-api") else "0.8"
+        lines.append(
+            _sitemap_entry(
+                f"{marketing_base}/docs/{doc_slug}",
+                lastmod=today,
+                changefreq="monthly",
+                priority=priority,
+            )
+        )
 
     for post in BlogPost.objects.filter(is_published=True).order_by("-published_at"):
         lastmod = _iso_lastmod(post.updated_at) or _iso_lastmod(post.published_at) or today
@@ -222,15 +251,30 @@ def render_blog_rss_xml(marketing_base: str) -> str:
 
 
 def render_app_robots_txt(app_base: str, marketing_base: str) -> str:
-    return "\n".join(
-        [
-            "User-agent: *",
-            "Allow: /knowledge-base",
-            "Allow: /community/",
-            "Disallow: /api/",
-            f"Sitemap: {marketing_base}/sitemap.xml",
-        ]
+    private_prefixes = (
+        "/login",
+        "/signup",
+        "/verify",
+        "/forgot-password",
+        "/reset-password",
+        "/tickets",
+        "/workflows",
+        "/settings",
+        "/billing",
+        "/analytics",
+        "/teams",
+        "/users",
+        "/escalation-queue",
     )
+    lines = [
+        "User-agent: *",
+        "Allow: /knowledge-base",
+        "Allow: /community/",
+        "Disallow: /api/",
+    ]
+    lines.extend(f"Disallow: {prefix}" for prefix in private_prefixes)
+    lines.append(f"Sitemap: {marketing_base}/sitemap.xml")
+    return "\n".join(lines)
 
 
 def render_api_robots_txt() -> str:

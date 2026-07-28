@@ -31,6 +31,8 @@ class LiveSitemapTest(TestCase):
         xml = render_sitemap_xml("https://app.resolvemeq.net", "https://resolvemeq.net")
         self.assertIn("https://resolvemeq.net/blog", xml)
         self.assertIn("https://resolvemeq.net/blog/live-sitemap-post", xml)
+        self.assertIn("https://resolvemeq.net/docs", xml)
+        self.assertIn("https://resolvemeq.net/docs/getting-started", xml)
         self.assertIn("https://app.resolvemeq.net/knowledge-base", xml)
 
     def test_rss_includes_blog_item(self):
