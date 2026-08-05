@@ -25,7 +25,7 @@ from base.models import Profile
 from base.google_auth import username_from_email, verify_google_id_token
 from base.serializers import RegisterSerializer, LoginSerializer, GoogleAuthSerializer, UserProfileSerializer, VerifyUserSerializer, \
     ChangePasswordSerializer, ResetPasswordSerializer, ForgotPasswordRequestSerializer, ResendVerificationCodeSerializer, UserManagementSerializer, \
-    TeamSerializer, UserPreferencesSerializer, InAppNotificationSerializer
+    TeamSerializer, UserPreferencesSerializer, InAppNotificationSerializer, NewsletterSubscribeSerializer, ContactRequestSerializer
 from base.tasks import dispatch_send_email_with_template
 from base.utils import generate_secure_code
 
@@ -1286,7 +1286,7 @@ class NewsletterSubscribeView(GenericAPIView):
     No authentication required.
     """
     permission_classes = [permissions.AllowAny]
-    serializer_class = None  # Will import dynamically
+    serializer_class = NewsletterSubscribeSerializer
 
     def get_client_ip(self, request):
         """Extract client IP address from request"""
@@ -1321,10 +1321,9 @@ class NewsletterSubscribeView(GenericAPIView):
         }
     )
     def post(self, request):
-        from base.serializers import NewsletterSubscribeSerializer
         from base.models import NewsletterSubscription
-        
-        serializer = NewsletterSubscribeSerializer(data=request.data)
+
+        serializer = self.get_serializer(data=request.data)
         
         if not serializer.is_valid():
             return Response({
@@ -1359,7 +1358,7 @@ class ContactRequestView(GenericAPIView):
     No authentication required.
     """
     permission_classes = [permissions.AllowAny]
-    serializer_class = None  # Will import dynamically
+    serializer_class = ContactRequestSerializer
 
     def get_client_ip(self, request):
         """Extract client IP address from request"""
@@ -1399,9 +1398,7 @@ class ContactRequestView(GenericAPIView):
         }
     )
     def post(self, request):
-        from base.serializers import ContactRequestSerializer
-        
-        serializer = ContactRequestSerializer(data=request.data)
+        serializer = self.get_serializer(data=request.data)
         
         if not serializer.is_valid():
             # Extract first error message
