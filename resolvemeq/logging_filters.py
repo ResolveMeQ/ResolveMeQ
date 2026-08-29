@@ -7,6 +7,12 @@ import time
 
 from resolvemeq.db_errors import DNS_PATTERNS, TRANSIENT_DB_PATTERNS
 
+# Provider webhooks: Dodo retries on 5xx and Django mails ADMINS for every >=500
+# response (even with no traceback). Keep failures in console/Sentry, not inbox.
+_WEBHOOK_ADMIN_EMAIL_PATH_PREFIXES = (
+    "/api/billing/webhooks/",
+)
+
 
 class SuppressTransientDbAdminEmailFilter(logging.Filter):
     """
@@ -14,6 +20,7 @@ class SuppressTransientDbAdminEmailFilter(logging.Filter):
 
     DNS resolution failures for Supabase/pooler are suppressed entirely (Docker DNS flaps).
     Other transient OperationalError-style messages are rate-limited (one email / window).
+    Billing webhook paths are suppressed entirely (provider retries + empty-traceback 500s).
     """
 
     def __init__(self, name: str = "", rate_limit_seconds: int = 3600):
@@ -23,6 +30,8 @@ class SuppressTransientDbAdminEmailFilter(logging.Filter):
         self._last_sent_at = 0.0
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if self._is_billing_webhook(record):
+            return False
         text = self._record_text(record).lower()
         if any(p in text for p in DNS_PATTERNS):
             return False
@@ -37,6 +46,16 @@ class SuppressTransientDbAdminEmailFilter(logging.Filter):
                 return False
             self._last_sent_at = now
             return True
+
+    @classmethod
+    def _is_billing_webhook(cls, record: logging.LogRecord) -> bool:
+        request = getattr(record, "request", None)
+        path = ""
+        if request is not None:
+            path = getattr(request, "path", "") or ""
+        if not path:
+            path = str(record.getMessage() or "")
+        return any(prefix in path for prefix in _WEBHOOK_ADMIN_EMAIL_PATH_PREFIXES)
 
     @staticmethod
     def _record_text(record: logging.LogRecord) -> str:

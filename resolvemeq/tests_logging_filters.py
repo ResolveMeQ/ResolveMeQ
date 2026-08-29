@@ -86,3 +86,31 @@ class SuppressTransientDbAdminEmailFilterTests(SimpleTestCase):
             exc_info=(Exception, Exception("ValueError: bad payload"), None),
         )
         self.assertTrue(filt.filter(record))
+
+    def test_suppresses_dodo_webhook_path_even_without_traceback(self):
+        filt = SuppressTransientDbAdminEmailFilter()
+        record = logging.LogRecord(
+            name="django.request",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="Internal Server Error: /api/billing/webhooks/dodo/",
+            args=(),
+            exc_info=None,
+        )
+        self.assertFalse(filt.filter(record))
+
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/api/billing/webhooks/dodo/")
+        record2 = logging.LogRecord(
+            name="django.request",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="Service Unavailable: /api/billing/webhooks/dodo/",
+            args=(),
+            exc_info=None,
+        )
+        record2.request = request
+        self.assertFalse(filt.filter(record2))

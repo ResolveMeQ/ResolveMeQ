@@ -356,3 +356,53 @@ class DodoWebhookViewTests(TestCase):
         self.assertTrue(
             BillingWebhookDelivery.objects.filter(delivery_id='msg_sub_unresolved_1').exists()
         )
+
+    # -- 7. never return 5xx (AdminEmailHandler + Dodo retry death spiral) ----
+
+    @override_settings(DODO_PAYMENTS_API_KEY='', DODO_PAYMENTS_WEBHOOK_KEY='')
+    def test_missing_billing_keys_returns_503_not_500(self):
+        """503 lets Dodo retry after keys are fixed; must not be 500 (admin mail)."""
+        body = self._subscription_body()
+        resp = self._post_signed(body, 'msg_sub_nokeys_1')
+        self.assertEqual(resp.status_code, 503)
+        self.assertFalse(
+            BillingWebhookDelivery.objects.filter(delivery_id='msg_sub_nokeys_1').exists()
+        )
+
+    def test_subscription_handler_exception_returns_200_not_500(self):
+        from unittest.mock import patch
+
+        body = self._subscription_body()
+        with patch(
+            'base.billing.dodo_webhook_view.apply_dodo_subscription_payload',
+            side_effect=RuntimeError('simulated handler boom'),
+        ):
+            resp = self._post_signed(body, 'msg_sub_handler_boom_1')
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(
+            BillingWebhookDelivery.objects.filter(delivery_id='msg_sub_handler_boom_1').exists()
+        )
+        self.assertFalse(Subscription.objects.filter(user=self.user).exists())
+
+    def test_payment_handler_exception_returns_200_not_500(self):
+        from unittest.mock import patch
+
+        Subscription.objects.create(
+            user=self.user,
+            plan=self.plan,
+            status=Subscription.Status.ACTIVE,
+            gateway=PlanGatewayProduct.Gateway.DODO,
+            gateway_subscription_id='sub_webhook_test',
+            gateway_customer_id='cus_webhook_test',
+        )
+        body = self._payment_body()
+        with patch(
+            'base.billing.dodo_webhook_view.apply_dodo_payment_succeeded',
+            side_effect=RuntimeError('simulated payment boom'),
+        ):
+            resp = self._post_signed(body, 'msg_pay_handler_boom_1')
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(
+            BillingWebhookDelivery.objects.filter(delivery_id='msg_pay_handler_boom_1').exists()
+        )
+        self.assertFalse(Invoice.objects.filter(gateway_payment_id='pay_webhook_test').exists())
